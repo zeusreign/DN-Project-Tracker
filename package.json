@@ -1,0 +1,14 @@
+{
+  "name": "sites-worker-esm-starter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bash scripts/build.sh && vite",
+    "build": "bash scripts/build.sh",
+    "validate": "node scripts/validate-artifact.mjs",
+    "test": "npm run build && npm run validate && node scripts/smoke-test.mjs"
+  },
+  "devDependencies": {
+    "vite": "^7.1.4"
+  }
+}

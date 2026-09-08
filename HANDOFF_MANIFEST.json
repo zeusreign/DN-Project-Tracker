@@ -1,0 +1,55 @@
+{
+  "package": "DN_Project_Tracker_Faheem_Handoff",
+  "prepared_utc": "2026-09-08T06:20:50.201191+00:00",
+  "source_commit": "514f5f0cb1cf6b4f4c08ed0e7f30da77fbb6ee71",
+  "source_saved_version": 25,
+  "audit_change_deployed_to_original_live_site": false,
+  "content_type": "Full contractor source; workbook-derived data and directory metadata; not synthetic-only",
+  "data_boundary": "Embedded workbook seed only; no current live database or R2 export",
+  "seed": {
+    "project_count": 74,
+    "reporting_periods": [
+      "2026-08-28"
+    ]
+  },
+  "original_tracked_file_count": 39,
+  "original_tracked_files_preserved_byte_for_byte": 36,
+  "export_adjustments": {
+    "worker/index.js": "Remove all legacy PILOT_CREDENTIALS hash/salt records; retain source behavior with empty credentials.",
+    ".openai/hosting.json": "Remove original Sites project identity; preserve DB and BUCKET logical bindings.",
+    "scripts/smoke-test.mjs": "Assert zero preconfigured password accounts; generate per-run test passwords."
+  },
+  "database_migration_files": [
+    "drizzle/0000_dnc_project_hub.sql",
+    "drizzle/0001_workbook_structure_and_roles.sql",
+    "drizzle/0002_user_directory.sql",
+    "drizzle/0003_development_pipeline_and_directory.sql",
+    "drizzle/0004_pilot_authentication.sql",
+    "drizzle/0005_profile_photos.sql"
+  ],
+  "profile_photo_files": [
+    "assets/profile-photos/bill.png",
+    "assets/profile-photos/greg.png",
+    "assets/profile-photos/kevin.png",
+    "assets/profile-photos/madeline.png",
+    "assets/profile-photos/maxwell.png",
+    "assets/profile-photos/tim.png",
+    "assets/profile-photos/tom.png"
+  ],
+  "excluded": [
+    ".git history",
+    "node_modules",
+    "generated dist",
+    "old release archives",
+    "live database dumps",
+    "runtime R2 exports",
+    "legacy credential records",
+    "environment secrets"
+  ],
+  "known_implementation_findings": [
+    "business-unit permissions lack server enforcement",
+    "first local administrator must be provisioned after seeding",
+    "original Vite preview requires updating for current auth/photos/transaction semantics",
+    "Pages deployment configuration must be supplied and verified by developer"
+  ]
+}
