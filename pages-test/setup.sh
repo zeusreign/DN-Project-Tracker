@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Run the tracker as a Cloudflare Pages Function locally, with D1 + R2.
+# wrangler.toml lives in the PROJECT ROOT - Pages requires that.
+#
+#   ./pages-test/setup.sh          start (migrates only on first run)
+#   RESET=1 ./pages-test/setup.sh  wipe the local database and start clean
+#
+# Sign in at http://localhost:8788 with:
+#   administrator@example.invalid / PilotAdmin1!
+set -euo pipefail
+cd "$(dirname "$0")/.."
+PORT=8788
+ADMIN=administrator@example.invalid
+PASS='PilotAdmin1!'
+
+[[ "${RESET:-}" == "1" ]] && { echo "Resetting local D1/R2 state..."; rm -rf .wrangler/state; }
+
+npm run build
+cp dist/server/index.js pages-test/pages-dist/_worker.js
+
+# ALTER TABLE is not idempotent, so migrate only when the schema is absent.
+if npx wrangler d1 execute DB --local --yes \
+     --command "SELECT 1 FROM sqlite_master WHERE type='table' AND name='projects'" 2>/dev/null \
+     | grep -q '"1"'; then
+  echo "Schema already present - skipping migrations."
+else
+  echo "Applying migrations..."
+  for f in drizzle/*.sql; do
+    npx wrangler d1 execute DB --local --yes --file="$f" >/dev/null
+    echo "  applied $(basename "$f")"
+  done
+fi
+
+npx wrangler pages dev --port "$PORT" &
+SERVER=$!
+trap 'kill $SERVER 2>/dev/null || true' EXIT
+
+for _ in $(seq 1 60); do
+  curl -sf -o /dev/null "http://localhost:$PORT/health" && break || sleep 1
+done
+
+# The app seeds projects and users on its first authenticated request.
+curl -s -o /dev/null -m 20 \
+  -H "oai-authenticated-user-id: setup" \
+  -H "oai-authenticated-user-email: preview@example.com" \
+  "http://localhost:$PORT/api/bootstrap" || true
+
+npx wrangler d1 execute DB --local --yes \
+  --command "$(node pages-test/make-login.mjs "$ADMIN" "$PASS")" >/dev/null 2>&1 || true
+
+echo
+echo "=================================================="
+echo "  http://localhost:$PORT"
+echo "  Sign in:  $ADMIN"
+echo "            $PASS"
+echo "=================================================="
+echo
+wait $SERVER

@@ -1,0 +1,19 @@
+# Cloudflare Pages configuration for the DN tracker pilot.
+# Must live in the project root - Pages does not accept a custom config path.
+name = "dnc-tracker-pilot"
+compatibility_date = "2025-09-01"
+pages_build_output_dir = "pages-test/pages-dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dnc-tracker-pilot"
+database_id = "local-test-id"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "dnc-tracker-assets"
+
+[vars]
+ADMIN_EMAILS = "preview@example.com"
+# Local testing only. MUST be false or unset on the real deployment.
+ALLOW_PLATFORM_AUTH = "true"
