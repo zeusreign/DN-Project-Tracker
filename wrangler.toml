@@ -28,25 +28,22 @@ database_name = "dnc-tracker-pilot"
 database_id = "94241844-c709-445f-a71c-49f8b65a7cfd"
 
 
-# --- R2 (PENDING — blocked on payment-method verification) --------------------
-# TODO(R2): uncomment this block once the bucket exists in the client account.
-#   1. npx wrangler r2 bucket create dnc-tracker-assets
-#   2. uncomment the three lines below
-#   3. npm run build:pages && npx wrangler pages deploy
+# --- R2 (ACTIVE) --------------------------------------------------------------
+# Stores profile photograph bytes. Photo METADATA (avatar_key, avatar_mime,
+# avatar_version) stays in D1 on user_directory; only the image bytes live here.
 #
-# Deliberately commented out rather than removed: declaring a binding for a
-# bucket that does not exist fails the deploy. The application already degrades
-# gracefully without it — `env.BUCKET` is guarded at every use site, so profile
-# photo reads/writes return 503 "Photo storage is temporarily unavailable."
-# and importRequestedProfilePhotos() returns early. Nothing else is affected and
-# NO application code has to change when R2 is switched on.
+# The binding name `BUCKET` is fixed by the application and must not change —
+# worker/index.js references env.BUCKET at seven call sites, and the original
+# ChatGPT Sites manifest (.openai/hosting.json) declares the same logical name.
+# The bucket_name is a label and must match the bucket in the Cloudflare account.
 #
-# See worker/index.js: handleAvatar() guards `if (!env.BUCKET)`,
-# importRequestedProfilePhotos() opens with `if (!env.BUCKET) return;`
-#
-# [[r2_buckets]]
-# binding = "BUCKET"
-# bucket_name = "dnc-tracker-assets"
+# Keep this bucket PRIVATE. handleAvatar() enforces authentication, CSRF and
+# ownership, then streams bytes with `cache-control: private, no-store` and
+# `content-security-policy: default-src 'none'; sandbox`. Enabling public access
+# on the bucket would bypass all of that and expose identifiable staff photos.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "dnc-tracker-assets"
 
 
 # --- Environment variables ---------------------------------------------------

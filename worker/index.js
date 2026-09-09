@@ -110,15 +110,29 @@ function error(message, status = 400) {
 // old values inside the transaction keeps the audit accurate for concurrent edits.
 function fieldAuditStatement(db, user, projectId, action, table, fields, values) {
   const idColumn = table === "projects" ? "id" : "project_id";
-  const bindings = [];
-  const rows = fields.map((field, index) => {
-    bindings.push(values[index], projectId);
-    return `SELECT '${field}' AS field, ${field} AS before_value, ? AS after_value
-            FROM ${table} WHERE ${idColumn} = ?`;
-  });
+  // The requested field/value pairs travel as ONE bound JSON parameter and are
+  // expanded back into rows by json_each. An earlier version emitted one SELECT
+  // per field joined with UNION ALL; D1 rejects compound SELECTs above 5 terms
+  // ("too many terms in compound SELECT", SQLITE_ERROR 7500), so any edit
+  // touching 6+ fields failed. Local SQLite allows 500, which is why this only
+  // showed up on Cloudflare. json_each has no such limit.
+  const snapshotPairs = fields.map((field) => `'${field}', ${field}`).join(", ");
+  const requested = JSON.stringify(fields.map((field, index) => ({ f: field, v: values[index] })));
   return db.prepare(`
-    WITH requested_changes AS (${rows.join(" UNION ALL ")}),
-    actual_changes AS (SELECT * FROM requested_changes WHERE before_value IS NOT after_value)
+    WITH snapshot AS (
+      SELECT json_object(${snapshotPairs}) AS row_json FROM ${table} WHERE ${idColumn} = ?
+    ),
+    requested_changes AS (
+      SELECT json_extract(value, '$.f') AS field, json_extract(value, '$.v') AS after_value
+      FROM json_each(?)
+    ),
+    actual_changes AS (
+      SELECT r.field AS field,
+             json_extract(s.row_json, '$."' || r.field || '"') AS before_value,
+             r.after_value AS after_value
+      FROM requested_changes r JOIN snapshot s
+      WHERE json_extract(s.row_json, '$."' || r.field || '"') IS NOT r.after_value
+    )
     INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)
     SELECT ?, 'project', ?, ?, ?, json_object(
       'version', 1,
@@ -128,7 +142,7 @@ function fieldAuditStatement(db, user, projectId, action, table, fields, values)
         'field', field, 'before', before_value, 'after', after_value
       )) FROM actual_changes))
     ) WHERE EXISTS (SELECT 1 FROM actual_changes)
-  `).bind(...bindings, action, String(projectId), user.id, user.email,
+  `).bind(projectId, requested, action, String(projectId), user.id, user.email,
     projectId, user.name || user.email || "Signed-in user");
 }
 
