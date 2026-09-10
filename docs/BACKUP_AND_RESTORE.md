@@ -9,6 +9,49 @@ in [Verification notes](#verification-notes). Other topics have their own guide 
 
 ---
 
+## Quick backup from the Admin screen
+
+**Admin → Download Backup**, in the top right of the Admin screen next to "+ Add user".
+Administrators only; Editors and Viewers receive 403.
+
+One click downloads `dnc-tracker-backup-<timestamp>.zip` containing:
+
+| File | Contents |
+|---|---|
+| `d1-backup.sql` | **Complete database** — schema, all data, and indexes |
+| `d1-schema.sql` | Schema only, for comparison |
+| `r2-manifest.json` | Inventory of every R2 object: key, MIME type and owner |
+| `r2-keys.txt` | The same keys, one per line |
+| `CHECKSUMS.sha256` | SHA-256 of each file above |
+| `BACKUP-INFO.txt` | Timestamp, row counts, and restore notes |
+
+### What it does and does not cover
+
+- **The database is complete.** `d1-backup.sql` restores through the same procedure documented
+  below — `wrangler d1 execute --file` into an empty database.
+- **R2 object bytes are not included** — the photograph files themselves. The archive lists them in
+  `r2-manifest.json` and `r2-keys.txt`, so you know exactly what to fetch. To capture the files too,
+  use the wrangler procedure below, which reads each key from that list.
+- **It does not restore anything** and cannot modify production. Downloading is read-only apart from
+  a single `backup_download` entry written to the audit log, recording who downloaded it and the row
+  counts — never the contents.
+
+### ⚠ The download is sensitive
+
+It contains staff names, email addresses, **password hashes and session records**. Store it
+somewhere secure. Do not commit it, attach it to a ticket, or share it more widely than necessary.
+The same handling rules apply as to any export taken with wrangler.
+
+### Which method to use
+
+| Situation | Use |
+|---|---|
+| Quick database snapshot before a change; no terminal to hand | **Admin → Download Backup** |
+| Full backup including photograph files | The wrangler procedure below |
+| Scheduled or automated backups | The wrangler procedure below |
+
+---
+
 ## What has to be backed up
 
 The tracker keeps its data in two places, and **both are required** for a complete restore:

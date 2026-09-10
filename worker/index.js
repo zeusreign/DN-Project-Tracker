@@ -2,7 +2,7 @@ import { PAGE } from "./page.js";
 import { SEED_PROJECTS } from "./seed.js";
 import { OG_IMAGE_BASE64 } from "./social.js";
 import { PROFILE_PHOTOS, PROFILE_PHOTO_BATCH } from "./profile-photos.js";
-import { EXPORT_FORMATS, projectExportData, delimitedExport, xlsxExport } from "./exports.js";
+import { EXPORT_FORMATS, projectExportData, delimitedExport, xlsxExport, zipMembers } from "./exports.js";
 
 const REPORTING_PERIOD = "2026-08-28";
 const PREVIOUS_REPORTING_PERIOD = "2026-08-21";
@@ -994,6 +994,35 @@ async function handleApi(request, env, url) {
     `).bind(projectId).all();
     return json({ project, history: history.results || [] });
   }
+  if (request.method === "GET" && url.pathname === "/api/admin/backup") {
+    // Administrators only. Editors and Viewers are refused here, before any
+    // database read, because the archive contains the whole user directory.
+    if (role !== "admin") return error("Administrator access is required.", 403);
+    const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    const fileStamp = stamp.replaceAll("-", "").replaceAll(":", "");
+    let archive;
+    try {
+      archive = await buildBackupArchive(env.DB, stamp);
+    } catch (failure) {
+      // Deliberately no detail and no contents in the log.
+      console.error("Backup generation failed");
+      return error("The backup could not be generated. Please try again.", 503);
+    }
+    await env.DB.prepare(`
+      INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)
+      VALUES ('backup_download', 'database', 'd1', ?, ?, ?)
+    `).bind(user.id, user.email, JSON.stringify({
+      tables: archive.tables, rows: archive.counts, r2ObjectsListed: archive.photoCount,
+    })).run();
+    return new Response(archive.zip, {
+      headers: {
+        "content-type": "application/zip",
+        "content-disposition": `attachment; filename="dnc-tracker-backup-${fileStamp}.zip"`,
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  }
   if (request.method === "GET" && url.pathname === "/api/admin") {
     if (role !== "admin") return error("Administrator access is required.", 403);
     const [roles, audit, counts] = await Promise.all([
@@ -1349,6 +1378,156 @@ async function handleApi(request, env, url) {
     return json({ ok: true });
   }
   return error("Not found.", 404);
+}
+
+// --- Administrator database backup -------------------------------------------
+// Produces a ZIP containing a restorable SQL dump of D1 plus an inventory of the
+// R2 bucket. It never writes to the database and never reads R2 object bytes.
+//
+// Why the SQL is generated here rather than reusing `wrangler d1 export`: that
+// command calls the Cloudflare REST API and needs an API token. No token is
+// stored in the Worker, and adding one would put a credential in the runtime.
+// The file produced here restores through the same documented path
+// (`wrangler d1 execute --file`).
+
+function sqlLiteral(value) {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
+  if (typeof value === "boolean") return value ? "1" : "0";
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer);
+    let hex = "";
+    for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+    return "X'" + hex + "'";
+  }
+  return "'" + String(value).replaceAll("'", "''") + "'";
+}
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function buildBackupArchive(db, stamp) {
+  // Internal Cloudflare tables are excluded: they are not part of the application
+  // schema and cannot be recreated by a restore.
+  const objects = await db.prepare(`
+    SELECT type, name, sql FROM sqlite_master
+    WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_cf%' ESCAPE '\\'
+    ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name
+  `).all();
+  const schemaObjects = objects.results || [];
+  const tables = schemaObjects.filter((o) => o.type === "table").map((o) => o.name);
+
+  const schemaSql = [
+    `-- DN D&C Project Tracker — schema only`,
+    `-- Generated ${stamp}`,
+    "",
+    ...schemaObjects.map((o) => o.sql.trim().replace(/;?$/, ";")),
+    "",
+  ].join("\n");
+
+  const counts = {};
+  const dump = [
+    `-- DN D&C Project Tracker — full database backup (schema and data)`,
+    `-- Generated ${stamp}`,
+    `-- Restore into an EMPTY database:`,
+    `--   npx wrangler d1 execute <database> --remote --yes --file=<this file>`,
+    "",
+    "PRAGMA foreign_keys=OFF;",
+    "BEGIN TRANSACTION;",
+    "",
+  ];
+  for (const object of schemaObjects.filter((o) => o.type === "table")) {
+    dump.push(object.sql.trim().replace(/;?$/, ";"));
+  }
+  dump.push("");
+  for (const table of tables) {
+    // Sequential reads. D1 executes a batch() as a transaction, but the local
+    // test adapters return write-shaped results for batched statements, so a
+    // batch here could pass in production and fail under test. Reading table by
+    // table is reliable; see the snapshot note in BACKUP-INFO.txt.
+    const rows = (await db.prepare(`SELECT * FROM "${table}"`).all()).results || [];
+    counts[table] = rows.length;
+    if (!rows.length) continue;
+    const columns = Object.keys(rows[0]);
+    const columnList = columns.map((c) => `"${c}"`).join(", ");
+    dump.push(`-- ${table}: ${rows.length} row(s)`);
+    for (const row of rows) {
+      dump.push(`INSERT INTO "${table}" (${columnList}) VALUES (${columns.map((c) => sqlLiteral(row[c])).join(", ")});`);
+    }
+    dump.push("");
+  }
+  for (const object of schemaObjects.filter((o) => o.type !== "table")) {
+    dump.push(object.sql.trim().replace(/;?$/, ";"));
+  }
+  dump.push("", "COMMIT;", "PRAGMA foreign_keys=ON;", "");
+  const dumpSql = dump.join("\n");
+
+  // R2 inventory. D1 is the only index of the bucket, so the manifest is what
+  // makes the object bytes recoverable later.
+  const photos = (await db.prepare(`
+    SELECT id AS directory_id, first_name, last_name, user_email,
+           avatar_key, avatar_mime, avatar_version
+    FROM user_directory WHERE avatar_key IS NOT NULL ORDER BY avatar_key
+  `).all()).results || [];
+  const manifest = JSON.stringify({ generated: stamp, bucket: "dnc-tracker-assets", objects: photos }, null, 2);
+  const keys = photos.map((p) => p.avatar_key).join("\n") + (photos.length ? "\n" : "");
+
+  const info = [
+    "DN D&C Project Tracker — backup",
+    "",
+    `Created:            ${stamp}`,
+    `Tables:             ${tables.length}`,
+    ...tables.map((t) => `  ${t}: ${counts[t]} row(s)`),
+    `R2 objects listed:  ${photos.length}`,
+    "",
+    "WHAT THIS CONTAINS",
+    "  d1-backup.sql    Complete database: schema, data and indexes.",
+    "  d1-schema.sql    Schema only, for comparison.",
+    "  r2-manifest.json Inventory of every R2 object, with its owner and MIME type.",
+    "  r2-keys.txt      The same object keys, one per line.",
+    "  CHECKSUMS.sha256 SHA-256 of each file above.",
+    "",
+    "WHAT THIS DOES NOT CONTAIN",
+    "  R2 object bytes (the profile photograph files themselves) are NOT included.",
+    "  This download is the database plus an inventory of the bucket.",
+    "  To capture the photograph files as well, use the wrangler procedure in",
+    "  docs/BACKUP_AND_RESTORE.md, which reads each key listed in r2-keys.txt.",
+    "",
+    "SENSITIVE — HANDLE ACCORDINGLY",
+    "  Contains staff names, email addresses, password hashes and session records.",
+    "  Store it somewhere secure. Do not commit it to source control, attach it to",
+    "  a ticket, or share it more widely than necessary.",
+    "",
+    "RESTORING",
+    "  This download does not restore anything and cannot modify production.",
+    "  Restore is a separate, deliberate operation. Follow docs/BACKUP_AND_RESTORE.md.",
+    "  In short: restore into an EMPTY database, D1 first, then R2 using r2-keys.txt.",
+    "    npx wrangler d1 execute <database> --remote --yes --file=d1-backup.sql",
+    "  Do not run the drizzle/ migrations first: d1-backup.sql already creates the",
+    "  schema, and those migrations are not repeatable.",
+    "",
+    "CONSISTENCY",
+    "  Tables are read one after another, not in a single transaction, so a write",
+    "  landing mid-backup could be reflected in some tables and not others. For a",
+    "  strict point-in-time copy, use Cloudflare D1 Time Travel.",
+    "",
+  ].join("\n");
+
+  const files = {
+    "BACKUP-INFO.txt": info,
+    "d1-backup.sql": dumpSql,
+    "d1-schema.sql": schemaSql,
+    "r2-manifest.json": manifest,
+    "r2-keys.txt": keys,
+  };
+  const checksums = [];
+  for (const [name, contents] of Object.entries(files)) {
+    checksums.push(`${await sha256Hex(contents)}  ${name}`);
+  }
+  files["CHECKSUMS.sha256"] = checksums.join("\n") + "\n";
+  return { zip: zipMembers(files), counts, photoCount: photos.length, tables: tables.length };
 }
 
 async function exportProjects(request, env, format, authenticated = null, knownRole = null, knownScope = undefined) {

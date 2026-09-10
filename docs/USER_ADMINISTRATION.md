@@ -179,7 +179,17 @@ is deliberate — the sign-in record survives the account.
 
 ---
 
-## 9. Before granting access
+## 9. Downloading a backup
+
+**Admin → Download Backup** produces a ZIP of the database plus an inventory of the R2 bucket.
+Administrators only. It never modifies production and does not restore anything.
+
+The file contains password hashes and session records, so treat it as confidential. Details and the
+restore procedure are in [BACKUP_AND_RESTORE.md](BACKUP_AND_RESTORE.md).
+
+---
+
+## 10. Before granting access
 
 The directory entries loaded from the source workbook are contact records. **Being listed is not
 authorisation to sign in.** Confirm who should be activated, with which role and which business

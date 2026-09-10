@@ -31,6 +31,7 @@ main{min-width:0}
 .activity-inline,.activity-inline:focus,.development-table .activity-inline{max-height:none;overflow:visible}
 .activity-hint{display:none}
 .audit-list{max-height:none;overflow:visible}
+.admin-head-actions{display:flex;gap:8px;align-items:center}
 .audit-detailed{font-size:14px;line-height:1.5;overflow-wrap:anywhere}.audit-detailed strong{font-size:14px;text-transform:none}.audit-detailed>span{font-size:12px}.audit-change{white-space:pre-wrap;margin-top:4px}.audit-long-change{margin-top:6px}.audit-long-change summary{cursor:pointer;color:var(--navy)}
 .history-scroll{max-height:none;overflow:visible}
 .topbar{position:static}
