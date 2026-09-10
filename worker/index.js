@@ -263,7 +263,7 @@ async function localUserFrom(db, request) {
   const session = await db.prepare(`
     SELECT s.id AS session_id, s.csrf_token, d.id AS directory_id, d.user_email,
            d.first_name, d.last_name, d.role, d.account_status, d.site_access_status,
-           d.must_change_password, s.created_at AS session_created_at
+           d.business_unit_scope, d.must_change_password, s.created_at AS session_created_at
     FROM login_sessions s
     JOIN user_directory d ON d.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > datetime('now')
@@ -279,6 +279,7 @@ async function localUserFrom(db, request) {
     email: session.user_email,
     name: `${session.first_name} ${session.last_name}`,
     directory_role: session.role,
+    business_unit_scope: session.business_unit_scope,
     csrf_token: session.csrf_token,
     must_change_password: Boolean(session.must_change_password),
     session_id: session.session_id,
@@ -315,6 +316,65 @@ async function roleFor(db, env, user) {
 
 function canWrite(role) {
   return role === "admin" || role === "editor";
+}
+
+// --- Business-unit scope -----------------------------------------------------
+// user_directory.business_unit_scope is TEXT NOT NULL DEFAULT 'All'. 'All' (or
+// blank) means unrestricted; anything else names the units the account may see.
+// Several units may be stored comma-separated, so multi-unit access needs no
+// schema change. Returns null for unrestricted, otherwise an array of names.
+function parseBusinessUnitScope(value) {
+  const raw = String(value ?? "All").trim();
+  if (!raw || raw.toLowerCase() === "all") return null;
+  const units = raw.split(",").map((unit) => unit.trim()).filter(Boolean);
+  return units.length ? units : null;
+}
+
+// Administrators always keep full cross-unit access. Everyone else is limited to
+// the units on their directory record. Resolved from the database on every
+// request, never from anything the client sends.
+async function scopeFor(db, user, role) {
+  if (role === "admin") return null;
+  if (user?.business_unit_scope !== undefined && user?.business_unit_scope !== null) {
+    return parseBusinessUnitScope(user.business_unit_scope);
+  }
+  if (!user?.email) return null;
+  const row = await db.prepare(
+    "SELECT business_unit_scope FROM user_directory WHERE lower(user_email) = ?"
+  ).bind(user.email.toLowerCase()).first();
+  return parseBusinessUnitScope(row?.business_unit_scope);
+}
+
+// SQL fragment restricting a query to the caller's units. `alias` is the
+// business_units alias in the surrounding statement.
+function scopeFilter(scope, alias = "b") {
+  if (!scope) return { sql: "", bindings: [] };
+  return { sql: ` AND ${alias}.name IN (${scope.map(() => "?").join(", ")})`, bindings: scope };
+}
+
+async function runScoped(db, sql, filter, extra = []) {
+  const statement = db.prepare(sql);
+  const bindings = [...filter.bindings, ...extra];
+  return (bindings.length ? statement.bind(...bindings) : statement).all();
+}
+
+// True when the project belongs to a unit the caller may act on. Every write
+// route checks this so a scoped user cannot reach another unit by editing the
+// project id in the URL or calling the API directly.
+async function projectInScope(db, projectId, scope) {
+  if (!scope) return true;
+  const row = await db.prepare(`
+    SELECT 1 AS ok FROM projects p
+    JOIN business_units b ON b.id = p.business_unit_id
+    WHERE p.id = ? AND b.name IN (${scope.map(() => "?").join(", ")})
+  `).bind(projectId, ...scope).first();
+  return Boolean(row);
+}
+
+// A scoped account may only place or move a record into a unit it holds.
+function unitInScope(scope, unitName) {
+  if (!scope) return true;
+  return scope.some((unit) => unit.toLowerCase() === String(unitName || "").trim().toLowerCase());
 }
 
 function seedSheet(project) {
@@ -556,8 +616,9 @@ async function ensureDirectorySeed(db) {
   `).bind(DIRECTORY_SEED_VERSION).run();
 }
 
-async function projectRows(db) {
-  const result = await db.prepare(`
+async function projectRows(db, scope = null) {
+  const filter = scopeFilter(scope, "b");
+  const result = await runScoped(db, `
     SELECT
       p.*, b.name AS business_unit,
       d.source_row AS development_source_row,
@@ -582,9 +643,9 @@ async function projectRows(db) {
     FROM projects p
     JOIN business_units b ON b.id = p.business_unit_id
     LEFT JOIN development_details d ON d.project_id = p.id
-    WHERE p.archived_at IS NULL
+    WHERE p.archived_at IS NULL${filter.sql}
     ORDER BY p.source_sort_order, p.id
-  `).all();
+  `, filter);
   return result.results || [];
 }
 
@@ -611,17 +672,19 @@ function summarize(projects) {
   };
 }
 
-async function recentUpdates(db, limit = 40) {
+async function recentUpdates(db, limit = 40, scope = null) {
   const boundedLimit = Math.max(1, Math.min(Number(limit) || 40, 200));
-  const result = await db.prepare(`
+  const filter = scopeFilter(scope, "b");
+  const result = await runScoped(db, `
     SELECT u.id, u.reporting_period, u.current_summary, u.author_name, u.author_email,
            u.created_at, p.id AS project_id, p.name AS project_name, b.name AS business_unit
     FROM project_updates u
     JOIN projects p ON p.id = u.project_id
     JOIN business_units b ON b.id = p.business_unit_id
+    WHERE p.archived_at IS NULL${filter.sql}
     ORDER BY u.reporting_period DESC, u.created_at DESC, u.id DESC
     LIMIT ?
-  `).bind(boundedLimit).all();
+  `, filter, [boundedLimit]);
   return result.results || [];
 }
 
@@ -847,6 +910,8 @@ async function handleApi(request, env, url) {
   if (!user?.id || !user?.email) return error("Sign in with an authorized account to continue.", 401);
   const role = await roleFor(env.DB, env, user);
   if (!role) return error("This account is suspended or not authorized.", 403);
+  // Resolved server-side from the directory record; null means unrestricted.
+  const scope = await scopeFor(env.DB, user, role);
   if (user.auth_source === "local" && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     if (request.headers.get("x-csrf-token") !== user.csrf_token) return error("Your secure session could not be verified. Refresh and try again.", 403);
   }
@@ -855,7 +920,7 @@ async function handleApi(request, env, url) {
 
   if (request.method === "GET" && url.pathname === "/api/bootstrap") {
     if (role === "admin" && !user.must_change_password) await importRequestedProfilePhotos(env, user);
-    const projects = await projectRows(env.DB);
+    const projects = await projectRows(env.DB, scope);
     const profile = user.directory_id ? await readProfile(env.DB, user.directory_id) : null;
     // Renew an active session, never an expired one. Keep an absolute 24-hour cap.
     const sessionHeaders = {};
@@ -868,7 +933,7 @@ async function handleApi(request, env, url) {
     return json({
       summary: summarize(projects),
       projects,
-      updates: await recentUpdates(env.DB, 120),
+      updates: await recentUpdates(env.DB, 120, scope),
       me: {
         email: user.email, name: user.name || user.email, role,
         auth_source: user.auth_source,
@@ -882,7 +947,7 @@ async function handleApi(request, env, url) {
     return error("Replace the temporary password before using the tracker.", 428);
   }
   const exportMatch = url.pathname.match(/^\/api\/export\.(csv|tsv|xlsx)$/);
-  if (request.method === "GET" && exportMatch) return exportProjects(request, env, exportMatch[1], user);
+  if (request.method === "GET" && exportMatch) return exportProjects(request, env, exportMatch[1], user, role, scope);
   if (url.pathname === "/api/account/profile") {
     if (!user.directory_id) return error("Profile settings require an individual account.", 400);
     if (request.method === "GET") return json({ profile: await readProfile(env.DB, user.directory_id) });
@@ -902,20 +967,23 @@ async function handleApi(request, env, url) {
   const avatarMatch = url.pathname.match(/^\/api\/users\/(\d+)\/avatar$/);
   if (avatarMatch) return handleAvatar(request, env, user, role, Number(avatarMatch[1]));
   if (request.method === "GET" && url.pathname === "/api/projects") {
-    return json({ projects: await projectRows(env.DB) });
+    return json({ projects: await projectRows(env.DB, scope) });
   }
   if (request.method === "GET" && url.pathname === "/api/updates") {
-    return json({ updates: await recentUpdates(env.DB, url.searchParams.get("limit") || 100) });
+    return json({ updates: await recentUpdates(env.DB, url.searchParams.get("limit") || 100, scope) });
   }
   const historyMatch = url.pathname.match(/^\/api\/projects\/(\d+)\/history$/);
   if (request.method === "GET" && historyMatch) {
     const projectId = Number(historyMatch[1]);
+    const historyFilter = scopeFilter(scope, "b");
     const project = await env.DB.prepare(`
       SELECT p.*, b.name AS business_unit
       FROM projects p
       JOIN business_units b ON b.id = p.business_unit_id
-      WHERE p.id = ?
-    `).bind(projectId).first();
+      WHERE p.id = ?${historyFilter.sql}
+    `).bind(projectId, ...historyFilter.bindings).first();
+    // Out-of-scope ids return 404, not 403, so the response cannot be used to
+    // probe which project ids exist in other business units.
     if (!project) return error("Project not found.", 404);
     const history = await env.DB.prepare(`
       SELECT id, reporting_period, current_summary, previous_summary,
@@ -1049,6 +1117,7 @@ async function handleApi(request, env, url) {
     const name = asText(body.name, 240);
     const businessUnit = asText(body.business_unit, 120);
     if (!name || !businessUnit) return error("Project name and business unit are required.");
+    if (!unitInScope(scope, businessUnit)) return error("You do not have access to that business unit.", 403);
     const projectType = asText(body.project_type, 40) === "Development" ? "Development" : "Capital";
     const sourceKey = "web:" + crypto.randomUUID();
     const initialUpdate = asText(body.current_update);
@@ -1122,6 +1191,7 @@ async function handleApi(request, env, url) {
     const projectId = Number(activityMatch[1]);
     const body = await request.json().catch(() => null);
     if (!body) return error("Invalid activity update.");
+    if (!await projectInScope(env.DB, projectId, scope)) return error("Project not found.", 404);
     const existing = await env.DB.prepare("SELECT * FROM projects WHERE id = ?").bind(projectId).first();
     if (!existing) return error("Project not found.", 404);
     const reportingPeriod = asText(body.reporting_period, 20) || new Date().toISOString().slice(0, 10);
@@ -1162,6 +1232,7 @@ async function handleApi(request, env, url) {
     const projectId = Number(developmentMatch[1]);
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return error("Invalid development fields.");
+    if (!await projectInScope(env.DB, projectId, scope)) return error("Development project not found.", 404);
     const project = await env.DB.prepare("SELECT id FROM projects WHERE id = ? AND project_type = 'Development'").bind(projectId).first();
     if (!project) return error("Development project not found.", 404);
     const textFields = new Set([
@@ -1203,6 +1274,9 @@ async function handleApi(request, env, url) {
     const cappNumber = asText(body.capp_number, 80);
     const sectionName = asText(body.section_name, 180);
     if (!businessUnit || !sectionName) return error("Business unit and major-project heading are required.");
+    if (!await projectInScope(env.DB, projectId, scope)) return error("Development project not found or already promoted.", 404);
+    // A scoped account must not move a record into a unit it does not hold.
+    if (!unitInScope(scope, businessUnit)) return error("You do not have access to that business unit.", 403);
     const project = await env.DB.prepare("SELECT id, name FROM projects WHERE id = ? AND project_type = 'Development'").bind(projectId).first();
     if (!project) return error("Development project not found or already promoted.", 404);
     await env.DB.batch([
@@ -1234,6 +1308,7 @@ async function handleApi(request, env, url) {
     const projectId = Number(fieldsMatch[1]);
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return error("Invalid project fields.");
+    if (!await projectInScope(env.DB, projectId, scope)) return error("Project not found.", 404);
     const project = await env.DB.prepare("SELECT id FROM projects WHERE id = ?").bind(projectId).first();
     if (!project) return error("Project not found.", 404);
     const textFields = new Set([
@@ -1276,21 +1351,24 @@ async function handleApi(request, env, url) {
   return error("Not found.", 404);
 }
 
-async function exportProjects(request, env, format, authenticated = null) {
+async function exportProjects(request, env, format, authenticated = null, knownRole = null, knownScope = undefined) {
   if (!Object.hasOwn(EXPORT_FORMATS, format)) return error("Unsupported export format.", 400);
   if (!env.DB) return error("Database unavailable", 503);
   await ensureSeed(env.DB);
   await ensureDirectorySeed(env.DB);
   const user = authenticated || await authenticatedUser(env.DB, request, env);
   if (!user?.id || !user?.email) return error("Sign in is required", 401);
-  const role = await roleFor(env.DB, env, user);
+  const role = knownRole || await roleFor(env.DB, env, user);
   if (!role) return error("This account is not authorized", 403);
   if (user.auth_source === "local" && user.must_change_password) {
     return error("Replace the temporary password before exporting data", 428);
   }
+  // Exports must contain only the caller's permitted units. Resolved here too,
+  // because /export.* is reachable without going through handleApi.
+  const scope = knownScope !== undefined ? knownScope : await scopeFor(env.DB, user, role);
   let body;
   try {
-    const data = projectExportData(await projectRows(env.DB));
+    const data = projectExportData(await projectRows(env.DB, scope));
     body = format === "xlsx" ? xlsxExport(data) : delimitedExport(data, format === "tsv" ? "\t" : ",");
   } catch (failure) {
     console.error("Project export failed", format);
