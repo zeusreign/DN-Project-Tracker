@@ -2,7 +2,7 @@ import { PAGE } from "./page.js";
 import { SEED_PROJECTS } from "./seed.js";
 import { OG_IMAGE_BASE64 } from "./social.js";
 import { PROFILE_PHOTOS, PROFILE_PHOTO_BATCH } from "./profile-photos.js";
-import { EXPORT_FORMATS, projectExportData, delimitedExport, xlsxExport } from "./exports.js";
+import { EXPORT_FORMATS, projectExportData, delimitedExport, xlsxExport, zipMembers } from "./exports.js";
 
 const REPORTING_PERIOD = "2026-08-28";
 const PREVIOUS_REPORTING_PERIOD = "2026-08-21";
@@ -110,15 +110,29 @@ function error(message, status = 400) {
 // old values inside the transaction keeps the audit accurate for concurrent edits.
 function fieldAuditStatement(db, user, projectId, action, table, fields, values) {
   const idColumn = table === "projects" ? "id" : "project_id";
-  const bindings = [];
-  const rows = fields.map((field, index) => {
-    bindings.push(values[index], projectId);
-    return `SELECT '${field}' AS field, ${field} AS before_value, ? AS after_value
-            FROM ${table} WHERE ${idColumn} = ?`;
-  });
+  // The requested field/value pairs travel as ONE bound JSON parameter and are
+  // expanded back into rows by json_each. An earlier version emitted one SELECT
+  // per field joined with UNION ALL; D1 rejects compound SELECTs above 5 terms
+  // ("too many terms in compound SELECT", SQLITE_ERROR 7500), so any edit
+  // touching 6+ fields failed. Local SQLite allows 500, which is why this only
+  // showed up on Cloudflare. json_each has no such limit.
+  const snapshotPairs = fields.map((field) => `'${field}', ${field}`).join(", ");
+  const requested = JSON.stringify(fields.map((field, index) => ({ f: field, v: values[index] })));
   return db.prepare(`
-    WITH requested_changes AS (${rows.join(" UNION ALL ")}),
-    actual_changes AS (SELECT * FROM requested_changes WHERE before_value IS NOT after_value)
+    WITH snapshot AS (
+      SELECT json_object(${snapshotPairs}) AS row_json FROM ${table} WHERE ${idColumn} = ?
+    ),
+    requested_changes AS (
+      SELECT json_extract(value, '$.f') AS field, json_extract(value, '$.v') AS after_value
+      FROM json_each(?)
+    ),
+    actual_changes AS (
+      SELECT r.field AS field,
+             json_extract(s.row_json, '$."' || r.field || '"') AS before_value,
+             r.after_value AS after_value
+      FROM requested_changes r JOIN snapshot s
+      WHERE json_extract(s.row_json, '$."' || r.field || '"') IS NOT r.after_value
+    )
     INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)
     SELECT ?, 'project', ?, ?, ?, json_object(
       'version', 1,
@@ -128,7 +142,7 @@ function fieldAuditStatement(db, user, projectId, action, table, fields, values)
         'field', field, 'before', before_value, 'after', after_value
       )) FROM actual_changes))
     ) WHERE EXISTS (SELECT 1 FROM actual_changes)
-  `).bind(...bindings, action, String(projectId), user.id, user.email,
+  `).bind(projectId, requested, action, String(projectId), user.id, user.email,
     projectId, user.name || user.email || "Signed-in user");
 }
 
@@ -249,7 +263,7 @@ async function localUserFrom(db, request) {
   const session = await db.prepare(`
     SELECT s.id AS session_id, s.csrf_token, d.id AS directory_id, d.user_email,
            d.first_name, d.last_name, d.role, d.account_status, d.site_access_status,
-           d.must_change_password, s.created_at AS session_created_at
+           d.business_unit_scope, d.must_change_password, s.created_at AS session_created_at
     FROM login_sessions s
     JOIN user_directory d ON d.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > datetime('now')
@@ -265,6 +279,7 @@ async function localUserFrom(db, request) {
     email: session.user_email,
     name: `${session.first_name} ${session.last_name}`,
     directory_role: session.role,
+    business_unit_scope: session.business_unit_scope,
     csrf_token: session.csrf_token,
     must_change_password: Boolean(session.must_change_password),
     session_id: session.session_id,
@@ -301,6 +316,65 @@ async function roleFor(db, env, user) {
 
 function canWrite(role) {
   return role === "admin" || role === "editor";
+}
+
+// --- Business-unit scope -----------------------------------------------------
+// user_directory.business_unit_scope is TEXT NOT NULL DEFAULT 'All'. 'All' (or
+// blank) means unrestricted; anything else names the units the account may see.
+// Several units may be stored comma-separated, so multi-unit access needs no
+// schema change. Returns null for unrestricted, otherwise an array of names.
+function parseBusinessUnitScope(value) {
+  const raw = String(value ?? "All").trim();
+  if (!raw || raw.toLowerCase() === "all") return null;
+  const units = raw.split(",").map((unit) => unit.trim()).filter(Boolean);
+  return units.length ? units : null;
+}
+
+// Administrators always keep full cross-unit access. Everyone else is limited to
+// the units on their directory record. Resolved from the database on every
+// request, never from anything the client sends.
+async function scopeFor(db, user, role) {
+  if (role === "admin") return null;
+  if (user?.business_unit_scope !== undefined && user?.business_unit_scope !== null) {
+    return parseBusinessUnitScope(user.business_unit_scope);
+  }
+  if (!user?.email) return null;
+  const row = await db.prepare(
+    "SELECT business_unit_scope FROM user_directory WHERE lower(user_email) = ?"
+  ).bind(user.email.toLowerCase()).first();
+  return parseBusinessUnitScope(row?.business_unit_scope);
+}
+
+// SQL fragment restricting a query to the caller's units. `alias` is the
+// business_units alias in the surrounding statement.
+function scopeFilter(scope, alias = "b") {
+  if (!scope) return { sql: "", bindings: [] };
+  return { sql: ` AND ${alias}.name IN (${scope.map(() => "?").join(", ")})`, bindings: scope };
+}
+
+async function runScoped(db, sql, filter, extra = []) {
+  const statement = db.prepare(sql);
+  const bindings = [...filter.bindings, ...extra];
+  return (bindings.length ? statement.bind(...bindings) : statement).all();
+}
+
+// True when the project belongs to a unit the caller may act on. Every write
+// route checks this so a scoped user cannot reach another unit by editing the
+// project id in the URL or calling the API directly.
+async function projectInScope(db, projectId, scope) {
+  if (!scope) return true;
+  const row = await db.prepare(`
+    SELECT 1 AS ok FROM projects p
+    JOIN business_units b ON b.id = p.business_unit_id
+    WHERE p.id = ? AND b.name IN (${scope.map(() => "?").join(", ")})
+  `).bind(projectId, ...scope).first();
+  return Boolean(row);
+}
+
+// A scoped account may only place or move a record into a unit it holds.
+function unitInScope(scope, unitName) {
+  if (!scope) return true;
+  return scope.some((unit) => unit.toLowerCase() === String(unitName || "").trim().toLowerCase());
 }
 
 function seedSheet(project) {
@@ -542,8 +616,9 @@ async function ensureDirectorySeed(db) {
   `).bind(DIRECTORY_SEED_VERSION).run();
 }
 
-async function projectRows(db) {
-  const result = await db.prepare(`
+async function projectRows(db, scope = null) {
+  const filter = scopeFilter(scope, "b");
+  const result = await runScoped(db, `
     SELECT
       p.*, b.name AS business_unit,
       d.source_row AS development_source_row,
@@ -568,9 +643,9 @@ async function projectRows(db) {
     FROM projects p
     JOIN business_units b ON b.id = p.business_unit_id
     LEFT JOIN development_details d ON d.project_id = p.id
-    WHERE p.archived_at IS NULL
+    WHERE p.archived_at IS NULL${filter.sql}
     ORDER BY p.source_sort_order, p.id
-  `).all();
+  `, filter);
   return result.results || [];
 }
 
@@ -597,17 +672,19 @@ function summarize(projects) {
   };
 }
 
-async function recentUpdates(db, limit = 40) {
+async function recentUpdates(db, limit = 40, scope = null) {
   const boundedLimit = Math.max(1, Math.min(Number(limit) || 40, 200));
-  const result = await db.prepare(`
+  const filter = scopeFilter(scope, "b");
+  const result = await runScoped(db, `
     SELECT u.id, u.reporting_period, u.current_summary, u.author_name, u.author_email,
            u.created_at, p.id AS project_id, p.name AS project_name, b.name AS business_unit
     FROM project_updates u
     JOIN projects p ON p.id = u.project_id
     JOIN business_units b ON b.id = p.business_unit_id
+    WHERE p.archived_at IS NULL${filter.sql}
     ORDER BY u.reporting_period DESC, u.created_at DESC, u.id DESC
     LIMIT ?
-  `).bind(boundedLimit).all();
+  `, filter, [boundedLimit]);
   return result.results || [];
 }
 
@@ -833,6 +910,8 @@ async function handleApi(request, env, url) {
   if (!user?.id || !user?.email) return error("Sign in with an authorized account to continue.", 401);
   const role = await roleFor(env.DB, env, user);
   if (!role) return error("This account is suspended or not authorized.", 403);
+  // Resolved server-side from the directory record; null means unrestricted.
+  const scope = await scopeFor(env.DB, user, role);
   if (user.auth_source === "local" && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     if (request.headers.get("x-csrf-token") !== user.csrf_token) return error("Your secure session could not be verified. Refresh and try again.", 403);
   }
@@ -841,7 +920,7 @@ async function handleApi(request, env, url) {
 
   if (request.method === "GET" && url.pathname === "/api/bootstrap") {
     if (role === "admin" && !user.must_change_password) await importRequestedProfilePhotos(env, user);
-    const projects = await projectRows(env.DB);
+    const projects = await projectRows(env.DB, scope);
     const profile = user.directory_id ? await readProfile(env.DB, user.directory_id) : null;
     // Renew an active session, never an expired one. Keep an absolute 24-hour cap.
     const sessionHeaders = {};
@@ -854,7 +933,7 @@ async function handleApi(request, env, url) {
     return json({
       summary: summarize(projects),
       projects,
-      updates: await recentUpdates(env.DB, 120),
+      updates: await recentUpdates(env.DB, 120, scope),
       me: {
         email: user.email, name: user.name || user.email, role,
         auth_source: user.auth_source,
@@ -868,7 +947,7 @@ async function handleApi(request, env, url) {
     return error("Replace the temporary password before using the tracker.", 428);
   }
   const exportMatch = url.pathname.match(/^\/api\/export\.(csv|tsv|xlsx)$/);
-  if (request.method === "GET" && exportMatch) return exportProjects(request, env, exportMatch[1], user);
+  if (request.method === "GET" && exportMatch) return exportProjects(request, env, exportMatch[1], user, role, scope);
   if (url.pathname === "/api/account/profile") {
     if (!user.directory_id) return error("Profile settings require an individual account.", 400);
     if (request.method === "GET") return json({ profile: await readProfile(env.DB, user.directory_id) });
@@ -888,20 +967,23 @@ async function handleApi(request, env, url) {
   const avatarMatch = url.pathname.match(/^\/api\/users\/(\d+)\/avatar$/);
   if (avatarMatch) return handleAvatar(request, env, user, role, Number(avatarMatch[1]));
   if (request.method === "GET" && url.pathname === "/api/projects") {
-    return json({ projects: await projectRows(env.DB) });
+    return json({ projects: await projectRows(env.DB, scope) });
   }
   if (request.method === "GET" && url.pathname === "/api/updates") {
-    return json({ updates: await recentUpdates(env.DB, url.searchParams.get("limit") || 100) });
+    return json({ updates: await recentUpdates(env.DB, url.searchParams.get("limit") || 100, scope) });
   }
   const historyMatch = url.pathname.match(/^\/api\/projects\/(\d+)\/history$/);
   if (request.method === "GET" && historyMatch) {
     const projectId = Number(historyMatch[1]);
+    const historyFilter = scopeFilter(scope, "b");
     const project = await env.DB.prepare(`
       SELECT p.*, b.name AS business_unit
       FROM projects p
       JOIN business_units b ON b.id = p.business_unit_id
-      WHERE p.id = ?
-    `).bind(projectId).first();
+      WHERE p.id = ?${historyFilter.sql}
+    `).bind(projectId, ...historyFilter.bindings).first();
+    // Out-of-scope ids return 404, not 403, so the response cannot be used to
+    // probe which project ids exist in other business units.
     if (!project) return error("Project not found.", 404);
     const history = await env.DB.prepare(`
       SELECT id, reporting_period, current_summary, previous_summary,
@@ -911,6 +993,35 @@ async function handleApi(request, env, url) {
       ORDER BY reporting_period DESC, created_at DESC, id DESC
     `).bind(projectId).all();
     return json({ project, history: history.results || [] });
+  }
+  if (request.method === "GET" && url.pathname === "/api/admin/backup") {
+    // Administrators only. Editors and Viewers are refused here, before any
+    // database read, because the archive contains the whole user directory.
+    if (role !== "admin") return error("Administrator access is required.", 403);
+    const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    const fileStamp = stamp.replaceAll("-", "").replaceAll(":", "");
+    let archive;
+    try {
+      archive = await buildBackupArchive(env.DB, stamp);
+    } catch (failure) {
+      // Deliberately no detail and no contents in the log.
+      console.error("Backup generation failed");
+      return error("The backup could not be generated. Please try again.", 503);
+    }
+    await env.DB.prepare(`
+      INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)
+      VALUES ('backup_download', 'database', 'd1', ?, ?, ?)
+    `).bind(user.id, user.email, JSON.stringify({
+      tables: archive.tables, rows: archive.counts, r2ObjectsListed: archive.photoCount,
+    })).run();
+    return new Response(archive.zip, {
+      headers: {
+        "content-type": "application/zip",
+        "content-disposition": `attachment; filename="dnc-tracker-backup-${fileStamp}.zip"`,
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      },
+    });
   }
   if (request.method === "GET" && url.pathname === "/api/admin") {
     if (role !== "admin") return error("Administrator access is required.", 403);
@@ -1035,6 +1146,7 @@ async function handleApi(request, env, url) {
     const name = asText(body.name, 240);
     const businessUnit = asText(body.business_unit, 120);
     if (!name || !businessUnit) return error("Project name and business unit are required.");
+    if (!unitInScope(scope, businessUnit)) return error("You do not have access to that business unit.", 403);
     const projectType = asText(body.project_type, 40) === "Development" ? "Development" : "Capital";
     const sourceKey = "web:" + crypto.randomUUID();
     const initialUpdate = asText(body.current_update);
@@ -1108,6 +1220,7 @@ async function handleApi(request, env, url) {
     const projectId = Number(activityMatch[1]);
     const body = await request.json().catch(() => null);
     if (!body) return error("Invalid activity update.");
+    if (!await projectInScope(env.DB, projectId, scope)) return error("Project not found.", 404);
     const existing = await env.DB.prepare("SELECT * FROM projects WHERE id = ?").bind(projectId).first();
     if (!existing) return error("Project not found.", 404);
     const reportingPeriod = asText(body.reporting_period, 20) || new Date().toISOString().slice(0, 10);
@@ -1148,6 +1261,7 @@ async function handleApi(request, env, url) {
     const projectId = Number(developmentMatch[1]);
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return error("Invalid development fields.");
+    if (!await projectInScope(env.DB, projectId, scope)) return error("Development project not found.", 404);
     const project = await env.DB.prepare("SELECT id FROM projects WHERE id = ? AND project_type = 'Development'").bind(projectId).first();
     if (!project) return error("Development project not found.", 404);
     const textFields = new Set([
@@ -1189,6 +1303,9 @@ async function handleApi(request, env, url) {
     const cappNumber = asText(body.capp_number, 80);
     const sectionName = asText(body.section_name, 180);
     if (!businessUnit || !sectionName) return error("Business unit and major-project heading are required.");
+    if (!await projectInScope(env.DB, projectId, scope)) return error("Development project not found or already promoted.", 404);
+    // A scoped account must not move a record into a unit it does not hold.
+    if (!unitInScope(scope, businessUnit)) return error("You do not have access to that business unit.", 403);
     const project = await env.DB.prepare("SELECT id, name FROM projects WHERE id = ? AND project_type = 'Development'").bind(projectId).first();
     if (!project) return error("Development project not found or already promoted.", 404);
     await env.DB.batch([
@@ -1220,6 +1337,7 @@ async function handleApi(request, env, url) {
     const projectId = Number(fieldsMatch[1]);
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return error("Invalid project fields.");
+    if (!await projectInScope(env.DB, projectId, scope)) return error("Project not found.", 404);
     const project = await env.DB.prepare("SELECT id FROM projects WHERE id = ?").bind(projectId).first();
     if (!project) return error("Project not found.", 404);
     const textFields = new Set([
@@ -1262,21 +1380,174 @@ async function handleApi(request, env, url) {
   return error("Not found.", 404);
 }
 
-async function exportProjects(request, env, format, authenticated = null) {
+// --- Administrator database backup -------------------------------------------
+// Produces a ZIP containing a restorable SQL dump of D1 plus an inventory of the
+// R2 bucket. It never writes to the database and never reads R2 object bytes.
+//
+// Why the SQL is generated here rather than reusing `wrangler d1 export`: that
+// command calls the Cloudflare REST API and needs an API token. No token is
+// stored in the Worker, and adding one would put a credential in the runtime.
+// The file produced here restores through the same documented path
+// (`wrangler d1 execute --file`).
+
+function sqlLiteral(value) {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
+  if (typeof value === "boolean") return value ? "1" : "0";
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer);
+    let hex = "";
+    for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+    return "X'" + hex + "'";
+  }
+  return "'" + String(value).replaceAll("'", "''") + "'";
+}
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function buildBackupArchive(db, stamp) {
+  // Internal Cloudflare tables are excluded: they are not part of the application
+  // schema and cannot be recreated by a restore.
+  const objects = await db.prepare(`
+    SELECT type, name, sql FROM sqlite_master
+    WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_cf%' ESCAPE '\\'
+    ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name
+  `).all();
+  const schemaObjects = objects.results || [];
+  const tables = schemaObjects.filter((o) => o.type === "table").map((o) => o.name);
+
+  const schemaSql = [
+    `-- DN D&C Project Tracker — schema only`,
+    `-- Generated ${stamp}`,
+    "",
+    ...schemaObjects.map((o) => o.sql.trim().replace(/;?$/, ";")),
+    "",
+  ].join("\n");
+
+  const counts = {};
+  const dump = [
+    `-- DN D&C Project Tracker — full database backup (schema and data)`,
+    `-- Generated ${stamp}`,
+    `-- Restore into an EMPTY database:`,
+    `--   npx wrangler d1 execute <database> --remote --yes --file=<this file>`,
+    "",
+    "PRAGMA foreign_keys=OFF;",
+    "BEGIN TRANSACTION;",
+    "",
+  ];
+  for (const object of schemaObjects.filter((o) => o.type === "table")) {
+    dump.push(object.sql.trim().replace(/;?$/, ";"));
+  }
+  dump.push("");
+  for (const table of tables) {
+    // Sequential reads. D1 executes a batch() as a transaction, but the local
+    // test adapters return write-shaped results for batched statements, so a
+    // batch here could pass in production and fail under test. Reading table by
+    // table is reliable; see the snapshot note in BACKUP-INFO.txt.
+    const rows = (await db.prepare(`SELECT * FROM "${table}"`).all()).results || [];
+    counts[table] = rows.length;
+    if (!rows.length) continue;
+    const columns = Object.keys(rows[0]);
+    const columnList = columns.map((c) => `"${c}"`).join(", ");
+    dump.push(`-- ${table}: ${rows.length} row(s)`);
+    for (const row of rows) {
+      dump.push(`INSERT INTO "${table}" (${columnList}) VALUES (${columns.map((c) => sqlLiteral(row[c])).join(", ")});`);
+    }
+    dump.push("");
+  }
+  for (const object of schemaObjects.filter((o) => o.type !== "table")) {
+    dump.push(object.sql.trim().replace(/;?$/, ";"));
+  }
+  dump.push("", "COMMIT;", "PRAGMA foreign_keys=ON;", "");
+  const dumpSql = dump.join("\n");
+
+  // R2 inventory. D1 is the only index of the bucket, so the manifest is what
+  // makes the object bytes recoverable later.
+  const photos = (await db.prepare(`
+    SELECT id AS directory_id, first_name, last_name, user_email,
+           avatar_key, avatar_mime, avatar_version
+    FROM user_directory WHERE avatar_key IS NOT NULL ORDER BY avatar_key
+  `).all()).results || [];
+  const manifest = JSON.stringify({ generated: stamp, bucket: "dnc-tracker-assets", objects: photos }, null, 2);
+  const keys = photos.map((p) => p.avatar_key).join("\n") + (photos.length ? "\n" : "");
+
+  const info = [
+    "DN D&C Project Tracker — backup",
+    "",
+    `Created:            ${stamp}`,
+    `Tables:             ${tables.length}`,
+    ...tables.map((t) => `  ${t}: ${counts[t]} row(s)`),
+    `R2 objects listed:  ${photos.length}`,
+    "",
+    "WHAT THIS CONTAINS",
+    "  d1-backup.sql    Complete database: schema, data and indexes.",
+    "  d1-schema.sql    Schema only, for comparison.",
+    "  r2-manifest.json Inventory of every R2 object, with its owner and MIME type.",
+    "  r2-keys.txt      The same object keys, one per line.",
+    "  CHECKSUMS.sha256 SHA-256 of each file above.",
+    "",
+    "WHAT THIS DOES NOT CONTAIN",
+    "  R2 object bytes (the profile photograph files themselves) are NOT included.",
+    "  This download is the database plus an inventory of the bucket.",
+    "  To capture the photograph files as well, use the wrangler procedure in",
+    "  docs/BACKUP_AND_RESTORE.md, which reads each key listed in r2-keys.txt.",
+    "",
+    "SENSITIVE — HANDLE ACCORDINGLY",
+    "  Contains staff names, email addresses, password hashes and session records.",
+    "  Store it somewhere secure. Do not commit it to source control, attach it to",
+    "  a ticket, or share it more widely than necessary.",
+    "",
+    "RESTORING",
+    "  This download does not restore anything and cannot modify production.",
+    "  Restore is a separate, deliberate operation. Follow docs/BACKUP_AND_RESTORE.md.",
+    "  In short: restore into an EMPTY database, D1 first, then R2 using r2-keys.txt.",
+    "    npx wrangler d1 execute <database> --remote --yes --file=d1-backup.sql",
+    "  Do not run the drizzle/ migrations first: d1-backup.sql already creates the",
+    "  schema, and those migrations are not repeatable.",
+    "",
+    "CONSISTENCY",
+    "  Tables are read one after another, not in a single transaction, so a write",
+    "  landing mid-backup could be reflected in some tables and not others. For a",
+    "  strict point-in-time copy, use Cloudflare D1 Time Travel.",
+    "",
+  ].join("\n");
+
+  const files = {
+    "BACKUP-INFO.txt": info,
+    "d1-backup.sql": dumpSql,
+    "d1-schema.sql": schemaSql,
+    "r2-manifest.json": manifest,
+    "r2-keys.txt": keys,
+  };
+  const checksums = [];
+  for (const [name, contents] of Object.entries(files)) {
+    checksums.push(`${await sha256Hex(contents)}  ${name}`);
+  }
+  files["CHECKSUMS.sha256"] = checksums.join("\n") + "\n";
+  return { zip: zipMembers(files), counts, photoCount: photos.length, tables: tables.length };
+}
+
+async function exportProjects(request, env, format, authenticated = null, knownRole = null, knownScope = undefined) {
   if (!Object.hasOwn(EXPORT_FORMATS, format)) return error("Unsupported export format.", 400);
   if (!env.DB) return error("Database unavailable", 503);
   await ensureSeed(env.DB);
   await ensureDirectorySeed(env.DB);
   const user = authenticated || await authenticatedUser(env.DB, request, env);
   if (!user?.id || !user?.email) return error("Sign in is required", 401);
-  const role = await roleFor(env.DB, env, user);
+  const role = knownRole || await roleFor(env.DB, env, user);
   if (!role) return error("This account is not authorized", 403);
   if (user.auth_source === "local" && user.must_change_password) {
     return error("Replace the temporary password before exporting data", 428);
   }
+  // Exports must contain only the caller's permitted units. Resolved here too,
+  // because /export.* is reachable without going through handleApi.
+  const scope = knownScope !== undefined ? knownScope : await scopeFor(env.DB, user, role);
   let body;
   try {
-    const data = projectExportData(await projectRows(env.DB));
+    const data = projectExportData(await projectRows(env.DB, scope));
     body = format === "xlsx" ? xlsxExport(data) : delimitedExport(data, format === "tsv" ? "\t" : ",");
   } catch (failure) {
     console.error("Project export failed", format);

@@ -65,7 +65,9 @@ function columnName(index) {
 
 // Small uncompressed ZIP writer, using only Workers-compatible web APIs. Each
 // member has CRC32 and UTF-8 names; sizes/offsets are validated below by tests.
-function zipMembers(members) {
+// Members may be strings or Uint8Array; byte arrays are stored verbatim so that
+// binary members are not corrupted by text encoding.
+export function zipMembers(members) {
   const encoder = new TextEncoder(), local = [], central = [];
   let offset = 0, centralSize = 0;
   const crcTable = Array.from({ length: 256 }, (_, n) => {
@@ -73,9 +75,13 @@ function zipMembers(members) {
     return n >>> 0;
   });
   for (const [path, contents] of Object.entries(members)) {
-    const name = encoder.encode(path), bytes = encoder.encode(contents);
+    const name = encoder.encode(path);
+    const bytes = contents instanceof Uint8Array ? contents : encoder.encode(contents);
+    // Indexed loop rather than for..of: this runs over every byte of every
+    // member and the iterator form costs several times more CPU, which matters
+    // against the Workers per-request CPU limit.
     let crc = 0xffffffff;
-    for (const byte of bytes) crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 255];
+    for (let i = 0; i < bytes.length; i += 1) crc = (crc >>> 8) ^ crcTable[(crc ^ bytes[i]) & 255];
     crc = (crc ^ 0xffffffff) >>> 0;
     const header = new Uint8Array(30 + name.length), h = new DataView(header.buffer);
     h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true);
