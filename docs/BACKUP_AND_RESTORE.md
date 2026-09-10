@@ -1,11 +1,11 @@
-# Backup and restoration — DN D&C Project Tracker
+# Backup and restoration
 
-Covers the Milestone 2 requirement for a downloadable database backup, a downloadable file
-backup, restoration instructions, and verification notes from a restoration that was actually
-performed and checked.
+How to create a downloadable database backup and file backup, restore them, and verify that the
+restore worked.
 
-The procedure below was executed end to end on **2026-09-09** against the live pilot. Results are
-in [Verification notes](#verification-notes-tested-2026-09-09). Production was not modified.
+The procedure below has been executed end to end against the live system and the results recorded
+in [Verification notes](#verification-notes). Other topics have their own guide — see
+[../README.md](../README.md).
 
 ---
 
@@ -46,7 +46,7 @@ freshly restored database, not from the backup manifest, which proves the depend
 
 ## Taking a backup
 
-Requires `wrangler login` as a user with access to the client's Cloudflare account. Run from the
+Requires `wrangler login` as a user with access to the Cloudflare account. Run from the
 project root so `wrangler.toml` supplies the `DB` binding.
 
 ```sh
@@ -78,6 +78,17 @@ done < "$BK/r2-keys.txt"
 # 5. Checksums
 ( cd "$BK" && find . -type f ! -name CHECKSUMS.sha256 | sort | xargs sha256sum > CHECKSUMS.sha256 )
 ```
+
+### When to take one
+
+| Action | Backup first? |
+|---|---|
+| Ordinary code deploy | **No** — a deploy replaces code only and cannot alter data |
+| Migration or schema change | **Yes** |
+| Bulk update, delete, or data-reconciliation import | **Yes** |
+| Re-running or bumping seed logic | **Yes** |
+| Any `wrangler d1 execute` that writes, when you are unsure of its effect | **Yes** |
+| Handover, or any formal checkpoint | **Yes** |
 
 ### Where backups live, and why not in Git
 
@@ -193,15 +204,16 @@ This covers accidental deletion or a bad migration far faster than a file restor
 and it does not cover R2. Treat it as the first thing to try, and the downloadable backups as the
 durable, portable copy.
 
-> `time-travel restore` **overwrites the live database.** It was deliberately not exercised during
-> this verification, because doing so would have modified production.
+> `time-travel restore` **overwrites the live database.** It has deliberately never been exercised
+> here, because running it would modify production. Treat it as untested in this environment.
 
 ---
 
-## Verification notes (tested 2026-09-09)
+## Verification notes
 
-A complete restore was performed and verified against temporary resources in the client's
-Cloudflare account. **Production was not modified at any point** — confirmed after the test.
+A complete restore was performed and verified on **2026-09-09** using temporary Cloudflare resources.
+**Production was not modified at any point** — confirmed after the test. These notes are kept as
+evidence that the procedure above works, and as a worked example of what to check.
 
 ### Method
 
