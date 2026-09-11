@@ -564,4 +564,30 @@ assert.equal(promoted.project_type, "Capital");
 assert.equal(promoted.capp_number, "CAPP-TEST");
 assert.ok(promoted.development_promoted_at);
 
+// The admin backup has to restore into real D1, and real D1 is stricter than the
+// SQLite this test runs on: it rejects BEGIN TRANSACTION outright, does not honour
+// PRAGMA foreign_keys, and enforces foreign keys throughout an import. None of that
+// fails here, so the generated SQL is asserted directly. Archive members are stored
+// uncompressed, so the dump text is readable straight out of the ZIP.
+const backupResponse = await call("/api/admin/backup");
+assert.equal(backupResponse.status, 200);
+assert.equal(backupResponse.headers.get("content-type"), "application/zip");
+const backupSql = Buffer.from(await backupResponse.arrayBuffer()).toString("utf8");
+assert.ok(backupSql.includes("PRAGMA defer_foreign_keys=TRUE;"), "backup must defer foreign keys");
+assert.ok(!/^BEGIN TRANSACTION;$/m.test(backupSql), "D1 rejects explicit transactions");
+assert.ok(!/^COMMIT;$/m.test(backupSql), "D1 rejects explicit transactions");
+assert.ok(!/PRAGMA foreign_keys/.test(backupSql), "D1 ignores PRAGMA foreign_keys");
+// A parent has to be written before anything referencing it.
+const insertedAt = (table) => backupSql.indexOf(`-- ${table}: `);
+for (const [parent, child] of [
+  ["business_units", "projects"],
+  ["projects", "project_updates"],
+  ["projects", "development_details"],
+  ["user_directory", "login_sessions"],
+  ["user_directory", "login_events"],
+]) {
+  assert.ok(insertedAt(parent) > -1 && insertedAt(parent) < insertedAt(child),
+    `${parent} must be written before ${child}`);
+}
+
 console.log("Smoke test passed: source data, KPIs, development workflow, history, formulas, export, secure roles, directory, and PDF guide.");

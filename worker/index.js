@@ -1408,15 +1408,52 @@ async function sha256Hex(text) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// Order tables so a parent is always written before the tables that reference
+// it. D1 enforces foreign keys throughout an import and `defer_foreign_keys`
+// does not hold for the whole file, so alphabetical order fails for real:
+// `development_details` and `project_updates` both sort before `projects`.
+// Dependencies are read from the CREATE TABLE text rather than
+// `PRAGMA foreign_key_list`, which is not available to a Worker.
+function orderTablesByDependency(tableObjects) {
+  const canonical = new Map(tableObjects.map((o) => [o.name.toLowerCase(), o.name]));
+  const parentsOf = new Map();
+  for (const object of tableObjects) {
+    const parents = new Set();
+    const pattern = /\bREFERENCES\s+(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_][\w$]*))/gi;
+    for (const match of object.sql.matchAll(pattern)) {
+      const parent = canonical.get((match[1] || match[2] || match[3] || match[4]).toLowerCase());
+      if (parent && parent !== object.name) parents.add(parent);
+    }
+    parentsOf.set(object.name, parents);
+  }
+  const ordered = [];
+  const placed = new Set();
+  const remaining = [...tableObjects];
+  while (remaining.length) {
+    // The earliest table whose parents are all written keeps creation order as
+    // the tie-breaker. If nothing is ready the schema has a cycle, so take the
+    // next table anyway rather than dropping it from the backup.
+    const index = remaining.findIndex((o) => [...parentsOf.get(o.name)].every((p) => placed.has(p)));
+    const next = remaining.splice(index === -1 ? 0 : index, 1)[0];
+    placed.add(next.name);
+    ordered.push(next);
+  }
+  return ordered;
+}
+
 async function buildBackupArchive(db, stamp) {
   // Internal Cloudflare tables are excluded: they are not part of the application
   // schema and cannot be recreated by a restore.
   const objects = await db.prepare(`
     SELECT type, name, sql FROM sqlite_master
     WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_cf%' ESCAPE '\\'
-    ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name
+    ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, rowid
   `).all();
-  const schemaObjects = objects.results || [];
+  const allObjects = objects.results || [];
+  const schemaObjects = [
+    ...orderTablesByDependency(allObjects.filter((o) => o.type === "table")),
+    ...allObjects.filter((o) => o.type !== "table"),
+  ];
   const tables = schemaObjects.filter((o) => o.type === "table").map((o) => o.name);
 
   const schemaSql = [
@@ -1434,8 +1471,13 @@ async function buildBackupArchive(db, stamp) {
     `-- Restore into an EMPTY database:`,
     `--   npx wrangler d1 execute <database> --remote --yes --file=<this file>`,
     "",
-    "PRAGMA foreign_keys=OFF;",
-    "BEGIN TRANSACTION;",
+    // D1 rejects `BEGIN TRANSACTION`/`SAVEPOINT` outright, and ignores
+    // `PRAGMA foreign_keys=OFF`. `defer_foreign_keys` is what `wrangler d1
+    // export` itself emits. It does not survive the whole import, which is why
+    // orderTablesByDependency() above is what actually keeps the restore valid;
+    // this line only covers references within a single batch. Do not
+    // reintroduce an explicit transaction — local SQLite accepts one, D1 does not.
+    "PRAGMA defer_foreign_keys=TRUE;",
     "",
   ];
   for (const object of schemaObjects.filter((o) => o.type === "table")) {
@@ -1461,7 +1503,7 @@ async function buildBackupArchive(db, stamp) {
   for (const object of schemaObjects.filter((o) => o.type !== "table")) {
     dump.push(object.sql.trim().replace(/;?$/, ";"));
   }
-  dump.push("", "COMMIT;", "PRAGMA foreign_keys=ON;", "");
+  dump.push("");
   const dumpSql = dump.join("\n");
 
   // R2 inventory. D1 is the only index of the bucket, so the manifest is what
