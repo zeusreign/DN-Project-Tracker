@@ -28,7 +28,8 @@ One click downloads `dnc-tracker-backup-<timestamp>.zip` containing:
 ### What it does and does not cover
 
 - **The database is complete.** `d1-backup.sql` restores through the same procedure documented
-  below — `wrangler d1 execute --file` into an empty database.
+  below — `wrangler d1 execute --file` into an empty database. This was tested end to end against a
+  real D1 database, not a local stand-in; see [Restoring a downloaded backup](#restoring-a-downloaded-backup-verified).
 - **R2 object bytes are not included** — the photograph files themselves. The archive lists them in
   `r2-manifest.json` and `r2-keys.txt`, so you know exactly what to fetch. To capture the files too,
   use the wrangler procedure below, which reads each key from that list.
@@ -235,17 +236,23 @@ Compare each R2 object by reading it back and running `cmp` against the backup c
 
 ## Cloudflare Time Travel — a second line of defence
 
-D1 includes point-in-time recovery for the **last 30 days**, at no cost and with no setup:
+D1 includes point-in-time recovery at no cost and with no setup. **The retention window depends on
+the plan:**
+
+| Plan | Time Travel retention |
+|---|---|
+| **Workers Free** — what this project is on | **7 days** |
+| Workers Paid | 30 days |
 
 ```sh
 npx wrangler d1 time-travel info dnc-tracker-pilot            # current restorable bookmark
 npx wrangler d1 time-travel restore dnc-tracker-pilot --timestamp <ISO-8601>
 ```
 
-This covers accidental deletion or a bad migration far faster than a file restore, but it does
-**not** replace the exports here: it only covers 30 days, it lives in the same Cloudflare account,
-and it does not cover R2. Treat it as the first thing to try, and the downloadable backups as the
-durable, portable copy.
+So on the current plan **anything older than a week is not recoverable this way** — a mistake noticed
+late is past the window. That is the main reason to keep taking downloadable backups: they do not
+expire, they live outside the Cloudflare account, and Time Travel does not cover R2 at all. Treat
+Time Travel as the first thing to try, and the backups as the durable, portable copy.
 
 > `time-travel restore` **overwrites the live database.** It has deliberately never been exercised
 > here, because running it would modify production. Treat it as untested in this environment.
@@ -345,6 +352,45 @@ At backup time `login_events` was 33 and `login_sessions` 12; production showed 
 afterwards. This is sign-in activity during testing, not data loss — every business table matched
 exactly. It is the normal consequence of exporting a live system and should be expected in any
 future backup.
+
+### Restoring a downloaded backup (verified)
+
+Verified on **2026-09-11** by restoring the output of **Admin → Download Backup** into a real,
+separate Cloudflare D1 database — `dnc-backup-verify-temp`
+(`d96cd36e-6f1b-422a-8635-44b456539643`), created empty and deleted afterwards. **Production was
+never touched.** The point of the exercise was that local SQLite is more permissive than D1, so a
+local restore proves nothing about D1.
+
+```sh
+unzip dnc-tracker-backup-<timestamp>.zip -d restore/
+cd restore/ && sha256sum -c CHECKSUMS.sha256      # all five files must report OK
+
+npx wrangler d1 create <temp-name>                # restore into an EMPTY database, never production
+npx wrangler d1 execute <temp-name> --remote --yes --file=d1-backup.sql
+```
+
+Use the database **name**, never the `DB` binding — the binding resolves to production through
+`wrangler.toml`. Then restore R2 from `r2-keys.txt` as described above, and verify:
+
+```sh
+npx wrangler d1 execute <temp-name> --remote --yes --command "PRAGMA foreign_key_check"
+```
+
+Result: 10 tables and 15 indexes recreated, schema identical to the source, and all 315 data rows
+restored — every table matching the counts printed in `BACKUP-INFO.txt`. `PRAGMA foreign_key_check`
+returned no rows, `NULL`s were preserved (25 projects with no `approved_budget`, 31 with no
+`construction_capp`), and floating-point totals matched exactly to the decimal
+(`construction_capp` 69,888,884.8 · `anticipated_final_cost` 1,056,401,425.21).
+
+> **`audit_log` is expected to be one row short.** The `backup_download` entry is written *after* the
+> snapshot is taken, so the download can never contain the record of itself. Every other table
+> matches exactly. `BACKUP-INFO.txt` states the true snapshot counts — compare against those.
+
+Two D1 constraints are handled by the generated SQL and must not be reintroduced if it is ever
+edited by hand: D1 **rejects `BEGIN TRANSACTION`/`COMMIT`** outright, and it **enforces foreign keys
+throughout an import**, so parent tables have to be written before the tables that reference them.
+The dump uses `PRAGMA defer_foreign_keys=TRUE` and dependency ordering for exactly this reason, and
+`scripts/smoke-test.mjs` asserts both.
 
 ### Not verified
 
