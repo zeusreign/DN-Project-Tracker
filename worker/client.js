@@ -1,5 +1,5 @@
 export const CLIENT = `
-var state={projects:[],summary:{},updates:[],me:null,csrf:null,preset:"progress",sortKey:"source_sort_order",sortDir:"asc",devSortKey:"source_sort_order",devSortDir:"asc",activityId:null,unitScope:"All",adminUsers:[],adminAudit:[],adminPage:1,kpiDragKey:null,kpiDragged:false};
+var state={projects:[],summary:{},updates:[],me:null,csrf:null,preset:"progress",sortKey:"source_sort_order",sortDir:"asc",devSortKey:"source_sort_order",devSortDir:"asc",activityId:null,unitScope:"All",adminUsers:[],adminAudit:[],adminPage:1,adminLoginEvents:[],loginPage:1,kpiDragKey:null,kpiDragged:false};
 var titles={portfolio:["Portfolio","Leadership summary by business unit"],projects:["Projects","Project activity, cost and schedule"],development:["Development Pipeline","Design & Development requests, estimates and promotion workflow"],cost:["Cost Control","Budgets, forecasts and variances"],risk:["Risk Register","All projects and all recorded risk levels"],admin:["Admin","User directory, roles and audit history"],help:["Help & User Guide","Quick reference and complete PDF instructions"]};
 var money=new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 var colors=["#087db5","#13a6c8","#008f78","#7ac143","#f2b134","#7357a6"];
@@ -21,8 +21,17 @@ function canWrite(){return state.me&&(state.me.role==="admin"||state.me.role==="
 function byId(id){return document.getElementById(id)}
 function setValue(id,value){byId(id).value=value==null?"":value}
 function setMoneyValue(id,value){byId(id).value=value==null?"":moneyText(value)}
-function toast(msg){var el=byId("toast");el.textContent=msg;el.classList.add("show");setTimeout(function(){el.classList.remove("show")},2800)}
-async function api(path,options){var defaults={"content-type":"application/json"};if(state.csrf)defaults["x-csrf-token"]=state.csrf;var config=Object.assign({},options||{});config.headers=Object.assign(defaults,(options&&options.headers)||{});config.credentials='same-origin';config.cache='no-store';config.redirect='error';var r=await fetch(path,config);var data=await r.json().catch(function(){return{}});if(!r.ok){var fallback=r.status===401?(path==="/api/login"?"The User ID or password is incorrect.":"Your session has expired. Please sign in again."):r.status===423?"This account is temporarily locked. Contact an Administrator or try again later.":r.status===403?"Your account does not have permission to complete this action.":"The tracker could not complete the request. Please try again.";throw new Error(data.error||fallback)}return data}
+function toast(msg){if(!msg)return;var el=byId("toast");el.textContent=msg;el.classList.add("show");setTimeout(function(){el.classList.remove("show")},2800)}
+async function api(path,options){var defaults={"content-type":"application/json"};if(state.csrf)defaults["x-csrf-token"]=state.csrf;var config=Object.assign({},options||{});config.headers=Object.assign(defaults,(options&&options.headers)||{});config.credentials='same-origin';config.cache='no-store';config.redirect='error';var r=await fetch(path,config);var data=await r.json().catch(function(){return{}});if(!r.ok){var fallback=r.status===401?(path==="/api/login"?"The User ID or password is incorrect.":"Your session has expired. Please sign in again."):r.status===423?"This account is temporarily locked. Contact an Administrator or try again later.":r.status===403?"Your account does not have permission to complete this action.":"The tracker could not complete the request. Please try again.";if(r.status===401&&path!=="/api/login"){
+// A 401 on anything except the sign-in request itself means the session is gone —
+// timed out, expired, or ended elsewhere. The sign-in screen is the only correct
+// destination, and reaching it must not depend on the warning modal having fired:
+// a throttled timer in a background tab means it often has not. Callers catch this
+// and report it with toast(error.message), so the message is deliberately empty and
+// toast() ignores empty messages; showSignIn() has already said it on screen.
+showSignIn("Your session has expired. Sign in again to continue.");
+var expired=new Error("");expired.sessionExpired=true;throw expired}
+throw new Error(data.error||fallback)}return data}
 function passwordScore(value){var p=String(value||""),score=0;if(p.length>=10)score++;if(p.length>=14)score++;if(/[A-Z]/.test(p)&&/[a-z]/.test(p))score++;if(/[0-9]/.test(p))score++;if(/[^A-Za-z0-9]/.test(p))score++;return score}
 function renderStrength(inputId,barId,textId){var value=byId(inputId).value,score=passwordScore(value),bar=byId(barId),label=byId(textId),width=Math.min(100,score*20),colors=["#c9384b","#c9384b","#df6a2e","#f2b134","#008f78","#008f78"];bar.style.width=width+"%";bar.style.background=colors[score];label.textContent=!value?"Enter at least 10 characters":score<=2?"Weak":score===3?"Fair":score===4?"Strong":"Very strong";label.style.color=score>=4?"#008f78":score===3?"#955700":"#c9384b"}
 function setView(view,keepPosition){if(!titles[view])view="projects";if(view==="admin"&&state.me&&state.me.role!=="admin")view="projects";document.querySelectorAll("[data-pane]").forEach(function(p){p.hidden=p.dataset.pane!==view});document.querySelectorAll("[data-view]").forEach(function(b){b.classList.toggle("active",b.dataset.view===view)});byId("pageTitle").textContent=titles[view][0];byId("pageSub").textContent=titles[view][1];history.replaceState(null,"","#"+view);byId("projectsControls").hidden=!["projects","cost","risk"].includes(view);byId("developmentControls").hidden=view!=="development";byId("columnsBtn").parentElement.hidden=view!=="projects";byId("search").placeholder=view==="risk"?"Search risk register":view==="cost"?"Search cost register":"Search projects";if(view==="admin")loadAdmin();if(!keepPosition)window.scrollTo({top:0,behavior:"smooth"})}
@@ -61,8 +70,89 @@ function renderCost(){var rows=filteredCapital();var sums={precon_capp:0,constru
 function renderRisk(){var rows=visibleProjects().filter(matchesProjectFilters),counts={High:0,Medium:0,Low:0,"Not Rated":0};rows.forEach(function(p){var levels=[riskValue(p.budget_risk),riskValue(p.schedule_risk)],level=levels.includes("High")?"High":levels.includes("Medium")?"Medium":levels.includes("Low")?"Low":"Not Rated";counts[level]++});byId("riskHigh").textContent=counts.High;byId("riskMedium").textContent=counts.Medium;byId("riskLow").textContent=counts.Low;byId("riskUnrated").textContent=counts["Not Rated"];var high=rows.filter(function(p){return riskValue(p.budget_risk)==="High"||riskValue(p.schedule_risk)==="High"});byId("highRiskCards").innerHTML=high.map(function(p){return'<div class="card high-card"><strong>'+esc(p.name)+'</strong><p>'+esc(p.business_unit)+'</p><div class="risk-flags">'+(riskValue(p.budget_risk)==="High"?'<span class="risk-flag budget">B High</span>':"")+(riskValue(p.schedule_risk)==="High"?'<span class="risk-flag schedule">S High</span>':"")+'</div></div>'}).join("");var cols=["name","budget_risk","schedule_risk","approved_budget","anticipated_final_cost","forecast_variance","variance_pct","original_turnover_date","current_turnover_date","duration_change_days","actions"];byId("riskHead").innerHTML=headHtml(cols);byId("riskBody").innerHTML=bodyHtml(rows,cols);enhanceTable("riskBody",byId("search").value)}
 function renderAll(){renderUnitBar();renderProjects();renderPortfolio();renderDevelopment();renderCost();renderRisk();fitFilterControls()}
 
-async function load(reset){if(reset){state.preset="progress";state.sortKey="source_sort_order";state.sortDir="asc";state.devSortKey="source_sort_order";state.devSortDir="asc";state.unitScope="All";["search","developmentSearch"].forEach(function(id){byId(id).value=""});["statusFilter","riskFilter","developmentStatus"].forEach(function(id){byId(id).value=""});document.querySelectorAll(".preset").forEach(function(b){b.classList.toggle("active",b.dataset.preset==="progress")})}var r=await fetch("/api/bootstrap",{cache:"no-store",credentials:"same-origin",redirect:"error"});if(r.status===401){showSignIn(state.me?"Your session has expired. Sign in again to continue.":"");return false}var data=await r.json();if(!r.ok)throw new Error(data.error||"Tracker unavailable");state.projects=data.projects;state.summary=data.summary;state.updates=data.updates;state.me=data.me;state.csrf=data.me.csrf_token||null;renderProfileHeader();byId("adminNav").hidden=state.me.role!=="admin";byId("addBtn").hidden=!canWrite();byId("saveActivityBtn").hidden=!canWrite();byId("logoutBtn").hidden=state.me.auth_source!=="local";byId("changePasswordBtn").hidden=state.me.auth_source!=="local";renderAll();byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;setView(location.hash.replace("#","")||"projects",!reset);if(state.me.auth_source==="local"&&state.me.must_change_password){byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;setTimeout(function(){if(!byId("passwordDialog").open)byId("passwordDialog").showModal()},80)}return true}
+async function load(reset){if(reset){state.preset="progress";state.sortKey="source_sort_order";state.sortDir="asc";state.devSortKey="source_sort_order";state.devSortDir="asc";state.unitScope="All";["search","developmentSearch"].forEach(function(id){byId(id).value=""});["statusFilter","riskFilter","developmentStatus"].forEach(function(id){byId(id).value=""});document.querySelectorAll(".preset").forEach(function(b){b.classList.toggle("active",b.dataset.preset==="progress")})}var r=await fetch("/api/bootstrap",{cache:"no-store",credentials:"same-origin",redirect:"error"});if(r.status===401){showSignIn(state.me?"Your session has expired. Sign in again to continue.":"");return false}var data=await r.json();if(!r.ok)throw new Error(data.error||"Tracker unavailable");state.projects=data.projects;state.summary=data.summary;state.updates=data.updates;state.me=data.me;state.csrf=data.me.csrf_token||null;renderProfileHeader();byId("adminNav").hidden=state.me.role!=="admin";byId("addBtn").hidden=!canWrite();byId("saveActivityBtn").hidden=!canWrite();byId("logoutBtn").hidden=state.me.auth_source!=="local";byId("changePasswordBtn").hidden=state.me.auth_source!=="local";renderAll();byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;setView(location.hash.replace("#","")||"projects",!reset);startIdleWatch();if(state.me.auth_source==="local"&&state.me.must_change_password){byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;setTimeout(function(){if(!byId("passwordDialog").open)byId("passwordDialog").showModal()},80)}return true}
 async function signIn(event){event.preventDefault();var button=byId("loginBtn"),message=byId("loginError"),username=byId("loginUsername").value.trim(),password=byId("loginPassword").value;message.textContent="";button.disabled=true;button.textContent="Signing in…";try{await api("/api/login",{method:"POST",body:JSON.stringify({username:username,password:password})});byId("loginForm").reset();await load(true)}catch(error){message.textContent=error.message+" Confirm that the User ID above is your Delaware North email."}finally{button.disabled=false;button.textContent="Sign in"}}
+// --- Inactivity timeout -------------------------------------------------------
+// The duration lives in the worker (IDLE_SECONDS) and arrives on state.me, so
+// nothing here hardcodes a period. These timers only decide when to WARN — the
+// worker is what actually ends a session, which is why a timer firing in a tab
+// that has been sitting idle can never sign anyone out on its own.
+var idleTimers={warn:null,tick:null},idleDeadline=0,idleLastPing=0;
+function idleSeconds(){return Number(state.me&&state.me.idle_seconds)||0}
+function idleWarningSeconds(){return Number(state.me&&state.me.idle_warning_seconds)||60}
+function clearIdleTimers(){if(idleTimers.warn){clearTimeout(idleTimers.warn);idleTimers.warn=null}if(idleTimers.tick){clearInterval(idleTimers.tick);idleTimers.tick=null}}
+function stopIdleWatch(){clearIdleTimers();if(byId("idleDialog").open)byId("idleDialog").close()}
+function startIdleWatch(seconds){
+  clearIdleTimers();
+  if(!state.me||state.me.auth_source!=="local")return;
+  var total=Number(seconds)>0?Number(seconds):idleSeconds();
+  if(!total)return;
+  if(byId("idleDialog").open)byId("idleDialog").close();
+  idleDeadline=Date.now()+total*1000;
+  idleTimers.warn=setTimeout(openIdleWarning,Math.max(0,total-idleWarningSeconds())*1000);
+}
+function openIdleWarning(){
+  if(!state.me)return;
+  if(!byId("idleDialog").open)byId("idleDialog").showModal();
+  renderIdleCountdown();
+  idleTimers.tick=setInterval(renderIdleCountdown,1000);
+}
+function renderIdleCountdown(){
+  var left=Math.max(0,Math.round((idleDeadline-Date.now())/1000));
+  byId("idleMessage").textContent=left>0
+    ?"You have been inactive. Your session will end in "+Math.floor(left/60)+":"+String(left%60).padStart(2,"0")+"."
+    :"Checking whether your session is still active…";
+  if(left<=0){clearIdleTimers();confirmIdleExpiry()}
+}
+// The countdown reaching zero is not proof the session ended — another tab may have
+// kept it alive. Ask the worker, which is the only authority, and never end the
+// session from here.
+async function confirmIdleExpiry(){
+  try{
+    var data=await api("/api/session");
+    startIdleWatch(Number(data.idle_remaining)>0?data.idle_remaining:idleSeconds());
+  }catch(error){
+    stopIdleWatch();
+    showSignIn("You were signed out after a period of inactivity. Sign in again to continue.");
+  }
+}
+async function staySignedIn(){
+  try{
+    var data=await api("/api/session",{method:"POST",body:"{}"});
+    idleLastPing=Date.now();
+    startIdleWatch(data.idle_remaining);
+  }catch(error){
+    stopIdleWatch();
+    showSignIn("You were signed out after a period of inactivity. Sign in again to continue.");
+  }
+}
+// Real input resets the local countdown. The worker only learns about activity when
+// a request goes out, so a throttled ping keeps the two in step — driven by actual
+// input, so an empty desk never counts as use.
+function noteActivity(){
+  if(!state.me||state.me.auth_source!=="local")return;
+  if(byId("idleDialog").open)return;
+  var total=idleSeconds();if(!total)return;
+  startIdleWatch(total);
+  if(Date.now()-idleLastPing>Math.max(20000,total*250)){
+    idleLastPing=Date.now();
+    api("/api/session",{method:"POST",body:"{}"}).catch(function(){});
+  }
+}
+
+// Browsers throttle timers in a hidden tab — Firefox aggressively — so a warning
+// scheduled before the tab went to the background can fire late or not at all.
+// On return, ask the worker what is actually left instead of trusting the local
+// clock. The probe is a GET, so asking does not itself extend the session, and an
+// expired one is routed to the sign-in screen by api().
+async function resyncIdleWatch(){
+  if(!state.me||state.me.auth_source!=="local")return;
+  try{
+    var data=await api("/api/session");
+    startIdleWatch(Number(data.idle_remaining)>0?data.idle_remaining:idleSeconds());
+  }catch(error){}
+}
+
 // Signing off always ends at the sign-in screen. Leaving the workspace on screen
 // because the request failed strands the user in a session they cannot use and
 // cannot leave; showSignIn() clears every piece of client-side state regardless.
@@ -82,9 +172,49 @@ async function saveDevelopment(event){event.preventDefault();var id=byId("develo
 function openPromote(id){var p=state.projects.find(function(x){return x.id===Number(id)});if(!p)return;setValue("promoteId",p.id);byId("promoteMeta").textContent=p.name+" • history will be preserved";var units=Array.from(new Set(state.projects.map(function(x){return x.business_unit})));byId("pUnit").innerHTML=units.map(function(unit){return'<option '+(unit===p.business_unit?"selected":"")+'>'+esc(unit)+"</option>"}).join("");setValue("pCapp",p.initiative_number);setValue("pManager",p.development_lead);setValue("pSection",p.name);byId("promoteDialog").showModal()}
 async function promoteProject(event){event.preventDefault();var id=byId("promoteId").value;await api("/api/projects/"+id+"/promote",{method:"POST",body:JSON.stringify({business_unit:byId("pUnit").value,capp_number:byId("pCapp").value,project_manager:byId("pManager").value,section_name:byId("pSection").value})});toast("Development record promoted to Projects.");byId("promoteDialog").close();await load(false);setView("projects")}
 
-async function loadAdmin(){if(!state.me||state.me.role!=="admin")return;try{var data=await api("/api/admin");state.adminUsers=data.roles;state.adminAudit=data.audit;renderAdmin();byId("adminCounts").textContent=data.counts.projects+" projects • "+data.roles.length+" users"}catch(e){toast(e.message)}}
+async function loadAdmin(){if(!state.me||state.me.role!=="admin")return;try{var data=await api("/api/admin");state.adminUsers=data.roles;state.adminAudit=data.audit;state.adminLoginEvents=data.login_events||[];renderAdmin();byId("adminCounts").textContent=data.counts.projects+" projects • "+data.roles.length+" users"}catch(e){toast(e.message)}}
 function filteredAdmin(){var q=byId("adminSearch").value.trim().toLowerCase(),role=byId("adminRoleFilter").value,status=byId("adminStatusFilter").value,sort=byId("adminSort").value;var rows=state.adminUsers.filter(function(u){var text=[u.first_name,u.last_name,u.username,u.user_email,u.title,u.company].join(" ").toLowerCase();return(!q||text.includes(q))&&(!role||u.role===role)&&(!status||u.account_status===status)});var rank={admin:1,editor:2,viewer:3};rows.sort(function(a,b){if(sort==="role")return rank[a.role]-rank[b.role]||a.last_name.localeCompare(b.last_name);if(sort==="status")return String(a.account_status).localeCompare(String(b.account_status))||a.last_name.localeCompare(b.last_name);if(sort==="updated")return String(b.updated_at).localeCompare(String(a.updated_at));return(a.last_name+" "+a.first_name).localeCompare(b.last_name+" "+b.first_name)});return rows}
-function renderAdmin(){var rows=filteredAdmin(),size=15,pages=Math.max(1,Math.ceil(rows.length/size));state.adminPage=Math.min(state.adminPage,pages);var pageRows=rows.slice((state.adminPage-1)*size,state.adminPage*size);byId("directoryCount").textContent=rows.length+" of "+state.adminUsers.length+" users";byId("roleList").innerHTML=pageRows.map(function(u){var password=u.password_configured?'<span class="password-status ready">Configured</span>':'<span class="password-status pending">Not set</span>';return'<tr data-record-row><td><div class="directory-person">'+avatarHtml(u)+'<div><strong>'+esc(u.first_name+" "+u.last_name)+'</strong><small>'+esc(u.title||u.company||"")+'</small></div></div></td><td>'+esc(u.username||"—")+'<small>'+esc(u.user_email||"")+'</small></td><td><span class="role-badge role-'+u.role+'">'+esc(u.role)+'</span></td><td><span class="access-badge">'+esc(u.account_status)+'</span></td><td>'+password+'</td><td>'+esc(u.business_unit_scope||"All")+'</td><td>'+esc(dateText(u.updated_at))+'</td><td><button class="btn small" data-user-edit="'+u.id+'">Edit</button></td></tr>'}).join("")||'<tr><td colspan="8" class="loading">No users match.</td></tr>';enhanceTable("roleList",byId("adminSearch").value);var buttons=[];for(var i=1;i<=pages;i++)buttons.push('<button class="'+(i===state.adminPage?"active":"")+'" data-admin-page="'+i+'">'+i+"</button>");byId("adminPagination").innerHTML='<button data-admin-page="'+Math.max(1,state.adminPage-1)+'">Previous</button>'+buttons.join("")+'<button data-admin-page="'+Math.min(pages,state.adminPage+1)+'">Next</button>';byId("auditList").innerHTML=state.adminAudit.map(auditRowHtml).join("")||'<div class="count-note">No audit activity yet.</div>'}
+// Sign-in history. The event types are the ones recordLoginEvent() writes in the
+// worker: success, failed, locked_attempt and logout. Anything unrecognised is
+// shown rather than dropped, so a new event type cannot silently disappear.
+var loginOutcomes={success:{label:"Successful sign-in",kind:"ok"},failed:{label:"Failed attempt",kind:"bad"},locked_attempt:{label:"Blocked while locked",kind:"bad"},logout:{label:"Signed out",kind:"muted"}};
+function loginOutcome(type){return loginOutcomes[type]||{label:String(type||"Unknown").replaceAll("_"," "),kind:"muted"}}
+// A raw user agent is unreadable in a table cell, so the cell carries a summary and
+// the untouched original sits in the tooltip.
+function browserLabel(agent){
+  if(!agent)return"—";
+  // Plain substring tests: this script is emitted from a template literal, where a
+  // regex backslash would have to be doubled to survive.
+  var has=function(token){return agent.indexOf(token)!==-1};
+  var browser=has("Edg/")?"Edge":has("OPR/")?"Opera":has("Chrome/")?"Chrome":has("Firefox/")?"Firefox":has("Safari/")?"Safari":has("curl/")?"curl":"Other";
+  var platform=has("Windows")?"Windows":(has("Macintosh")||has("Mac OS"))?"macOS":(has("iPhone")||has("iPad"))?"iOS":has("Android")?"Android":has("Linux")?"Linux":"";
+  return platform?browser+" on "+platform:browser;
+}
+function filteredLoginEvents(){
+  var q=byId("loginSearch").value.trim().toLowerCase(),outcome=byId("loginOutcomeFilter").value;
+  return state.adminLoginEvents.filter(function(e){
+    var text=[e.username_attempted,e.user_email,e.first_name,e.last_name,e.ip_address,e.user_agent,loginOutcome(e.event_type).label].join(" ").toLowerCase();
+    return(!q||text.includes(q))&&(!outcome||e.event_type===outcome);
+  });
+}
+function renderLoginEvents(){
+  var rows=filteredLoginEvents(),size=15,pages=Math.max(1,Math.ceil(rows.length/size));
+  state.loginPage=Math.min(state.loginPage,pages);
+  var pageRows=rows.slice((state.loginPage-1)*size,state.loginPage*size);
+  byId("loginEventCount").textContent=rows.length+" of "+state.adminLoginEvents.length+" events";
+  byId("loginEventList").innerHTML=pageRows.map(function(e){
+    var outcome=loginOutcome(e.event_type);
+    // A null match is the case an administrator most needs to see: a User ID that
+    // belongs to no account at all.
+    var account=e.user_email
+      ? '<strong>'+esc(((e.first_name||"")+" "+(e.last_name||"")).trim()||e.user_email)+'</strong><small>'+esc(e.user_email)+'</small>'
+      : '<span class="login-unmatched">No matching account</span>';
+    return'<tr data-record-row><td>'+esc(auditDateTime(e.created_at))+'</td><td>'+esc(e.username_attempted||"—")+'</td><td>'+account+'</td><td><span class="login-outcome login-'+outcome.kind+'">'+esc(outcome.label)+'</span></td><td>'+esc(e.ip_address||"—")+'</td><td><span data-tooltip="'+esc(e.user_agent||"Not recorded")+'">'+esc(browserLabel(e.user_agent))+'</span></td></tr>';
+  }).join("")||'<tr><td colspan="6" class="loading">No login activity recorded yet.</td></tr>';
+  var buttons=[];for(var i=1;i<=pages;i++)buttons.push('<button class="'+(i===state.loginPage?"active":"")+'" data-login-page="'+i+'">'+i+"</button>");
+  byId("loginPagination").innerHTML='<button data-login-page="'+Math.max(1,state.loginPage-1)+'">Previous</button>'+buttons.join("")+'<button data-login-page="'+Math.min(pages,state.loginPage+1)+'">Next</button>';
+}
+function renderAdmin(){var rows=filteredAdmin(),size=15,pages=Math.max(1,Math.ceil(rows.length/size));state.adminPage=Math.min(state.adminPage,pages);var pageRows=rows.slice((state.adminPage-1)*size,state.adminPage*size);byId("directoryCount").textContent=rows.length+" of "+state.adminUsers.length+" users";byId("roleList").innerHTML=pageRows.map(function(u){var password=u.password_configured?'<span class="password-status ready">Configured</span>':'<span class="password-status pending">Not set</span>';return'<tr data-record-row><td><div class="directory-person">'+avatarHtml(u)+'<div><strong>'+esc(u.first_name+" "+u.last_name)+'</strong><small>'+esc(u.title||u.company||"")+'</small></div></div></td><td>'+esc(u.username||"—")+'<small>'+esc(u.user_email||"")+'</small></td><td><span class="role-badge role-'+u.role+'">'+esc(u.role)+'</span></td><td><span class="access-badge">'+esc(u.account_status)+'</span></td><td>'+password+'</td><td>'+esc(u.business_unit_scope||"All")+'</td><td>'+esc(dateText(u.updated_at))+'</td><td><button class="btn small" data-user-edit="'+u.id+'">Edit</button></td></tr>'}).join("")||'<tr><td colspan="8" class="loading">No users match.</td></tr>';enhanceTable("roleList",byId("adminSearch").value);var buttons=[];for(var i=1;i<=pages;i++)buttons.push('<button class="'+(i===state.adminPage?"active":"")+'" data-admin-page="'+i+'">'+i+"</button>");byId("adminPagination").innerHTML='<button data-admin-page="'+Math.max(1,state.adminPage-1)+'">Previous</button>'+buttons.join("")+'<button data-admin-page="'+Math.min(pages,state.adminPage+1)+'">Next</button>';byId("auditList").innerHTML=state.adminAudit.map(auditRowHtml).join("")||'<div class="count-note">No audit activity yet.</div>';renderLoginEvents()}
 function openUser(id){var u=id?state.adminUsers.find(function(x){return x.id===Number(id)}):null;resetPhotoDraft("admin",u);byId("userDialogTitle").textContent=u?"Edit user":"Add user";setValue("userId",u&&u.id);setValue("uFirst",u&&u.first_name);setValue("uLast",u&&u.last_name);setValue("uUsername",u&&u.username);setValue("uEmail",u&&u.user_email);setValue("uTitle",u&&u.title);setValue("uDepartment",u&&u.department||"Design & Construction");setValue("uCompany",u&&u.company||"Delaware North");setValue("uRole",u&&u.role||"viewer");var units=["All"].concat(Array.from(new Set(state.projects.map(function(p){return p.business_unit}))));byId("uBusinessUnit").innerHTML=units.map(function(unit){return'<option '+(unit===(u&&u.business_unit_scope||"All")?"selected":"")+'>'+esc(unit)+"</option>"}).join("");setValue("uLocation",u&&u.location);setValue("uPhone",u&&u.mobile_phone);setValue("uAccountStatus",u&&u.account_status||"pending");setValue("uSiteAccess",u&&u.site_access_status||"pending");setValue("uPassword","");setValue("uPasswordConfirm","");setValue("uNotes",u&&u.notes);byId("uPasswordStatus").textContent=u&&u.password_configured?"A password is configured. Enter a new password only to reset it; the existing password cannot be retrieved.":"No password is configured. Assign a temporary password before authorizing access.";renderStrength("uPassword","uStrengthBar","uStrengthText");byId("userDialog").showModal()}
 async function saveUser(event){event.preventDefault();if(photoDrafts.admin&&photoDrafts.admin.busy)return toast("Please wait for the photo to finish preparing.");var password=byId("uPassword").value,confirmation=byId("uPasswordConfirm").value;if(password!==confirmation)return toast("The temporary passwords do not match.");var savedUser=await api("/api/admin/users",{method:"POST",body:JSON.stringify({id:num(byId("userId").value),first_name:byId("uFirst").value,last_name:byId("uLast").value,username:byId("uUsername").value,user_email:byId("uEmail").value,title:byId("uTitle").value,department:byId("uDepartment").value,company:byId("uCompany").value,role:byId("uRole").value,business_unit_scope:byId("uBusinessUnit").value,location:byId("uLocation").value,mobile_phone:byId("uPhone").value,account_status:byId("uAccountStatus").value,site_access_status:byId("uSiteAccess").value,temporary_password:password,confirm_password:confirmation,notes:byId("uNotes").value})});setValue("userId",savedUser.id);setValue("uPassword","");setValue("uPasswordConfirm","");try{await savePhotoDraft("admin",savedUser.id)}catch(error){await loadAdmin();throw new Error("User details saved, but photo was not saved: "+error.message)}if(state.me.profile&&state.me.profile.id===savedUser.id){await load(false)}toast(password?"User saved and temporary password replaced.":"User directory saved.");byId("userDialog").close();await loadAdmin()}
 async function addProject(event){event.preventDefault();await api("/api/projects",{method:"POST",body:JSON.stringify({name:byId("aName").value,business_unit:byId("aUnit").value,section_name:byId("aSection").value,project_type:byId("aType").value,capp_number:byId("aCapp").value,initiative_number:byId("aCapp").value,project_manager:byId("aType").value==="Capital"?byId("aLead").value:null,development_lead:byId("aType").value==="Development"?byId("aLead").value:null,current_update:byId("aActivity").value})});toast("Project created.");byId("addDialog").close();byId("addForm").reset();await load(false)}
@@ -93,7 +223,7 @@ document.addEventListener("dragstart",function(e){var card=e.target.closest("[da
 document.addEventListener("dragover",function(e){var target=e.target.closest("[data-kpi]"),container=byId("portfolioKpis"),dragging=container&&container.querySelector(".kpi.dragging");if(!target||!dragging||target===dragging)return;e.preventDefault();var rect=target.getBoundingClientRect(),before=e.clientY<rect.top+rect.height*.45||(Math.abs(e.clientY-(rect.top+rect.height/2))<rect.height*.2&&e.clientX<rect.left+rect.width/2);container.insertBefore(dragging,before?target:target.nextSibling)});
 document.addEventListener("drop",function(e){if(!e.target.closest("[data-kpi]"))return;e.preventDefault();saveKpiOrder()});
 document.addEventListener("dragend",function(e){var card=e.target.closest("[data-kpi]");if(!card)return;card.classList.remove("dragging");saveKpiOrder();setTimeout(function(){state.kpiDragged=false;state.kpiDragKey=null},0)});
-document.addEventListener("click",function(e){var toggle=e.target.closest("[data-password-toggle]");if(toggle){var input=byId(toggle.dataset.passwordToggle),show=input.type==="password";input.type=show?"text":"password";toggle.textContent=show?"Hide":"Show";toggle.setAttribute("aria-label",(show?"Hide":"Show")+" password");return}var kpi=e.target.closest("[data-kpi-target]");if(kpi){if(state.kpiDragged)return;return setView(kpi.dataset.kpiTarget)}var view=e.target.closest("[data-view]");if(view)return setView(view.dataset.view);var unit=e.target.closest("[data-business-unit]");if(unit){state.unitScope=unit.dataset.businessUnit;renderAll();return}var pie=e.target.closest("[data-pie-unit]");if(pie){state.unitScope=pie.dataset.pieUnit;renderAll();setView("projects");return}var sort=e.target.closest("[data-sort]");if(sort){var key=sort.dataset.sort;if(state.sortKey===key)state.sortDir=state.sortDir==="asc"?"desc":"asc";else{state.sortKey=key;state.sortDir="asc"}renderProjects();renderCost();renderRisk();return}var devSort=e.target.closest("[data-dev-sort]");if(devSort){var dk=devSort.dataset.devSort;if(state.devSortKey===dk)state.devSortDir=state.devSortDir==="asc"?"desc":"asc";else{state.devSortKey=dk;state.devSortDir="asc"}renderDevelopment();return}var preset=e.target.closest("[data-preset]");if(preset){state.preset=preset.dataset.preset;document.querySelectorAll(".preset").forEach(function(b){b.classList.toggle("active",b===preset)});byId("columnMenu").hidden=true;renderProjects();return}var details=e.target.closest("[data-details]");if(details)return openDetails(details.dataset.details);var development=e.target.closest("[data-development]");if(development)return openDevelopment(development.dataset.development);var promote=e.target.closest("[data-promote]");if(promote)return openPromote(promote.dataset.promote);var user=e.target.closest("[data-user-edit]");if(user)return openUser(user.dataset.userEdit);var page=e.target.closest("[data-admin-page]");if(page){state.adminPage=Number(page.dataset.adminPage);renderAdmin();return}var close=e.target.closest("[data-close]");if(close)return byId(close.dataset.close).close()});
+document.addEventListener("click",function(e){var toggle=e.target.closest("[data-password-toggle]");if(toggle){var input=byId(toggle.dataset.passwordToggle),show=input.type==="password";input.type=show?"text":"password";toggle.textContent=show?"Hide":"Show";toggle.setAttribute("aria-label",(show?"Hide":"Show")+" password");return}var kpi=e.target.closest("[data-kpi-target]");if(kpi){if(state.kpiDragged)return;return setView(kpi.dataset.kpiTarget)}var view=e.target.closest("[data-view]");if(view)return setView(view.dataset.view);var unit=e.target.closest("[data-business-unit]");if(unit){state.unitScope=unit.dataset.businessUnit;renderAll();return}var pie=e.target.closest("[data-pie-unit]");if(pie){state.unitScope=pie.dataset.pieUnit;renderAll();setView("projects");return}var sort=e.target.closest("[data-sort]");if(sort){var key=sort.dataset.sort;if(state.sortKey===key)state.sortDir=state.sortDir==="asc"?"desc":"asc";else{state.sortKey=key;state.sortDir="asc"}renderProjects();renderCost();renderRisk();return}var devSort=e.target.closest("[data-dev-sort]");if(devSort){var dk=devSort.dataset.devSort;if(state.devSortKey===dk)state.devSortDir=state.devSortDir==="asc"?"desc":"asc";else{state.devSortKey=dk;state.devSortDir="asc"}renderDevelopment();return}var preset=e.target.closest("[data-preset]");if(preset){state.preset=preset.dataset.preset;document.querySelectorAll(".preset").forEach(function(b){b.classList.toggle("active",b===preset)});byId("columnMenu").hidden=true;renderProjects();return}var details=e.target.closest("[data-details]");if(details)return openDetails(details.dataset.details);var development=e.target.closest("[data-development]");if(development)return openDevelopment(development.dataset.development);var promote=e.target.closest("[data-promote]");if(promote)return openPromote(promote.dataset.promote);var user=e.target.closest("[data-user-edit]");if(user)return openUser(user.dataset.userEdit);var page=e.target.closest("[data-admin-page]");if(page){state.adminPage=Number(page.dataset.adminPage);renderAdmin();return}var loginPageButton=e.target.closest("[data-login-page]");if(loginPageButton){state.loginPage=Number(loginPageButton.dataset.loginPage);renderLoginEvents();return}var close=e.target.closest("[data-close]");if(close)return byId(close.dataset.close).close()});
 document.addEventListener("keydown",function(e){var kpi=e.target.closest&&e.target.closest("[data-kpi-target]");if(kpi&&(e.key==="Enter"||e.key===" ")){e.preventDefault();setView(kpi.dataset.kpiTarget);return}var pie=e.target.closest&&e.target.closest("[data-pie-unit]");if(pie&&(e.key==="Enter"||e.key===" ")){e.preventDefault();pie.click()}});
 document.addEventListener("focusin",function(e){if(e.target.matches("[data-activity]")){e.target.dataset.before=e.target.textContent.trim();e.target.querySelectorAll("mark").forEach(function(mark){mark.replaceWith(document.createTextNode(mark.textContent))})}if(e.target.matches("[data-number-field]"))e.target.value=e.target.dataset.raw||""});
 document.addEventListener("focusout",function(e){if(e.target.matches("[data-activity]"))saveInline(e.target);if(e.target.matches("[data-number-field]")){var el=e.target,value=moneyNumber(el.value),before=moneyNumber(el.dataset.raw);el.value=moneyText(value);if(value!==before)patchFields(el.dataset.id,Object.fromEntries([[el.dataset.numberField,value]]),"Cost field saved.").catch(function(err){toast(err.message)})}});
@@ -114,6 +244,14 @@ function handleRowDoubleClick(e){
 document.addEventListener("dblclick",handleRowDoubleClick);
 document.addEventListener("change",function(e){if(e.target.matches("[data-field]"))patchFields(e.target.dataset.id,Object.fromEntries([[e.target.dataset.field,e.target.value]]),"Field saved.").catch(function(err){toast(err.message)})});
 ["search","statusFilter","riskFilter"].forEach(function(id){byId(id).addEventListener("input",function(){renderProjects();renderCost();renderRisk()})});["developmentSearch","developmentStatus"].forEach(function(id){byId(id).addEventListener("input",renderDevelopment)});["adminSearch","adminRoleFilter","adminStatusFilter","adminSort"].forEach(function(id){byId(id).addEventListener("input",function(){state.adminPage=1;renderAdmin()})});
+["loginSearch","loginOutcomeFilter"].forEach(function(id){byId(id).addEventListener("input",function(){state.loginPage=1;renderLoginEvents()})});
+// Genuine input only — no bare timer, or an unattended desk would look busy.
+["pointerdown","keydown","wheel"].forEach(function(type){document.addEventListener(type,noteActivity,{passive:true})});
+byId("idleStay").addEventListener("click",staySignedIn);
+byId("idleSignOut").addEventListener("click",function(){stopIdleWatch();signOut()});
+// Escape is itself activity, so dismissing the warning means "stay signed in".
+byId("idleDialog").addEventListener("cancel",function(event){event.preventDefault();staySignedIn()});
+document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")resyncIdleWatch()});
 byId("uPassword").addEventListener("input",function(){renderStrength("uPassword","uStrengthBar","uStrengthText")});byId("newPassword").addEventListener("input",function(){renderStrength("newPassword","newStrengthBar","newStrengthText")});
 byId("columnsBtn").addEventListener("click",function(){byId("columnMenu").hidden=!byId("columnMenu").hidden});byId("refreshBtn").addEventListener("click",function(){load(true).then(function(loaded){if(loaded)toast("Projects refreshed. Filters and sorting reset.")}).catch(function(e){toast(e.message)})});byId("addBtn").addEventListener("click",function(){byId("addDialog").showModal()});byId("addUserBtn").addEventListener("click",function(){openUser(null)});byId("backupBtn").addEventListener("click",function(){downloadBackup()});byId("saveActivityBtn").addEventListener("click",function(){saveModalActivity().catch(function(e){toast(e.message)})});byId("developmentHistoryBtn").addEventListener("click",function(){var id=byId("developmentId").value;byId("developmentDialog").close();openActivity(id)});byId("detailsForm").addEventListener("submit",function(e){saveDetails(e).catch(function(err){toast(err.message)})});byId("developmentForm").addEventListener("submit",function(e){saveDevelopment(e).catch(function(err){toast(err.message)})});byId("promoteForm").addEventListener("submit",function(e){promoteProject(e).catch(function(err){toast(err.message)})});byId("userForm").addEventListener("submit",function(e){saveUser(e).catch(function(err){toast(err.message)})});byId("addForm").addEventListener("submit",function(e){addProject(e).catch(function(err){toast(err.message)})});["fPrecon","fConstruction","fAddCapp","fAfc"].forEach(function(id){byId(id).addEventListener("input",updateCalc)});
 byId("loginForm").addEventListener("submit",signIn);byId("logoutBtn").addEventListener("click",signOut);byId("changePasswordBtn").addEventListener("click",function(){byId("profileDialog").close();byId("passwordForm").reset();byId("passwordDialogClose").hidden=false;byId("passwordDialogCancel").hidden=false;byId("passwordDialogSignOut").hidden=true;renderStrength("newPassword","newStrengthBar","newStrengthText");byId("passwordDialog").showModal()});byId("passwordDialogClose").addEventListener("click",function(){byId("passwordDialog").close()});byId("passwordDialogCancel").addEventListener("click",function(){byId("passwordDialog").close()});byId("passwordForm").addEventListener("submit",changePassword);
@@ -214,8 +352,9 @@ function renderProfileHeader(){
   byId("headerAvatar").innerHTML=avatarHtml(p);byId("userChip").textContent=state.me?"Welcome "+(state.me.name||state.me.email)+" • "+state.me.role.charAt(0).toUpperCase()+state.me.role.slice(1):"";
 }
 function showSignIn(message){
+  stopIdleWatch();
   closeExportMenu();
-  state.me=null;state.csrf=null;state.projects=[];state.adminUsers=[];state.adminAudit=[];
+  state.me=null;state.csrf=null;state.projects=[];state.adminUsers=[];state.adminAudit=[];state.adminLoginEvents=[];
   document.querySelectorAll("dialog[open]").forEach(function(dialog){dialog.close()});
   byId("workspace").hidden=true;byId("loading").hidden=true;byId("signedOut").hidden=false;
   ["profileBtn","logoutBtn","changePasswordBtn","adminNav"].forEach(function(id){byId(id).hidden=true});

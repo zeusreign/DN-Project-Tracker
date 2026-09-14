@@ -11,6 +11,23 @@ const DIRECTORY_SEED_VERSION = "bill-email-directory-v5-runtime-compatible-passw
 const PASSWORD_ITERATIONS = 100000;
 const PASSWORD_MIN_LENGTH = 10;
 const SESSION_SECONDS = 60 * 60 * 8;
+
+// ---------------------------------------------------------------------------
+// INACTIVITY TIMEOUT — the only value to change.
+//
+// A session ends after this long with no activity, independently of the 8-hour
+// SESSION_SECONDS window and the absolute 24-hour cap, both of which still apply
+// as ceilings. Whichever limit is reached first ends the session.
+//
+// The browser reads this number back from /api/bootstrap and derives its warning
+// from it, so this constant is the single source of truth — nothing else needs
+// editing to change the timeout. Drop it to `60 * 2` to exercise the behaviour by
+// hand without waiting three quarters of an hour.
+const IDLE_SECONDS = 60 * 45;
+
+// How long before the cut-off the browser warns. Kept below IDLE_SECONDS so a
+// short test value still produces a visible warning.
+const IDLE_WARNING_SECONDS = Math.min(60, Math.floor(IDLE_SECONDS / 2));
 const USER_DIRECTORY_SEED = [
   { first_name: "Brian", last_name: "Hansberry", user_email: "BHansber@delawarenorth.com", role: "viewer" },
   { first_name: "David", last_name: "Frankhouser", user_email: "DFrankho@delawarenorth.com", role: "viewer" },
@@ -256,24 +273,34 @@ function validatePassword(password) {
   return null;
 }
 
-async function localUserFrom(db, request) {
+// `touch` records this request as activity, which is what keeps a session alive.
+// It is false only for the read-only session probe, so that a browser asking "am I
+// still signed in?" cannot keep an abandoned session alive by asking.
+async function localUserFrom(db, request, touch = true) {
   const token = cookieValue(request, "dnc_session");
   if (!token) return null;
   const tokenHash = await sha256(token);
   const session = await db.prepare(`
     SELECT s.id AS session_id, s.csrf_token, d.id AS directory_id, d.user_email,
            d.first_name, d.last_name, d.role, d.account_status, d.site_access_status,
-           d.business_unit_scope, d.must_change_password, s.created_at AS session_created_at
+           d.business_unit_scope, d.must_change_password, s.created_at AS session_created_at,
+           s.last_used_at AS session_last_used_at
     FROM login_sessions s
     JOIN user_directory d ON d.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > datetime('now')
       AND s.created_at > datetime('now', '-24 hours')
+      AND s.last_used_at > datetime('now', ? || ' seconds')
       AND d.account_status = 'active' AND d.site_access_status = 'authorized'
-  `).bind(tokenHash).first();
+  `).bind(tokenHash, -IDLE_SECONDS).first();
   if (!session) return null;
-  await db.prepare("UPDATE login_sessions SET last_used_at = datetime('now') WHERE id = ?")
-    .bind(session.session_id).run();
+  // Idleness is per session row, so one signed-in browser going quiet never
+  // affects the same person's other sessions.
+  if (touch) {
+    await db.prepare("UPDATE login_sessions SET last_used_at = datetime('now') WHERE id = ?")
+      .bind(session.session_id).run();
+  }
   return {
+    session_last_used_at: session.session_last_used_at,
     id: `directory:${session.directory_id}`,
     directory_id: session.directory_id,
     email: session.user_email,
@@ -288,8 +315,8 @@ async function localUserFrom(db, request) {
   };
 }
 
-async function authenticatedUser(db, request, env) {
-  const local = await localUserFrom(db, request);
+async function authenticatedUser(db, request, env, touch = true) {
+  const local = await localUserFrom(db, request, touch);
   if (local) return local;
   if (String(env?.ALLOW_PLATFORM_AUTH || "").toLowerCase() === "true") {
     const platform = platformUserFrom(request);
@@ -932,7 +959,11 @@ async function handleApi(request, env, url) {
   // no longer valid, so it runs ahead of the authentication, role and CSRF gates.
   // See handleLogout() for why that does not weaken them.
   if (request.method === "POST" && url.pathname === "/api/logout") return handleLogout(request, env);
-  const user = await authenticatedUser(env.DB, request, env);
+  // Reading /api/session reports how much idle time is left and deliberately does
+  // not count as activity — otherwise a browser asking the question would answer it.
+  // POSTing to the same path is the explicit "Stay signed in", which does.
+  const sessionProbe = request.method === "GET" && url.pathname === "/api/session";
+  const user = await authenticatedUser(env.DB, request, env, !sessionProbe);
   if (!user?.id || !user?.email) return error("Sign in with an authorized account to continue.", 401);
   const role = await roleFor(env.DB, env, user);
   if (!role) return error("This account is suspended or not authorized.", 403);
@@ -942,6 +973,21 @@ async function handleApi(request, env, url) {
     if (request.headers.get("x-csrf-token") !== user.csrf_token) return error("Your secure session could not be verified. Refresh and try again.", 403);
   }
   if (request.method === "POST" && url.pathname === "/api/account/password") return handlePasswordChange(request, env, user);
+  // Sits ahead of the forced-password-change gate so the timeout also applies, and
+  // can be extended, while that dialog is open.
+  if (url.pathname === "/api/session" && (request.method === "GET" || request.method === "POST")) {
+    // Reaching here means the session is still valid. After a POST the row was just
+    // touched, so the full period is left; a GET reports what is actually left.
+    const elapsed = sessionProbe && user.session_last_used_at
+      ? Math.floor((Date.now() - Date.parse(user.session_last_used_at.replace(" ", "T") + "Z")) / 1000)
+      : 0;
+    return json({
+      ok: true,
+      idle_seconds: IDLE_SECONDS,
+      idle_warning_seconds: IDLE_WARNING_SECONDS,
+      idle_remaining: Math.max(0, IDLE_SECONDS - (Number.isFinite(elapsed) ? elapsed : 0)),
+    });
+  }
 
   if (request.method === "GET" && url.pathname === "/api/bootstrap") {
     if (role === "admin" && !user.must_change_password) await importRequestedProfilePhotos(env, user);
@@ -964,6 +1010,10 @@ async function handleApi(request, env, url) {
         auth_source: user.auth_source,
         must_change_password: Boolean(user.must_change_password),
         csrf_token: user.csrf_token || null,
+        // The browser derives its countdown and warning from these, so IDLE_SECONDS
+        // stays the only place the timeout is defined.
+        idle_seconds: IDLE_SECONDS,
+        idle_warning_seconds: IDLE_WARNING_SECONDS,
         profile,
       },
     }, 200, sessionHeaders);
@@ -1050,7 +1100,7 @@ async function handleApi(request, env, url) {
   }
   if (request.method === "GET" && url.pathname === "/api/admin") {
     if (role !== "admin") return error("Administrator access is required.", 403);
-    const [roles, audit, counts] = await Promise.all([
+    const [roles, audit, counts, loginEvents] = await Promise.all([
       env.DB.prepare(`
         SELECT id, username, user_email, first_name, last_name, role, title, department, company,
                business_unit_scope, location, mobile_phone, account_status,
@@ -1063,8 +1113,26 @@ async function handleApi(request, env, url) {
       `).all(),
       env.DB.prepare(`SELECT action, entity_type, entity_key, actor_email, details, created_at FROM audit_log ORDER BY id DESC LIMIT 80`).all(),
       env.DB.prepare(`SELECT COUNT(*) AS projects, SUM(CASE WHEN source_sort_order = 9999 THEN 1 ELSE 0 END) AS added_projects FROM projects WHERE archived_at IS NULL`).first(),
+      // Sign-in history. The join is LEFT because user_directory_id is null when the
+      // attempted User ID matched no account, which is exactly the case an
+      // administrator most needs to see. Newest first, capped so the payload stays
+      // small; the view filters and paginates what it is given.
+      env.DB.prepare(`
+        SELECT e.id, e.created_at, e.username_attempted, e.event_type, e.ip_address, e.user_agent,
+               d.user_email, d.first_name, d.last_name
+        FROM login_events e
+        LEFT JOIN user_directory d ON d.id = e.user_directory_id
+        ORDER BY e.id DESC
+        LIMIT 200
+      `).all(),
     ]);
-    return json({ roles: (roles.results || []).map(withAvatar), audit: audit.results || [], counts, configured_admin_count: envList(env.ADMIN_EMAILS).length });
+    return json({
+      roles: (roles.results || []).map(withAvatar),
+      audit: audit.results || [],
+      counts,
+      login_events: loginEvents.results || [],
+      configured_admin_count: envList(env.ADMIN_EMAILS).length,
+    });
   }
   if (request.method === "POST" && url.pathname === "/api/admin/users") {
     if (role !== "admin") return error("Administrator access is required.", 403);

@@ -596,6 +596,89 @@ assert.equal((await worker.fetch(new Request("https://tracker.example/api/login"
   body: JSON.stringify({ username: billDirectory.username, password: replacementTestPassword }),
 }), env, {})).status, 401, "the password replaced by the reset must no longer work");
 
+// --- Admin login history ------------------------------------------------------
+// The events were already being written by recordLoginEvent(); nothing read them.
+// Everything asserted here is produced by the sign-ins and failures performed above.
+await worker.fetch(new Request("https://tracker.example/api/login", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ username: "nobody@example.invalid", password: "not-a-real-password" }),
+}), env, {});
+const adminWithHistory = await (await call("/api/admin")).json();
+assert.ok(Array.isArray(adminWithHistory.login_events), "the admin payload must carry login history");
+assert.ok(adminWithHistory.login_events.length > 0);
+for (const expected of ["success", "failed", "logout"]) {
+  assert.ok(adminWithHistory.login_events.some((event) => event.event_type === expected),
+    `login history must include ${expected} events`);
+}
+// Newest first, and every column the view renders is present.
+const historyIds = adminWithHistory.login_events.map((event) => event.id);
+assert.deepEqual(historyIds, [...historyIds].sort((left, right) => right - left), "login history must be newest first");
+for (const column of ["id", "created_at", "event_type", "username_attempted", "ip_address", "user_agent"]) {
+  assert.ok(column in adminWithHistory.login_events[0], `a login history row must expose ${column}`);
+}
+// A failed attempt on a real User ID resolves to that account...
+const failedForBill = adminWithHistory.login_events.find((event) =>
+  event.event_type === "failed" && event.username_attempted === billDirectory.username.toLowerCase());
+assert.ok(failedForBill, "the failed sign-in performed above must be recorded");
+assert.equal(failedForBill.user_email.toLowerCase(), billDirectory.user_email.toLowerCase());
+// ...and one on a User ID that matches nothing is still kept, claiming no account.
+const unmatchedAttempt = adminWithHistory.login_events.find((event) =>
+  event.username_attempted === "nobody@example.invalid");
+assert.ok(unmatchedAttempt, "an attempt on an unknown User ID must still be recorded");
+assert.equal(unmatchedAttempt.event_type, "failed");
+assert.equal(unmatchedAttempt.user_email, null, "an unmatched attempt must not claim an account");
+
+// A viewer must not reach the history at all.
+const viewerDirectory = admin.roles.find((person) =>
+  person.id !== billDirectory.id && person.id !== otherDirectory.id && person.username && person.user_email);
+assert.ok(viewerDirectory, "a third directory account is required for the permission check");
+const viewerTestPassword = "Ee5!" + crypto.randomUUID();
+assert.equal((await call("/api/admin/users", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    id: viewerDirectory.id,
+    first_name: viewerDirectory.first_name,
+    last_name: viewerDirectory.last_name,
+    username: viewerDirectory.username,
+    user_email: viewerDirectory.user_email,
+    role: "viewer",
+    account_status: "active",
+    site_access_status: "authorized",
+    temporary_password: viewerTestPassword,
+    confirm_password: viewerTestPassword,
+  }),
+})).status, 200);
+// Cleared so the request reaches the admin route rather than stopping at the 428 gate.
+database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE id = ?").run(viewerDirectory.id);
+const viewerCookie = await loginAs(viewerDirectory.username, viewerTestPassword);
+const viewerAdminResponse = await worker.fetch(
+  new Request("https://tracker.example/api/admin", { headers: { cookie: viewerCookie } }), env, {});
+assert.equal(viewerAdminResponse.status, 403, "a viewer must not reach the admin payload");
+assert.doesNotMatch(await viewerAdminResponse.text(), /login_events/, "a refusal must not leak the history");
+
+// The view that renders it.
+assert.match(pageSource, /<tbody id="loginEventList"><\/tbody>/);
+assert.match(pageSource, /id="loginOutcomeFilter"/);
+assert.match(pageSource, /id="loginSearch"/);
+const historyHelpers = new Function(CLIENT.slice(
+  CLIENT.indexOf("var loginOutcomes="), CLIENT.indexOf("function filteredLoginEvents("),
+) + ";return {loginOutcome,browserLabel};")();
+assert.equal(historyHelpers.loginOutcome("success").label, "Successful sign-in");
+assert.equal(historyHelpers.loginOutcome("success").kind, "ok");
+assert.equal(historyHelpers.loginOutcome("failed").kind, "bad");
+assert.equal(historyHelpers.loginOutcome("locked_attempt").kind, "bad");
+// An event type this view does not know about is shown, never dropped.
+assert.equal(historyHelpers.loginOutcome("password_reset").label, "password reset");
+assert.equal(historyHelpers.browserLabel(
+  "Mozilla/5.0 (Windows NT 10.0; Win64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+), "Chrome on Windows");
+assert.equal(historyHelpers.browserLabel(
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15",
+), "Safari on macOS");
+assert.equal(historyHelpers.browserLabel(null), "—");
+
 const historyProject = bootstrap.projects.find((project) => project.previous_update);
 assert.ok(historyProject);
 const historyResponse = await call(`/api/projects/${historyProject.id}/history`);
