@@ -1,8 +1,25 @@
 node_modules/
 dist/
+pages-dist/
 .env
 .env.*
+!.env.example
 .wrangler/
 .dev.vars
 *.log
 .DS_Store
+HANDOFF.md
+
+# Database and file backups. These live in ~/dn-tracker-backups/ and must never
+# enter the repository: a D1 export contains password hashes, live session
+# tokens and every staff email address in the directory. Defensive rules in case
+# a backup is ever copied into the tree.
+dn-tracker-backups/
+backups/
+*.sql.gz
+*.dump
+d1-*.sql
+d1-backup*
+r2-backup*
+r2-manifest.json
+r2-keys.txt
