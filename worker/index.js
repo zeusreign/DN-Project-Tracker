@@ -1128,6 +1128,13 @@ async function handleApi(request, env, url) {
         password?.hash || null, password?.salt || null, password?.iterations || null, password?.algorithm || null,
         password?.hash || null, password?.hash || null, password?.hash || null, password?.hash || null, directoryId
       ));
+      // A reset that leaves the old sessions alive does not actually take the
+      // account back: whoever was signed in with the previous password stays
+      // signed in until their cookie expires. Only a password change clears them,
+      // so editing a directory record without setting one is unaffected.
+      if (password) {
+        statements.push(env.DB.prepare("DELETE FROM login_sessions WHERE user_id = ?").bind(directoryId));
+      }
     } else {
       statements.push(env.DB.prepare(`
         INSERT INTO user_directory (

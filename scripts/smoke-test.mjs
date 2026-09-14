@@ -70,6 +70,18 @@ assert.match(pageSource, /<label>Business Unit Permissions<\/label>/);
 assert.match(pageSource, /<th>Business Unit Permissions<\/th>/);
 assert.doesNotMatch(pageSource, /business-unit scope/i);
 
+// The forced password-change dialog is modal and hides its close and cancel
+// controls, which also puts the header sign-off button out of reach. It needs its
+// own way out, or the screen is a dead end for anyone unwilling to set a password.
+const passwordDialogStart = pageSource.indexOf('<dialog id="passwordDialog"');
+const passwordDialogMarkup = pageSource.slice(passwordDialogStart, pageSource.indexOf("</dialog>", passwordDialogStart));
+assert.match(passwordDialogMarkup, /<button type="button" class="btn" id="passwordDialogSignOut" hidden>Sign out<\/button>/);
+// Revealed only when the change is forced; the voluntary path keeps Cancel instead.
+assert.match(CLIENT, /must_change_password\)\{[^}]*byId\("passwordDialogSignOut"\)\.hidden=false/);
+assert.match(CLIENT, /changePasswordBtn[\s\S]{0,400}?byId\("passwordDialogSignOut"\)\.hidden=true/);
+// It reuses the existing sign-out flow rather than introducing a second one.
+assert.match(CLIENT, /byId\("passwordDialogSignOut"\)\.addEventListener\("click",signOut\)/);
+
 // Tooltip labels are immediate UI text, not delayed native browser titles.
 const labelSource = CLIENT.slice(CLIENT.indexOf("function tooltipLabel("), CLIENT.indexOf("function hideTooltip("));
 const tooltipLabel = new Function(labelSource + ";return tooltipLabel;")();
@@ -526,6 +538,63 @@ const failingSignOut = buildSignOut(async () => { throw new Error("Your session 
 await failingSignOut.run();
 assert.equal(failingSignOut.shown.length, 1, "a failed sign-out must still reach the sign-in screen");
 assert.match(failingSignOut.shown[0], /signed off on this device/);
+
+// --- An administrator's password reset ends that user's sessions ---------------
+// A reset that leaves the old sessions alive does not take the account back:
+// whoever was signed in under the previous password stays signed in.
+const resetTestPassword = "Dd4!" + crypto.randomUUID();
+const adminSaveUser = (person, temporary) => call("/api/admin/users", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    id: person.id,
+    first_name: person.first_name,
+    last_name: person.last_name,
+    username: person.username,
+    user_email: person.user_email,
+    role: person.role,
+    account_status: "active",
+    site_access_status: "authorized",
+    ...(temporary ? { temporary_password: temporary, confirm_password: temporary } : {}),
+  }),
+});
+
+// One account signs in and stays signed in throughout as the control.
+const billBeforeReset = await loginAs(billDirectory.username, replacementTestPassword);
+assert.equal((await bootstrapWith(billBeforeReset)).status, 200);
+assert.equal(sessionCount(billDirectory.id), 1);
+assert.equal(sessionCount(otherDirectory.id), 1);
+
+// Editing a directory record without setting a password must not sign anyone out.
+assert.equal((await adminSaveUser(billDirectory, null)).status, 200);
+assert.equal(sessionCount(billDirectory.id), 1, "an edit without a password must not end sessions");
+assert.equal((await bootstrapWith(billBeforeReset)).status, 200);
+
+// The reset itself.
+assert.equal((await adminSaveUser(billDirectory, resetTestPassword)).status, 200, "the reset must still succeed");
+assert.equal(sessionCount(billDirectory.id), 0, "a password reset must end that user's sessions");
+assert.equal((await bootstrapWith(billBeforeReset)).status, 401, "the session held before the reset must stop working");
+assert.equal((await worker.fetch(new Request("https://tracker.example/api/export.csv", {
+  headers: { cookie: billBeforeReset },
+}), env, {})).status, 401);
+
+// Nobody else is disturbed.
+assert.equal(sessionCount(otherDirectory.id), 1, "another user's session must survive the reset");
+assert.equal((await bootstrapWith(otherCookie)).status, 200);
+
+// The reset still behaves as before: new password works, old one does not, and the
+// forced password change is still applied.
+const billAfterReset = await loginAs(billDirectory.username, resetTestPassword);
+assert.equal((await (await bootstrapWith(billAfterReset)).json()).me.must_change_password, true,
+  "a reset must still force a password change");
+assert.equal((await worker.fetch(new Request("https://tracker.example/api/projects", {
+  headers: { cookie: billAfterReset },
+}), env, {})).status, 428);
+assert.equal((await worker.fetch(new Request("https://tracker.example/api/login", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ username: billDirectory.username, password: replacementTestPassword }),
+}), env, {})).status, 401, "the password replaced by the reset must no longer work");
 
 const historyProject = bootstrap.projects.find((project) => project.previous_update);
 assert.ok(historyProject);
