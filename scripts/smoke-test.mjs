@@ -397,6 +397,136 @@ assert.equal((await localCall("/api/export.tsv")).status, 401);
 assert.equal(JSON.stringify(database.prepare("SELECT * FROM projects ORDER BY id").all()), sourceBeforeProfiles);
 assert.equal(JSON.stringify(database.prepare("SELECT * FROM project_updates ORDER BY id").all()), historyBeforeProfiles);
 
+// --- Sign-out reliability -----------------------------------------------------
+// Sign-out has to end the session and clear the cookie even when that session can no
+// longer authenticate. Each case below used to fail a gate in handleApi() and come
+// back 401 or 403 with the cookie still in place, which stranded the browser in a
+// session it could neither use nor leave. All of it runs against the in-memory
+// database created by this test.
+const CLEARED_COOKIE = /^dnc_session=;/;
+const loginAs = async (username, password) => {
+  const response = await worker.fetch(new Request("https://tracker.example/api/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  }), env, {});
+  assert.equal(response.status, 200);
+  return response.headers.get("set-cookie").split(";")[0];
+};
+const logout = (cookie, extra = {}) => worker.fetch(new Request("https://tracker.example/api/logout", {
+  method: "POST",
+  headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}), ...extra },
+  body: "{}",
+}), env, {});
+const bootstrapWith = (cookie) => worker.fetch(
+  new Request("https://tracker.example/api/bootstrap", { headers: { cookie } }), env, {},
+);
+const csrfFor = async (cookie) => (await (await bootstrapWith(cookie)).json()).me.csrf_token;
+const sessionCount = (userId) =>
+  database.prepare("SELECT COUNT(*) AS total FROM login_sessions WHERE user_id = ?").get(userId).total;
+const liveSession = (id) =>
+  database.prepare("SELECT COUNT(*) AS total FROM login_sessions WHERE id = ?").get(id).total;
+
+// An expired session still signs out. This is the case Tom reported: /api/bootstrap
+// is already returning 401 above, and sign-out used to return 401 with it.
+const expiredLogout = await logout(sessionCookie, { "x-csrf-token": localBootstrap.me.csrf_token });
+assert.equal(expiredLogout.status, 200, "an expired session must still sign out");
+assert.match(expiredLogout.headers.get("set-cookie"), CLEARED_COOKIE);
+assert.equal(liveSession(sessionRow.id), 0, "the expired session row must be deleted");
+
+// Ordinary login then sign-out, and the session is unusable afterwards.
+const freshCookie = await loginAs(billDirectory.username, replacementTestPassword);
+assert.equal((await bootstrapWith(freshCookie)).status, 200);
+const normalLogout = await logout(freshCookie, { "x-csrf-token": await csrfFor(freshCookie) });
+assert.equal(normalLogout.status, 200);
+assert.match(normalLogout.headers.get("set-cookie"), CLEARED_COOKIE);
+assert.equal((await bootstrapWith(freshCookie)).status, 401, "a signed-out cookie must not authenticate");
+assert.equal((await (await logout(freshCookie)).json()).ok, true, "signing out twice must not error");
+
+// Another tab signs in and replaces the active session. The first tab is still
+// holding the previous CSRF token, which used to fail the CSRF gate with a 403.
+const tabOne = await loginAs(billDirectory.username, replacementTestPassword);
+const tabOneCsrf = await csrfFor(tabOne);
+const tabTwo = await loginAs(billDirectory.username, replacementTestPassword);
+assert.notEqual(tabOne, tabTwo);
+const crossTabLogout = await logout(tabTwo, { "x-csrf-token": tabOneCsrf });
+assert.equal(crossTabLogout.status, 200, "a stale CSRF token must not block sign-out");
+assert.match(crossTabLogout.headers.get("set-cookie"), CLEARED_COOKIE);
+assert.equal((await bootstrapWith(tabTwo)).status, 401);
+
+// A second account signed in at the same time is untouched by any of it.
+const otherDirectory = admin.roles.find((person) =>
+  person.id !== billDirectory.id && person.username && person.user_email && person.role);
+assert.ok(otherDirectory, "a second directory account is required for session isolation");
+const otherTestPassword = "Cc3!" + crypto.randomUUID();
+const otherActivation = await call("/api/admin/users", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    id: otherDirectory.id,
+    first_name: otherDirectory.first_name,
+    last_name: otherDirectory.last_name,
+    username: otherDirectory.username,
+    user_email: otherDirectory.user_email,
+    role: otherDirectory.role,
+    account_status: "active",
+    site_access_status: "authorized",
+    temporary_password: otherTestPassword,
+    confirm_password: otherTestPassword,
+  }),
+});
+assert.equal(otherActivation.status, 200);
+const otherCookie = await loginAs(otherDirectory.username, otherTestPassword);
+assert.equal((await bootstrapWith(otherCookie)).status, 200);
+assert.equal(sessionCount(otherDirectory.id), 1);
+
+// Sign the first tab out as well, so the account ends with nothing open.
+assert.equal((await logout(tabOne, { "x-csrf-token": tabOneCsrf })).status, 200);
+assert.equal(sessionCount(billDirectory.id), 0, "sign-out must leave no session for that account");
+assert.equal((await bootstrapWith(otherCookie)).status, 200, "another account's session must survive");
+assert.equal(sessionCount(otherDirectory.id), 1);
+
+// No cookie, and a cookie holding a token that matches nothing, both clear cleanly
+// without touching anyone else's session.
+const noCookieLogout = await logout(null);
+assert.equal(noCookieLogout.status, 200);
+assert.match(noCookieLogout.headers.get("set-cookie"), CLEARED_COOKIE);
+const unknownTokenLogout = await logout("dnc_session=" + crypto.randomUUID());
+assert.equal(unknownTokenLogout.status, 200);
+assert.match(unknownTokenLogout.headers.get("set-cookie"), CLEARED_COOKIE);
+assert.equal(sessionCount(otherDirectory.id), 1, "an unknown token must delete nothing");
+
+// Sign-out stays audited, including from the expired session.
+assert.ok(database.prepare(
+  "SELECT COUNT(*) AS total FROM login_events WHERE user_directory_id = ? AND event_type = 'logout'",
+).get(billDirectory.id).total >= 4, "each sign-out must be recorded");
+
+// Sign-out is still not a way to reach anything else while unauthenticated.
+assert.equal((await worker.fetch(new Request("https://tracker.example/api/projects", {
+  method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+}), env, {})).status, 401);
+
+// The browser half has to reach the sign-in screen either way. Returning early on a
+// failed request is what left the workspace on screen behind an unusable session.
+const signOutSource = CLIENT.slice(CLIENT.indexOf("async function signOut("), CLIENT.indexOf("async function changePassword("));
+function buildSignOut(apiImplementation) {
+  const shown = [];
+  const toasted = [];
+  // `toast` is stubbed so that a regression shows up as "the sign-in screen was
+  // never reached" rather than as an incidental ReferenceError.
+  const run = new Function("api", "showSignIn", "toast", signOutSource + ";return signOut;")(
+    apiImplementation, (message) => shown.push(message), (message) => toasted.push(message),
+  );
+  return { run, shown, toasted };
+}
+const succeedingSignOut = buildSignOut(async () => ({ ok: true }));
+await succeedingSignOut.run();
+assert.deepEqual(succeedingSignOut.shown, [""], "a successful sign-out shows the sign-in screen");
+const failingSignOut = buildSignOut(async () => { throw new Error("Your session has expired. Please sign in again."); });
+await failingSignOut.run();
+assert.equal(failingSignOut.shown.length, 1, "a failed sign-out must still reach the sign-in screen");
+assert.match(failingSignOut.shown[0], /signed off on this device/);
+
 const historyProject = bootstrap.projects.find((project) => project.previous_update);
 assert.ok(historyProject);
 const historyResponse = await call(`/api/projects/${historyProject.id}/history`);

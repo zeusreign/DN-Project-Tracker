@@ -761,11 +761,33 @@ async function handleLogin(request, env) {
   });
 }
 
-async function handleLogout(request, env, user) {
-  if (user?.auth_source === "local" && user.session_id) {
-    await env.DB.prepare("DELETE FROM login_sessions WHERE id = ?").bind(user.session_id).run();
-    await recordLoginEvent(env.DB, user.directory_id, user.email, "logout", request);
+// Sign-out must succeed whenever the browser is holding a session cookie, including
+// the cases where that cookie is no longer usable: expired, replaced by a sign-in in
+// another tab, or belonging to an account suspended mid-session. Those all fail the
+// gates in handleApi(), which is why this runs ahead of them.
+//
+// The credential here is possession of the session token itself: the row is selected
+// by the caller's own token hash, so no other user's session can be reached and no
+// account data is read or returned. That is the same credential the gates use, minus
+// the liveness and status predicates, which are irrelevant to destroying it. The
+// cookie is SameSite=Strict, so a cross-site POST arrives carrying no cookie at all
+// and therefore deletes nothing.
+async function handleLogout(request, env) {
+  const token = cookieValue(request, "dnc_session");
+  if (token) {
+    const session = await env.DB.prepare(`
+      SELECT s.id AS session_id, s.user_id, d.user_email
+      FROM login_sessions s
+      JOIN user_directory d ON d.id = s.user_id
+      WHERE s.token_hash = ?
+    `).bind(await sha256(token)).first();
+    if (session) {
+      await env.DB.prepare("DELETE FROM login_sessions WHERE id = ?").bind(session.session_id).run();
+      await recordLoginEvent(env.DB, session.user_id, session.user_email, "logout", request);
+    }
   }
+  // Always clear the cookie, even when no row matched. A stale or unknown token is
+  // exactly the state the user is trying to escape.
   return json({ ok: true }, 200, {
     "set-cookie": "dnc_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0",
   });
@@ -906,6 +928,10 @@ async function handleApi(request, env, url) {
   await ensureSeed(env.DB);
   await ensureDirectorySeed(env.DB);
   if (request.method === "POST" && url.pathname === "/api/login") return handleLogin(request, env);
+  // Ending a session is the one action that has to keep working when the session is
+  // no longer valid, so it runs ahead of the authentication, role and CSRF gates.
+  // See handleLogout() for why that does not weaken them.
+  if (request.method === "POST" && url.pathname === "/api/logout") return handleLogout(request, env);
   const user = await authenticatedUser(env.DB, request, env);
   if (!user?.id || !user?.email) return error("Sign in with an authorized account to continue.", 401);
   const role = await roleFor(env.DB, env, user);
@@ -915,7 +941,6 @@ async function handleApi(request, env, url) {
   if (user.auth_source === "local" && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     if (request.headers.get("x-csrf-token") !== user.csrf_token) return error("Your secure session could not be verified. Refresh and try again.", 403);
   }
-  if (request.method === "POST" && url.pathname === "/api/logout") return handleLogout(request, env, user);
   if (request.method === "POST" && url.pathname === "/api/account/password") return handlePasswordChange(request, env, user);
 
   if (request.method === "GET" && url.pathname === "/api/bootstrap") {
