@@ -127,6 +127,32 @@ anyone can become an administrator by sending a header. See [DEPLOY.md](DEPLOY.m
 8. Export CSV, TSV and XLSX.
 9. Open Help and the PDF guide.
 
+### Inactivity timeout
+
+How it behaves, confirmed during verification:
+
+- The **server** enforces the timeout, using the session activity timestamp.
+- The browser warning is only a user notification — the server remains the authority.
+- Background refreshes and automatic requests do **not** keep an inactive session alive.
+- The timeout applies only to the inactive session. Other active sessions are not invalidated.
+- Tabs sharing the same login stay synchronised through server-side session checks.
+
+| Setting | Value |
+|---|---|
+| Production inactivity timeout | **45 minutes** |
+| Warning appears | **1 minute** before expiry |
+| Local testing | a shortened timeout was used for verification |
+
+Verified in **Chrome**, **Firefox** and **Microsoft Edge on Windows**:
+
+- The warning appears before the timeout.
+- **Stay signed in** keeps the session active.
+- **Sign out** ends the session.
+- An expired session returns the user to the login screen.
+- Multiple browser sessions do not affect each other.
+
+---
+
 ### Always test on the real URL
 
 Every past deployment stays reachable at its own `<hash>.dnc-tracker-pilot.pages.dev` address and

@@ -151,8 +151,9 @@ Tell every new user two things:
 
 ## 7. Sessions
 
-Sessions last **8 hours**, with a hard **24-hour** cap regardless of activity. Only a hash of the
-session token is stored. Signing out deletes the session immediately.
+Sessions last **8 hours**, with a hard **24-hour** cap regardless of activity, and also end after
+**45 minutes of inactivity** (see §11). Only a hash of the session token is stored. Signing out
+deletes the session immediately.
 
 Role and scope changes take effect on the user's next request — no need to make them sign in again.
 
@@ -200,3 +201,23 @@ photographs, and real capital-project budgets. An **Admin** can additionally cre
 passwords and edit any project. If someone only needs to look, **Viewer** is the right role.
 
 Keep the directory tidy — suspend or remove test accounts once they are no longer needed.
+
+---
+
+## 11. Login history and session timeout
+
+### Login history
+
+**Admin → Login History.** Administrators can review successful and failed sign-in attempts.
+
+Each entry shows the date and time, the attempted user, the result, the IP address and browser
+information.
+
+### Session timeout
+
+Sessions expire after **45 minutes of inactivity**, in addition to the 8-hour and 24-hour limits in
+§7 — whichever comes first ends the session.
+
+- The user is warned before the session expires.
+- They can continue the session or sign out.
+- The timeout affects only the inactive session. Other sessions signed in elsewhere are unaffected.
