@@ -40,6 +40,28 @@ get the sign-in screen with no way past it. The database resets on every restart
 
 Good for: screens, layout, data, roles, editing, exports.
 
+### ⚠ Local test credentials are not credentials
+
+Any user ID or password appearing in this repository — in `.env.example`, in `pages-test/setup.sh`
+(`LOCAL_ADMIN` / `LOCAL_PASS`, which default to a fixed local value), or in testing notes — exists
+for one purpose: signing in to a throwaway database on a developer's own machine.
+
+- They are **local development accounts only**, created against the local D1 state under
+  `.wrangler/` or an in-memory database.
+- They are **not production credentials**, and none of them grants access to anything deployed.
+- They **must never be included in, copied to, or reused on a production deployment**, and must not
+  be treated as a default or starter password for a real account.
+- They exist **only for local verification** and are discarded whenever the local database is reset.
+
+Real accounts are provisioned individually by an administrator against D1 — see
+[USER_ADMINISTRATION.md](USER_ADMINISTRATION.md). Use `example.invalid` addresses for test accounts
+so they can never collide with, or be mistaken for, a real member of staff. Override the local
+default with `LOCAL_PASS` whenever convenient:
+
+```sh
+LOCAL_ADMIN=you@example.invalid LOCAL_PASS='<your own value>' ./pages-test/setup.sh
+```
+
 ---
 
 ## 3. ⚠ What local testing cannot prove

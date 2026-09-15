@@ -23,3 +23,16 @@ d1-backup*
 r2-backup*
 r2-manifest.json
 r2-keys.txt
+
+# Client drops and third-party review documents. These are working material that
+# arrives in the project root — source workbooks, bi-weekly report exports, and the
+# external source-review PDFs. They are not part of the deliverable and some carry
+# unreleased client data, so they must never be committed.
+#
+# Anchored to the repository root with a leading slash, so the shipped user guide
+# at assets/DN_DC_Project_Tracker_User_Guide.pdf is unaffected.
+/2026_0911 D&C Bi-Weekly Report Data.xlsx
+/DN_Tracker_Source_Review_2026-09-15.pdf
+/FW Design  Construction BiWeekly Report.pdf
+/*.xlsx
+/*.pdf

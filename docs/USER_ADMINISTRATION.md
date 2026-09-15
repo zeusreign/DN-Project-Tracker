@@ -213,6 +213,15 @@ Keep the directory tidy — suspend or remove test accounts once they are no lon
 Each entry shows the date and time, the attempted user, the result, the IP address and browser
 information.
 
+**The view shows the most recent 200 events.** Search, filtering and paging operate on that set, so
+an older sign-in will not be found through this screen. This limit is deliberate for the pilot — it
+keeps the Admin screen to a single fast query and needs no retention policy decision up front.
+Nothing is discarded: every event remains in the `login_events` table and can be queried directly.
+
+If a longer searchable history is needed later, the expansion is server-side paging over
+`login_events`, optionally with a retention policy. Neither is implemented, and neither is required
+for the pilot.
+
 ### Session timeout
 
 Sessions expire after **45 minutes of inactivity**, in addition to the 8-hour and 24-hour limits in
