@@ -22,13 +22,27 @@ function byId(id){return document.getElementById(id)}
 function setValue(id,value){byId(id).value=value==null?"":value}
 function setMoneyValue(id,value){byId(id).value=value==null?"":moneyText(value)}
 function toast(msg){if(!msg)return;var el=byId("toast");el.textContent=msg;el.classList.add("show");setTimeout(function(){el.classList.remove("show")},2800)}
-async function api(path,options){var defaults={"content-type":"application/json"};if(state.csrf)defaults["x-csrf-token"]=state.csrf;var config=Object.assign({},options||{});config.headers=Object.assign(defaults,(options&&options.headers)||{});config.credentials='same-origin';config.cache='no-store';config.redirect='error';var r=await fetch(path,config);var data=await r.json().catch(function(){return{}});if(!r.ok){var fallback=r.status===401?(path==="/api/login"?"The User ID or password is incorrect.":"Your session has expired. Please sign in again."):r.status===423?"This account is temporarily locked. Contact an Administrator or try again later.":r.status===403?"Your account does not have permission to complete this action.":"The tracker could not complete the request. Please try again.";if(r.status===401&&path!=="/api/login"){
+async function api(path,options,retried){var defaults={"content-type":"application/json"};if(state.csrf)defaults["x-csrf-token"]=state.csrf;var config=Object.assign({},options||{});config.headers=Object.assign(defaults,(options&&options.headers)||{});config.credentials='same-origin';config.cache='no-store';config.redirect='error';var r=await fetch(path,config);var data=await r.json().catch(function(){return{}});if(!r.ok){
+// A 403 on a write can simply mean this tab was open while a different sign-in
+// replaced the shared cookie, leaving it holding the previous security token — the
+// old "Stay signed in" failure that looked like a surprise logout. Ask the worker
+// for the token that matches the session the cookie now names, and retry once.
+//
+// This does not weaken the check. The worker still rejects the first attempt, the
+// request never ran, and if the token comes back unchanged the refusal was a real
+// permission decision and is left to stand.
+if(r.status===403&&!retried&&((options&&options.method)||"GET")!=="GET"){var fresh=null;try{fresh=await api("/api/session",null,true)}catch(probeError){fresh=null}
+if(fresh&&fresh.csrf_token&&fresh.csrf_token!==state.csrf){state.csrf=fresh.csrf_token;return api(path,options,true)}}
+var fallback=r.status===401?(path==="/api/login"?"The User ID or password is incorrect.":"Your session has expired. Please sign in again."):r.status===423?"This account is temporarily locked. Contact an Administrator or try again later.":r.status===403?"Your account does not have permission to complete this action.":"The tracker could not complete the request. Please try again.";if(r.status===401&&path!=="/api/login"){
 // A 401 on anything except the sign-in request itself means the session is gone —
 // timed out, expired, or ended elsewhere. The sign-in screen is the only correct
 // destination, and reaching it must not depend on the warning modal having fired:
 // a throttled timer in a background tab means it often has not. Callers catch this
 // and report it with toast(error.message), so the message is deliberately empty and
 // toast() ignores empty messages; showSignIn() has already said it on screen.
+// Every tab shares this cookie, so if it is gone here it is gone everywhere. Tell
+// the others rather than leaving them on a workspace that can no longer save.
+announceSession({type:"signed-out"});
 showSignIn("Your session has expired. Sign in again to continue.");
 var expired=new Error("");expired.sessionExpired=true;throw expired}
 throw new Error(data.error||fallback)}return data}
@@ -71,28 +85,62 @@ function renderRisk(){var rows=visibleProjects().filter(matchesProjectFilters),c
 function renderAll(){renderUnitBar();renderProjects();renderPortfolio();renderDevelopment();renderCost();renderRisk();fitFilterControls()}
 
 async function load(reset){if(reset){state.preset="progress";state.sortKey="source_sort_order";state.sortDir="asc";state.devSortKey="source_sort_order";state.devSortDir="asc";state.unitScope="All";["search","developmentSearch"].forEach(function(id){byId(id).value=""});["statusFilter","riskFilter","developmentStatus"].forEach(function(id){byId(id).value=""});document.querySelectorAll(".preset").forEach(function(b){b.classList.toggle("active",b.dataset.preset==="progress")})}var r=await fetch("/api/bootstrap",{cache:"no-store",credentials:"same-origin",redirect:"error"});if(r.status===401){showSignIn(state.me?"Your session has expired. Sign in again to continue.":"");return false}var data=await r.json();if(!r.ok)throw new Error(data.error||"Tracker unavailable");state.projects=data.projects;state.summary=data.summary;state.updates=data.updates;state.me=data.me;state.csrf=data.me.csrf_token||null;renderProfileHeader();byId("adminNav").hidden=state.me.role!=="admin";byId("addBtn").hidden=!canWrite();byId("saveActivityBtn").hidden=!canWrite();byId("logoutBtn").hidden=state.me.auth_source!=="local";byId("changePasswordBtn").hidden=state.me.auth_source!=="local";renderAll();byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;setView(location.hash.replace("#","")||"projects",!reset);startIdleWatch();if(state.me.auth_source==="local"&&state.me.must_change_password){byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;setTimeout(function(){if(!byId("passwordDialog").open)byId("passwordDialog").showModal()},80)}return true}
-async function signIn(event){event.preventDefault();var button=byId("loginBtn"),message=byId("loginError"),username=byId("loginUsername").value.trim(),password=byId("loginPassword").value;message.textContent="";button.disabled=true;button.textContent="Signing in…";try{await api("/api/login",{method:"POST",body:JSON.stringify({username:username,password:password})});byId("loginForm").reset();await load(true)}catch(error){message.textContent=error.message+" Confirm that the User ID above is your Delaware North email."}finally{button.disabled=false;button.textContent="Sign in"}}
+async function signIn(event){event.preventDefault();var button=byId("loginBtn"),message=byId("loginError"),username=byId("loginUsername").value.trim(),password=byId("loginPassword").value;message.textContent="";button.disabled=true;button.textContent="Signing in…";try{await api("/api/login",{method:"POST",body:JSON.stringify({username:username,password:password})});byId("loginForm").reset();await load(true);announceSession({type:"signed-in"})}catch(error){message.textContent=error.message+" Confirm that the User ID above is your Delaware North email."}finally{button.disabled=false;button.textContent="Sign in"}}
 // --- Inactivity timeout -------------------------------------------------------
 // The duration lives in the worker (IDLE_SECONDS) and arrives on state.me, so
 // nothing here hardcodes a period. These timers only decide when to WARN — the
 // worker is what actually ends a session, which is why a timer firing in a tab
 // that has been sitting idle can never sign anyone out on its own.
-var idleTimers={warn:null,tick:null},idleDeadline=0,idleLastPing=0;
+var idleTimers={warn:null,tick:null},idleDeadline=0,idleLastPing=0,idleLastLocal=0,idleChannel=null;
 function idleSeconds(){return Number(state.me&&state.me.idle_seconds)||0}
 function idleWarningSeconds(){return Number(state.me&&state.me.idle_warning_seconds)||60}
+// How often real input may tell the worker the user is still here. This bounds how
+// stale the worker's last_used_at can be, so it must stay comfortably shorter than
+// the warning window — otherwise the warning loses its lead and can arrive after
+// the session has already ended. Half the warning is a wide margin.
+function idlePingMs(){return Math.max(5000,Math.min(60000,idleWarningSeconds()*500))}
 function clearIdleTimers(){if(idleTimers.warn){clearTimeout(idleTimers.warn);idleTimers.warn=null}if(idleTimers.tick){clearInterval(idleTimers.tick);idleTimers.tick=null}}
 function stopIdleWatch(){clearIdleTimers();if(byId("idleDialog").open)byId("idleDialog").close()}
+// Take the worker at its word: the security token, which changes when a different
+// sign-in replaces the shared cookie, and the authoritative time remaining.
+function adoptSession(data){
+  if(!data)return 0;
+  if(data.csrf_token)state.csrf=data.csrf_token;
+  return Number(data.idle_remaining)||0;
+}
+// The seconds argument is always a figure the worker supplied. With none, fall to
+// what the last bootstrap reported — loading the workspace is a read and does not
+// refresh the session, so a full period must never be assumed here.
 function startIdleWatch(seconds){
   clearIdleTimers();
   if(!state.me||state.me.auth_source!=="local")return;
-  var total=Number(seconds)>0?Number(seconds):idleSeconds();
+  var total=Number(seconds);
+  if(!(total>0))total=Number(state.me.idle_remaining)||idleSeconds();
   if(!total)return;
   if(byId("idleDialog").open)byId("idleDialog").close();
   idleDeadline=Date.now()+total*1000;
-  idleTimers.warn=setTimeout(openIdleWarning,Math.max(0,total-idleWarningSeconds())*1000);
+  idleTimers.warn=setTimeout(function(){openIdleWarning()},Math.max(0,total-idleWarningSeconds())*1000);
 }
-function openIdleWarning(){
+// Never warn on the strength of a local timer alone. It may have been throttled in
+// a background tab and fired after the worker already ended the session, and
+// another tab sharing this login may have kept the session alive. Ask first — the
+// probe is a GET, so asking never extends anything, and api() sends an expired
+// session straight to the sign-in screen.
+async function openIdleWarning(){
   if(!state.me)return;
+  var data;
+  // An expired session has already been sent to the sign-in screen by api(). Any
+  // other failure means the question could not be asked — offline, or a blip — so
+  // try again shortly rather than going quiet and never warning at all.
+  try{data=await api("/api/session")}catch(error){
+    if(!error||!error.sessionExpired){clearIdleTimers();idleTimers.warn=setTimeout(function(){openIdleWarning()},15000)}
+    return;
+  }
+  var left=adoptSession(data);
+  if(left<=0){stopIdleWatch();showSignIn("You were signed out after a period of inactivity. Sign in again to continue.");return}
+  if(left>idleWarningSeconds()+1){startIdleWatch(left);return}
+  clearIdleTimers();
+  idleDeadline=Date.now()+left*1000;
   if(!byId("idleDialog").open)byId("idleDialog").showModal();
   renderIdleCountdown();
   idleTimers.tick=setInterval(renderIdleCountdown,1000);
@@ -109,35 +157,46 @@ function renderIdleCountdown(){
 // session from here.
 async function confirmIdleExpiry(){
   try{
-    var data=await api("/api/session");
-    startIdleWatch(Number(data.idle_remaining)>0?data.idle_remaining:idleSeconds());
-  }catch(error){
-    stopIdleWatch();
-    showSignIn("You were signed out after a period of inactivity. Sign in again to continue.");
-  }
+    var left=adoptSession(await api("/api/session"));
+    if(left>0){startIdleWatch(left);return}
+  }catch(error){}
+  stopIdleWatch();
+  showSignIn("You were signed out after a period of inactivity. Sign in again to continue.");
 }
 async function staySignedIn(){
   try{
     var data=await api("/api/session",{method:"POST",body:"{}"});
     idleLastPing=Date.now();
-    startIdleWatch(data.idle_remaining);
+    startIdleWatch(adoptSession(data));
+    announceSession({type:"extended"});
   }catch(error){
     stopIdleWatch();
     showSignIn("You were signed out after a period of inactivity. Sign in again to continue.");
   }
 }
-// Real input resets the local countdown. The worker only learns about activity when
-// a request goes out, so a throttled ping keeps the two in step — driven by actual
-// input, so an empty desk never counts as use.
+// Real input is the only thing that extends a session, and it does so by telling
+// the worker — the local clock is never allowed to grant time on its own.
+//
+// The previous version pushed the local deadline forward on every keystroke while
+// only pinging the worker every few minutes. The two drifted apart, and the warning
+// could be scheduled for long after the worker had already ended the session. Now
+// input does exactly one thing: send a throttled ping. The reply sets the deadline,
+// so the browser can only ever count down to a moment the worker agreed to.
 function noteActivity(){
   if(!state.me||state.me.auth_source!=="local")return;
   if(byId("idleDialog").open)return;
-  var total=idleSeconds();if(!total)return;
-  startIdleWatch(total);
-  if(Date.now()-idleLastPing>Math.max(20000,total*250)){
-    idleLastPing=Date.now();
-    api("/api/session",{method:"POST",body:"{}"}).catch(function(){});
-  }
+  if(!idleSeconds())return;
+  var now=Date.now();
+  // Scroll and pointer events arrive in bursts; this keeps the common case to a
+  // couple of comparisons without affecting when the ping itself is due.
+  if(now-idleLastLocal<1000)return;
+  idleLastLocal=now;
+  if(now-idleLastPing<idlePingMs())return;
+  idleLastPing=now;
+  api("/api/session",{method:"POST",body:"{}"}).then(function(data){
+    startIdleWatch(adoptSession(data));
+    announceSession({type:"extended"});
+  }).catch(function(){});
 }
 
 // Browsers throttle timers in a hidden tab — Firefox aggressively — so a warning
@@ -148,15 +207,53 @@ function noteActivity(){
 async function resyncIdleWatch(){
   if(!state.me||state.me.auth_source!=="local")return;
   try{
-    var data=await api("/api/session");
-    startIdleWatch(Number(data.idle_remaining)>0?data.idle_remaining:idleSeconds());
+    var left=adoptSession(await api("/api/session"));
+    if(left<=0){stopIdleWatch();showSignIn("You were signed out after a period of inactivity. Sign in again to continue.");return}
+    startIdleWatch(left);
   }catch(error){}
+}
+
+// --- Tab synchronisation ------------------------------------------------------
+// Tabs in the same browser share one cookie, so they share one session. With no
+// channel between them a tab keeps stale state after another tab signs out or signs
+// in as somebody else, and its next write fails with a 403 that reads as a surprise
+// logout.
+//
+// Only a signal travels here, never a credential: no session token and no security
+// token is ever posted to the channel. A tab that hears something asks the worker
+// for its own copy, so the worker stays the authority for every tab. The channel is
+// same-origin, so it cannot reach another browser, another profile or a private
+// window — separate sign-ins stay isolated from each other.
+function sessionChannel(){
+  if(idleChannel!==null)return idleChannel;
+  idleChannel=false;
+  try{
+    if(typeof BroadcastChannel!=="undefined"){
+      idleChannel=new BroadcastChannel("dnc-session");
+      idleChannel.onmessage=function(event){onSessionMessage(event.data)};
+    }
+  }catch(error){idleChannel=false}
+  return idleChannel;
+}
+function announceSession(message){var channel=sessionChannel();if(channel){try{channel.postMessage(message)}catch(error){}}}
+function onSessionMessage(message){
+  if(!message||typeof message!=="object")return;
+  if(message.type==="signed-out"){
+    if(!state.me)return;
+    stopIdleWatch();
+    showSignIn("You were signed out in another tab. Sign in again to continue.");
+    return;
+  }
+  // A different account may now hold the shared cookie, so reload rather than keep
+  // cached projects, a cached role or a token that belongs to the previous session.
+  if(message.type==="signed-in"){load(false).catch(function(){});return}
+  if(message.type==="extended"){if(state.me)resyncIdleWatch()}
 }
 
 // Signing off always ends at the sign-in screen. Leaving the workspace on screen
 // because the request failed strands the user in a session they cannot use and
 // cannot leave; showSignIn() clears every piece of client-side state regardless.
-async function signOut(){var failed=false;try{await api("/api/logout",{method:"POST",body:"{}"})}catch(error){failed=true}showSignIn(failed?"You were signed off on this device. Sign in again to confirm the session ended.":"")}
+async function signOut(){var failed=false;try{await api("/api/logout",{method:"POST",body:"{}"})}catch(error){failed=true}announceSession({type:"signed-out"});showSignIn(failed?"You were signed off on this device. Sign in again to confirm the session ended.":"")}
 async function changePassword(event){event.preventDefault();var next=byId("newPassword").value,confirm=byId("newPasswordConfirm").value;if(next!==confirm)return toast("The new passwords do not match.");try{await api("/api/account/password",{method:"POST",body:JSON.stringify({current_password:byId("currentPassword").value,new_password:next,confirm_password:confirm})});byId("passwordForm").reset();byId("passwordDialog").close();toast("Your password was changed.");await load(false)}catch(error){toast(error.message)}}
 async function patchFields(id,fields,message){await api("/api/projects/"+id+"/fields",{method:"PATCH",body:JSON.stringify(fields)});if(message)toast(message);await load(false)}
 async function saveInline(el){var before=el.dataset.before||"",after=el.textContent.trim();if(!after){el.textContent=before;return toast("Activity update cannot be blank.")}if(after===before)return;el.setAttribute("contenteditable","false");try{await api("/api/projects/"+el.dataset.activity+"/activity",{method:"POST",body:JSON.stringify({current_update:after})});toast("Activity saved with today's date.");await load(false)}catch(e){el.textContent=before;toast(e.message)}finally{if(canWrite())el.setAttribute("contenteditable","true")}}
@@ -246,12 +343,19 @@ document.addEventListener("change",function(e){if(e.target.matches("[data-field]
 ["search","statusFilter","riskFilter"].forEach(function(id){byId(id).addEventListener("input",function(){renderProjects();renderCost();renderRisk()})});["developmentSearch","developmentStatus"].forEach(function(id){byId(id).addEventListener("input",renderDevelopment)});["adminSearch","adminRoleFilter","adminStatusFilter","adminSort"].forEach(function(id){byId(id).addEventListener("input",function(){state.adminPage=1;renderAdmin()})});
 ["loginSearch","loginOutcomeFilter"].forEach(function(id){byId(id).addEventListener("input",function(){state.loginPage=1;renderLoginEvents()})});
 // Genuine input only — no bare timer, or an unattended desk would look busy.
-["pointerdown","keydown","wheel"].forEach(function(type){document.addEventListener(type,noteActivity,{passive:true})});
+// Typing, clicking, tapping and scrolling are what "still at the desk" looks like.
+// Scrolling was reachable only by mouse wheel before, so reading a long table on a
+// touchscreen or with the scrollbar did not register as use.
+["pointerdown","keydown","wheel","touchstart","scroll"].forEach(function(type){document.addEventListener(type,noteActivity,{passive:true,capture:type==="scroll"})});
 byId("idleStay").addEventListener("click",staySignedIn);
 byId("idleSignOut").addEventListener("click",function(){stopIdleWatch();signOut()});
 // Escape is itself activity, so dismissing the warning means "stay signed in".
 byId("idleDialog").addEventListener("cancel",function(event){event.preventDefault();staySignedIn()});
 document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")resyncIdleWatch()});
+// Open the channel at start-up, not on the first message sent. A tab that only ever
+// listens — the one sitting idle while the user signs out in another — would
+// otherwise never subscribe, and would keep showing a workspace it cannot save.
+sessionChannel();
 byId("uPassword").addEventListener("input",function(){renderStrength("uPassword","uStrengthBar","uStrengthText")});byId("newPassword").addEventListener("input",function(){renderStrength("newPassword","newStrengthBar","newStrengthText")});
 byId("columnsBtn").addEventListener("click",function(){byId("columnMenu").hidden=!byId("columnMenu").hidden});byId("refreshBtn").addEventListener("click",function(){load(true).then(function(loaded){if(loaded)toast("Projects refreshed. Filters and sorting reset.")}).catch(function(e){toast(e.message)})});byId("addBtn").addEventListener("click",function(){byId("addDialog").showModal()});byId("addUserBtn").addEventListener("click",function(){openUser(null)});byId("backupBtn").addEventListener("click",function(){downloadBackup()});byId("saveActivityBtn").addEventListener("click",function(){saveModalActivity().catch(function(e){toast(e.message)})});byId("developmentHistoryBtn").addEventListener("click",function(){var id=byId("developmentId").value;byId("developmentDialog").close();openActivity(id)});byId("detailsForm").addEventListener("submit",function(e){saveDetails(e).catch(function(err){toast(err.message)})});byId("developmentForm").addEventListener("submit",function(e){saveDevelopment(e).catch(function(err){toast(err.message)})});byId("promoteForm").addEventListener("submit",function(e){promoteProject(e).catch(function(err){toast(err.message)})});byId("userForm").addEventListener("submit",function(e){saveUser(e).catch(function(err){toast(err.message)})});byId("addForm").addEventListener("submit",function(e){addProject(e).catch(function(err){toast(err.message)})});["fPrecon","fConstruction","fAddCapp","fAfc"].forEach(function(id){byId(id).addEventListener("input",updateCalc)});
 byId("loginForm").addEventListener("submit",signIn);byId("logoutBtn").addEventListener("click",signOut);byId("changePasswordBtn").addEventListener("click",function(){byId("profileDialog").close();byId("passwordForm").reset();byId("passwordDialogClose").hidden=false;byId("passwordDialogCancel").hidden=false;byId("passwordDialogSignOut").hidden=true;renderStrength("newPassword","newStrengthBar","newStrengthText");byId("passwordDialog").showModal()});byId("passwordDialogClose").addEventListener("click",function(){byId("passwordDialog").close()});byId("passwordDialogCancel").addEventListener("click",function(){byId("passwordDialog").close()});byId("passwordForm").addEventListener("submit",changePassword);

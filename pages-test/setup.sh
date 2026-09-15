@@ -35,7 +35,17 @@ else
   done
 fi
 
-npx wrangler pages dev --port "$PORT" &
+# Optional: run the whole inactivity timeout in a couple of minutes so the warning
+# and the cut-off can be watched by hand. Unset by default, so this local server
+# enforces the same 45 minutes as production. Nothing in the source needs editing:
+#   IDLE_SECONDS_OVERRIDE=120 ./pages-test/setup.sh
+IDLE_ARGS=()
+if [ -n "${IDLE_SECONDS_OVERRIDE:-}" ]; then
+  IDLE_ARGS=(--binding "IDLE_SECONDS_OVERRIDE=$IDLE_SECONDS_OVERRIDE")
+  echo "Inactivity timeout overridden to ${IDLE_SECONDS_OVERRIDE}s FOR THIS LOCAL RUN ONLY."
+fi
+
+npx wrangler pages dev --port "$PORT" ${IDLE_ARGS[@]+"${IDLE_ARGS[@]}"} &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null || true' EXIT
 

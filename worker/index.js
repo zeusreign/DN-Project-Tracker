@@ -28,6 +28,65 @@ const IDLE_SECONDS = 60 * 45;
 // How long before the cut-off the browser warns. Kept below IDLE_SECONDS so a
 // short test value still produces a visible warning.
 const IDLE_WARNING_SECONDS = Math.min(60, Math.floor(IDLE_SECONDS / 2));
+
+// ---------------------------------------------------------------------------
+// WHAT COUNTS AS ACTIVITY
+//
+// Only a request the user actually caused may extend a session. The decision is
+// made here, server-side, and is never delegated to a header the browser sets —
+// a client that could nominate its own requests as "activity" could keep an
+// abandoned desk signed in forever.
+//
+//   • A state-changing request (POST/PATCH/PUT/DELETE) is a deliberate action:
+//     saving a project, an activity update, a profile, a password. It counts.
+//   • POST /api/session is the browser's explicit "I am still here", sent only in
+//     response to real input — see noteActivity() in client.js. It counts.
+//   • Every GET/HEAD/OPTIONS is a READ and does NOT count. That covers the
+//     bootstrap refresh, history panes, exports, avatars and the GET session
+//     probe, so no silent refresh, background poll or health check can hold a
+//     session open.
+//
+// Someone who is reading rather than typing still stays signed in: scrolling,
+// clicking, tapping and typing all fire the activity ping above.
+function countsAsActivity(request) {
+  return !["GET", "HEAD", "OPTIONS"].includes(request.method);
+}
+
+// Seconds of idle time left, as the worker sees it. This is the only number the
+// browser is allowed to count down from — deriving a deadline from local input
+// instead lets the browser believe a session lives longer than it does, and the
+// warning then arrives after the session has already gone.
+//
+// `touched` means this very request just refreshed last_used_at, so the full
+// period is ahead. Otherwise measure from the value read before the update.
+function idleRemainingFor(user, touched, total) {
+  if (touched || !user || !user.session_last_used_at) return total;
+  const last = Date.parse(user.session_last_used_at.replace(" ", "T") + "Z");
+  if (!Number.isFinite(last)) return total;
+  return Math.max(0, total - Math.floor((Date.now() - last) / 1000));
+}
+
+// LOCAL VERIFICATION ONLY. Setting IDLE_SECONDS_OVERRIDE runs the whole timeout in
+// a couple of minutes instead of three quarters of an hour, so the warning and the
+// cut-off can be watched by hand without editing and then un-editing the constant
+// above — which is how a two-minute timeout once reached production.
+//
+// It is deliberately NOT declared in wrangler.toml, so production has no such
+// variable and always uses IDLE_SECONDS. To test:
+//
+//   IDLE_SECONDS_OVERRIDE=120 ./pages-test/setup.sh
+//
+// Clamped to sane bounds so a stray or hostile value cannot stretch the timeout
+// past the session window it is supposed to tighten.
+function idleSecondsFor(env) {
+  const override = Number(env && env.IDLE_SECONDS_OVERRIDE);
+  if (Number.isFinite(override) && override >= 30 && override <= SESSION_SECONDS) return Math.floor(override);
+  return IDLE_SECONDS;
+}
+function idleWarningFor(env) {
+  const total = idleSecondsFor(env);
+  return total === IDLE_SECONDS ? IDLE_WARNING_SECONDS : Math.min(60, Math.floor(total / 2));
+}
 const USER_DIRECTORY_SEED = [
   { first_name: "Brian", last_name: "Hansberry", user_email: "BHansber@delawarenorth.com", role: "viewer" },
   { first_name: "David", last_name: "Frankhouser", user_email: "DFrankho@delawarenorth.com", role: "viewer" },
@@ -274,9 +333,10 @@ function validatePassword(password) {
 }
 
 // `touch` records this request as activity, which is what keeps a session alive.
-// It is false only for the read-only session probe, so that a browser asking "am I
-// still signed in?" cannot keep an abandoned session alive by asking.
-async function localUserFrom(db, request, touch = true) {
+// The caller decides via countsAsActivity(): false for every read, so neither a
+// browser asking "am I still signed in?" nor a background refresh can keep an
+// abandoned session alive. `idleSeconds` is the timeout being enforced.
+async function localUserFrom(db, request, touch = true, idleSeconds = IDLE_SECONDS) {
   const token = cookieValue(request, "dnc_session");
   if (!token) return null;
   const tokenHash = await sha256(token);
@@ -291,7 +351,7 @@ async function localUserFrom(db, request, touch = true) {
       AND s.created_at > datetime('now', '-24 hours')
       AND s.last_used_at > datetime('now', ? || ' seconds')
       AND d.account_status = 'active' AND d.site_access_status = 'authorized'
-  `).bind(tokenHash, -IDLE_SECONDS).first();
+  `).bind(tokenHash, -idleSeconds).first();
   if (!session) return null;
   // Idleness is per session row, so one signed-in browser going quiet never
   // affects the same person's other sessions.
@@ -316,7 +376,7 @@ async function localUserFrom(db, request, touch = true) {
 }
 
 async function authenticatedUser(db, request, env, touch = true) {
-  const local = await localUserFrom(db, request, touch);
+  const local = await localUserFrom(db, request, touch, idleSecondsFor(env));
   if (local) return local;
   if (String(env?.ALLOW_PLATFORM_AUTH || "").toLowerCase() === "true") {
     const platform = platformUserFrom(request);
@@ -959,11 +1019,12 @@ async function handleApi(request, env, url) {
   // no longer valid, so it runs ahead of the authentication, role and CSRF gates.
   // See handleLogout() for why that does not weaken them.
   if (request.method === "POST" && url.pathname === "/api/logout") return handleLogout(request, env);
-  // Reading /api/session reports how much idle time is left and deliberately does
-  // not count as activity — otherwise a browser asking the question would answer it.
-  // POSTing to the same path is the explicit "Stay signed in", which does.
-  const sessionProbe = request.method === "GET" && url.pathname === "/api/session";
-  const user = await authenticatedUser(env.DB, request, env, !sessionProbe);
+  // One rule, applied to every route below: see countsAsActivity(). Reading
+  // /api/session reports how much idle time is left without counting as activity —
+  // otherwise a browser asking the question would answer it. POSTing to the same
+  // path is the explicit "Stay signed in", which does count.
+  const activity = countsAsActivity(request);
+  const user = await authenticatedUser(env.DB, request, env, activity);
   if (!user?.id || !user?.email) return error("Sign in with an authorized account to continue.", 401);
   const role = await roleFor(env.DB, env, user);
   if (!role) return error("This account is suspended or not authorized.", 403);
@@ -978,14 +1039,19 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/session" && (request.method === "GET" || request.method === "POST")) {
     // Reaching here means the session is still valid. After a POST the row was just
     // touched, so the full period is left; a GET reports what is actually left.
-    const elapsed = sessionProbe && user.session_last_used_at
-      ? Math.floor((Date.now() - Date.parse(user.session_last_used_at.replace(" ", "T") + "Z")) / 1000)
-      : 0;
+    //
+    // The current CSRF token rides along so a tab that was open when a different
+    // sign-in replaced the shared cookie can pick up the matching token instead of
+    // failing its next write with a 403 and stranding the user. This gives nothing
+    // away: the token is already handed to any authenticated caller by
+    // /api/bootstrap, the response is same-origin only, and the cookie is
+    // SameSite=Strict, so no cross-site page can read either.
     return json({
       ok: true,
-      idle_seconds: IDLE_SECONDS,
-      idle_warning_seconds: IDLE_WARNING_SECONDS,
-      idle_remaining: Math.max(0, IDLE_SECONDS - (Number.isFinite(elapsed) ? elapsed : 0)),
+      idle_seconds: idleSecondsFor(env),
+      idle_warning_seconds: idleWarningFor(env),
+      idle_remaining: idleRemainingFor(user, activity, idleSecondsFor(env)),
+      csrf_token: user.csrf_token || null,
     });
   }
 
@@ -1011,9 +1077,12 @@ async function handleApi(request, env, url) {
         must_change_password: Boolean(user.must_change_password),
         csrf_token: user.csrf_token || null,
         // The browser derives its countdown and warning from these, so IDLE_SECONDS
-        // stays the only place the timeout is defined.
-        idle_seconds: IDLE_SECONDS,
-        idle_warning_seconds: IDLE_WARNING_SECONDS,
+        // stays the only place the timeout is defined. idle_remaining is what is
+        // actually left right now: loading the workspace is a read and does not
+        // refresh the session, so the browser must not assume a full period here.
+        idle_seconds: idleSecondsFor(env),
+        idle_warning_seconds: idleWarningFor(env),
+        idle_remaining: idleRemainingFor(user, activity, idleSecondsFor(env)),
         profile,
       },
     }, 200, sessionHeaders);
@@ -1677,7 +1746,10 @@ async function exportProjects(request, env, format, authenticated = null, knownR
   if (!env.DB) return error("Database unavailable", 503);
   await ensureSeed(env.DB);
   await ensureDirectorySeed(env.DB);
-  const user = authenticated || await authenticatedUser(env.DB, request, env);
+  // Reached directly at /export.<fmt> as well as through handleApi, so the activity
+  // rule has to be applied here too — downloading a file is a read, and used to be
+  // the one authenticated GET that still pushed the idle timeout back.
+  const user = authenticated || await authenticatedUser(env.DB, request, env, countsAsActivity(request));
   if (!user?.id || !user?.email) return error("Sign in is required", 401);
   const role = knownRole || await roleFor(env.DB, env, user);
   if (!role) return error("This account is not authorized", 403);

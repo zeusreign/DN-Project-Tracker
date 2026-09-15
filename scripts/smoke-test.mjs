@@ -524,20 +524,248 @@ const signOutSource = CLIENT.slice(CLIENT.indexOf("async function signOut("), CL
 function buildSignOut(apiImplementation) {
   const shown = [];
   const toasted = [];
+  const announced = [];
   // `toast` is stubbed so that a regression shows up as "the sign-in screen was
-  // never reached" rather than as an incidental ReferenceError.
-  const run = new Function("api", "showSignIn", "toast", signOutSource + ";return signOut;")(
+  // never reached" rather than as an incidental ReferenceError. `announceSession`
+  // is stubbed for the same reason, and recorded so the other-tab signal is checked
+  // rather than merely tolerated.
+  const run = new Function("api", "showSignIn", "toast", "announceSession", signOutSource + ";return signOut;")(
     apiImplementation, (message) => shown.push(message), (message) => toasted.push(message),
+    (message) => announced.push(message),
   );
-  return { run, shown, toasted };
+  return { run, shown, toasted, announced };
 }
 const succeedingSignOut = buildSignOut(async () => ({ ok: true }));
 await succeedingSignOut.run();
 assert.deepEqual(succeedingSignOut.shown, [""], "a successful sign-out shows the sign-in screen");
+assert.deepEqual(succeedingSignOut.announced, [{ type: "signed-out" }],
+  "signing out tells the other tabs, so they do not sit on a workspace that can no longer save");
 const failingSignOut = buildSignOut(async () => { throw new Error("Your session has expired. Please sign in again."); });
 await failingSignOut.run();
 assert.equal(failingSignOut.shown.length, 1, "a failed sign-out must still reach the sign-in screen");
 assert.match(failingSignOut.shown[0], /signed off on this device/);
+assert.deepEqual(failingSignOut.announced, [{ type: "signed-out" }],
+  "a failed sign-out still tells the other tabs — the cookie is cleared either way");
+
+// --- Inactivity: what may extend a session, and what the worker reports ---------
+// Three faults are guarded here, all of them previously reproducible:
+//   1. the browser counted down from its own idea of the deadline, so the warning
+//      could be scheduled for minutes after the worker had ended the session;
+//   2. a background read refreshed the session, so an untouched desk stayed alive;
+//   3. a tab holding a replaced security token was signed out instead of resynced.
+const newestSession = () =>
+  database.prepare("SELECT id, user_id, last_used_at FROM login_sessions ORDER BY id DESC LIMIT 1").get();
+const lastUsed = (id) =>
+  database.prepare("SELECT last_used_at FROM login_sessions WHERE id = ?").get(id).last_used_at;
+// Ageing the row is the only honest way to simulate an idle desk: it is exactly
+// what the worker measures, and it touches nothing else.
+const ageSession = (id, seconds) => database.prepare(
+  "UPDATE login_sessions SET last_used_at = datetime('now', '-" + Number(seconds) + " seconds') WHERE id = ?",
+).run(id);
+const sessionState = async (cookie) => {
+  const response = await worker.fetch(
+    new Request("https://tracker.example/api/session", { headers: { cookie } }), env, {},
+  );
+  return { status: response.status, body: response.status === 200 ? await response.json() : null };
+};
+
+const idleCookie = await loginAs(billDirectory.username, replacementTestPassword);
+const idleSession = newestSession();
+const idleTotal = (await sessionState(idleCookie)).body.idle_seconds;
+assert.ok(idleTotal > 0, "the worker must publish the timeout it enforces");
+
+// A read reports the truth and changes nothing. This is the number the browser
+// counts down from, so if it were generous the warning would arrive too late.
+ageSession(idleSession.id, 300);
+const agedStamp = lastUsed(idleSession.id);
+const afterProbe = await sessionState(idleCookie);
+assert.equal(afterProbe.status, 200);
+assert.equal(lastUsed(idleSession.id), agedStamp, "reading /api/session must not count as activity");
+assert.ok(Math.abs(afterProbe.body.idle_remaining - (idleTotal - 300)) <= 2,
+  "the worker must report the idle time actually left, not a full period");
+
+// Astra's finding 3: a background bootstrap used to reset remaining idle time from
+// about 300 seconds back to the full period. Loading the workspace is a read.
+const backgroundBootstrap = await bootstrapWith(idleCookie);
+assert.equal(backgroundBootstrap.status, 200);
+assert.equal(lastUsed(idleSession.id), agedStamp, "a background bootstrap must not extend the session");
+const bootstrapMe = (await backgroundBootstrap.json()).me;
+assert.ok(Math.abs(bootstrapMe.idle_remaining - (idleTotal - 300)) <= 2,
+  "bootstrap must hand the browser the real remaining time, so it cannot assume a full period");
+
+// The top-level /export.<fmt> route authenticates on its own path rather than
+// through handleApi, and was the one authenticated GET still pushing the timeout
+// back. Downloading a file is a read.
+assert.equal((await worker.fetch(new Request("https://tracker.example/export.csv", {
+  headers: { cookie: idleCookie },
+}), env, {})).status, 200);
+assert.equal(lastUsed(idleSession.id), agedStamp, "a top-level export download must not extend the session");
+
+// The explicit ping is the one request that does extend, and it is only ever sent
+// in response to real input.
+const staySignedIn = await worker.fetch(new Request("https://tracker.example/api/session", {
+  method: "POST", headers: { cookie: idleCookie, "content-type": "application/json", "x-csrf-token": await csrfFor(idleCookie) },
+  body: "{}",
+}), env, {});
+assert.equal(staySignedIn.status, 200);
+assert.notEqual(lastUsed(idleSession.id), agedStamp, "a deliberate activity ping must extend the session");
+assert.equal((await staySignedIn.json()).idle_remaining, idleTotal, "extending leaves the full period");
+
+// Past the cut-off nothing revives it — including the ping, which must not be a way
+// to renew a session the worker has already ended.
+ageSession(idleSession.id, idleTotal + 60);
+assert.equal((await sessionState(idleCookie)).status, 401, "an idled-out session must stop authenticating");
+assert.equal((await bootstrapWith(idleCookie)).status, 401);
+assert.equal((await worker.fetch(new Request("https://tracker.example/api/session", {
+  method: "POST", headers: { cookie: idleCookie, "content-type": "application/json" }, body: "{}",
+}), env, {})).status, 401, "an expired session must not be renewable");
+
+// Idleness is per session row: one browser going quiet never signs the person out
+// of another, which is what keeps this safe to enforce at all.
+const activeCookie = await loginAs(billDirectory.username, replacementTestPassword);
+const activeSession = newestSession();
+const quietCookie = await loginAs(billDirectory.username, replacementTestPassword);
+ageSession(newestSession().id, idleTotal + 60);
+assert.equal((await bootstrapWith(quietCookie)).status, 401, "the idle session ends");
+assert.equal((await bootstrapWith(activeCookie)).status, 200, "the other session survives it");
+assert.equal(lastUsed(activeSession.id), lastUsed(activeSession.id));
+
+// --- A tab holding a replaced security token resyncs instead of being ejected ---
+// Signing in again replaces the shared cookie. The first tab still holds the old
+// token; its next write is correctly refused, and it must be able to recover by
+// asking for the current one rather than dumping the user at the sign-in screen.
+const staleTab = await loginAs(billDirectory.username, replacementTestPassword);
+const staleCsrf = await csrfFor(staleTab);
+const replacementTab = await loginAs(billDirectory.username, replacementTestPassword);
+const replacementCsrf = await csrfFor(replacementTab);
+assert.notEqual(staleCsrf, replacementCsrf, "a new sign-in must mint a new security token");
+// The gate is untouched: the stale token is still rejected.
+assert.equal((await worker.fetch(new Request("https://tracker.example/api/session", {
+  method: "POST", headers: { cookie: replacementTab, "content-type": "application/json", "x-csrf-token": staleCsrf },
+  body: "{}",
+}), env, {})).status, 403, "CSRF must still reject a token that does not match the session");
+assert.equal((await worker.fetch(new Request("https://tracker.example/api/session", {
+  method: "POST", headers: { cookie: replacementTab, "content-type": "application/json" }, body: "{}",
+}), env, {})).status, 403, "CSRF must still reject a missing token");
+// And the recovery path exists: a read hands back the token that does match.
+const resyncProbe = await sessionState(replacementTab);
+assert.equal(resyncProbe.status, 200);
+assert.equal(resyncProbe.body.csrf_token, replacementCsrf,
+  "the session probe must return the current token so a stale tab can resync");
+assert.equal((await worker.fetch(new Request("https://tracker.example/api/session", {
+  method: "POST", headers: { cookie: replacementTab, "content-type": "application/json", "x-csrf-token": resyncProbe.body.csrf_token },
+  body: "{}",
+}), env, {})).status, 200, "the resynced token must be accepted");
+
+// Leave the table as this block found it — the checks below count this user's
+// sessions, and the tabs opened above were never signed out.
+database.prepare("DELETE FROM login_sessions WHERE user_id = ?").run(billDirectory.id);
+
+// --- The browser half: local input must not grant time by itself ----------------
+// Astra's finding 1. The old noteActivity() pushed the local deadline forward on
+// every keystroke but only told the worker every 11 minutes at the 45-minute
+// setting, so the browser believed the session outlived what the worker would
+// honour and the warning could be scheduled for after it had already ended.
+const idleBlockSource = CLIENT.slice(
+  CLIENT.indexOf("var idleTimers="), CLIENT.indexOf("function onSessionMessage("),
+);
+function buildIdleBlock(sessionReply) {
+  const dialog = { open: false, close() { this.open = false; }, showModal() { this.open = true; }, textContent: "" };
+  const calls = [];
+  const api = async (path, options) => {
+    calls.push({ path, method: (options && options.method) || "GET" });
+    return sessionReply;
+  };
+  const state = { me: { auth_source: "local", idle_seconds: 2700, idle_warning_seconds: 60, idle_remaining: 2700 }, csrf: "old-token" };
+  const built = new Function(
+    "state", "byId", "api", "showSignIn", "BroadcastChannel",
+    idleBlockSource + ";return {noteActivity:noteActivity,startIdleWatch:startIdleWatch," +
+      "clearIdleTimers:clearIdleTimers,deadline:function(){return idleDeadline}};",
+  ).call(null, state, () => dialog, api, () => {}, undefined);
+  return { ...built, calls, state };
+}
+{
+  const idle = buildIdleBlock({ idle_remaining: 2700, csrf_token: "fresh-token" });
+  // Pretend the worker said only 100 seconds are left.
+  idle.startIdleWatch(100);
+  const beforeInput = idle.deadline();
+  assert.ok(Math.abs(beforeInput - (Date.now() + 100000)) < 2000, "the countdown starts from the worker's figure");
+
+  // Typing. The deadline must NOT move until the worker has answered.
+  idle.noteActivity();
+  assert.equal(idle.deadline(), beforeInput,
+    "local input must not extend the deadline on its own — this is the drift Astra reproduced");
+  assert.deepEqual(idle.calls, [{ path: "/api/session", method: "POST" }],
+    "input sends one activity ping");
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(idle.deadline() > beforeInput + 2_000_000,
+    "once the worker confirms, the deadline moves to what the worker granted");
+
+  // The ping is throttled, so a burst of input is not a request per keystroke.
+  idle.noteActivity(); idle.noteActivity(); idle.noteActivity();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(idle.calls.length, 1, "further input inside the throttle window sends nothing further");
+  idle.clearIdleTimers();
+}
+{
+  // A tab holding a replaced token adopts the current one from the worker's reply,
+  // so its next write is signed correctly instead of being refused as a 403.
+  const idle = buildIdleBlock({ idle_remaining: 2700, csrf_token: "fresh-token" });
+  idle.startIdleWatch(100);
+  assert.equal(idle.state.csrf, "old-token");
+  idle.noteActivity();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(idle.state.csrf, "fresh-token",
+    "a tab must adopt the current security token rather than keep a replaced one");
+  idle.clearIdleTimers();
+}
+
+// --- The browser half: what a tab does when a sibling tab changes the session ---
+// Tabs share one cookie. Without this a tab kept a workspace on screen after the
+// session it belonged to had been signed out somewhere else.
+const tabMessageSource = CLIENT.slice(
+  CLIENT.indexOf("function onSessionMessage("), CLIENT.indexOf("async function signOut("),
+);
+function buildTabHandler(signedIn = true) {
+  const calls = { shown: [], loaded: [], resynced: [], stopped: 0 };
+  const run = new Function(
+    "state", "showSignIn", "stopIdleWatch", "load", "resyncIdleWatch",
+    tabMessageSource + ";return onSessionMessage;",
+  )(
+    { me: signedIn ? { auth_source: "local" } : null },
+    (message) => calls.shown.push(message),
+    () => { calls.stopped += 1; },
+    (reset) => { calls.loaded.push(reset); return Promise.resolve(); },
+    () => { calls.resynced.push(true); },
+  );
+  return { run, calls };
+}
+const signedOutTab = buildTabHandler();
+signedOutTab.run({ type: "signed-out" });
+assert.equal(signedOutTab.calls.shown.length, 1, "a sign-out elsewhere must move this tab to the sign-in screen");
+assert.match(signedOutTab.calls.shown[0], /signed out in another tab/);
+assert.equal(signedOutTab.calls.stopped, 1, "and must stop its idle countdown");
+
+const replacedTab = buildTabHandler();
+replacedTab.run({ type: "signed-in" });
+assert.deepEqual(replacedTab.calls.loaded, [false],
+  "a sign-in elsewhere must reload, since the cookie may now belong to a different account");
+
+const extendedTab = buildTabHandler();
+extendedTab.run({ type: "extended" });
+assert.equal(extendedTab.calls.resynced.length, 1,
+  "an extension elsewhere must be re-checked against the worker, never trusted as a figure");
+assert.equal(extendedTab.calls.shown.length, 0, "and must not disturb the tab otherwise");
+
+// A tab that is already signed out stays put, and junk on the channel is ignored.
+const idleTab = buildTabHandler(false);
+idleTab.run({ type: "signed-out" });
+assert.equal(idleTab.calls.shown.length, 0, "a tab already signed out needs no further handling");
+const noisyTab = buildTabHandler();
+[null, undefined, "signed-out", 42, {}, { type: "nonsense" }].forEach((junk) => noisyTab.run(junk));
+assert.equal(noisyTab.calls.shown.length + noisyTab.calls.loaded.length + noisyTab.calls.resynced.length, 0,
+  "only recognised messages may act; the channel is not a command surface");
 
 // --- An administrator's password reset ends that user's sessions ---------------
 // A reset that leaves the old sessions alive does not take the account back:
