@@ -51,7 +51,8 @@ npm run deploy               # = npm run build:pages && wrangler pages deploy
 ```
 
 `npm run build:pages` writes `pages-dist/_worker.js` and prints the bundle size. It **fails the
-build** if the bundle exceeds the 3 MB gzip limit.
+build** only if the bundle exceeds Cloudflare's 64 MiB uncompressed limit, which it is nowhere
+near.
 
 > **A deploy replaces code only.** It never reads, writes or migrates D1, and never touches R2
 > objects. Live data is unaffected by shipping — that is why no backup is required for an ordinary
@@ -60,12 +61,20 @@ build** if the bundle exceeds the 3 MB gzip limit.
 ### Bundle headroom
 
 ```
-pages-dist/_worker.js   ≈3.69 MB raw   /   ≈2.57 MB gzip   (~85% of the 3 MB free-plan limit)
+pages-dist/_worker.js   3,907,857 bytes uncompressed = 3.73 MiB   (~6% of the 64 MiB limit)
+                        2,705,609 bytes gzip         = 2.58 MiB   (reference only)
 ```
 
-The Help PDF and seven staff photographs are compiled into the bundle by `scripts/bundle.mjs`.
-Adding further embedded assets will break the deploy; the fix would be to serve them from R2
-instead.
+**Cloudflare enforces 64 MiB measured uncompressed, the same on the Free and Paid plans**
+([limits](https://developers.cloudflare.com/workers/platform/limits/)). Compressed size is not
+checked. The older 3 MiB (Free) / 10 MiB (Paid) *gzip* limits were removed on
+[4 September 2026](https://developers.cloudflare.com/changelog/post/2026-09-04-increased-worker-size-limit/).
+
+The Help PDF and seven staff photographs are compiled into the bundle by `scripts/bundle.mjs`, so
+it grows whenever an embedded asset is added. There is ample headroom; if it ever became a problem
+the fix would be to serve those assets from R2 instead. `build-pages.sh` also prints a note past an
+**internal** 16 MiB advisory threshold — that one is ours, not Cloudflare's, and does not block a
+deploy.
 
 ### Schema changes are a separate, deliberate step
 

@@ -95,8 +95,12 @@ quickly. Use `/health` for uptime checks; it touches no data.
 
 ### 4.4 Not a cost, but worth knowing
 
-The deployed bundle is around **2.57 MB gzipped against a 3 MB limit** (~85%). Exceeding it blocks
-the deploy rather than costing money. See [DEPLOY.md](DEPLOY.md).
+The deployed bundle is about **3.73 MiB uncompressed against Cloudflare's 64 MiB limit** (~6%).
+The limit is measured uncompressed and is the same on the Free and Paid plans; compressed size is
+not checked at all since
+[4 September 2026](https://developers.cloudflare.com/changelog/post/2026-09-04-increased-worker-size-limit/).
+Exceeding it would block a deploy rather than cost money, but there is no realistic prospect of
+that here. See [DEPLOY.md](DEPLOY.md).
 
 ---
 
