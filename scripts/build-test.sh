@@ -47,21 +47,10 @@ if [[ "$src_sum" != "$dst_sum" ]]; then
 fi
 
 # Guard against the one mistake that would defeat the whole isolation: a test
-# config that still points at a production resource.
-PROD_D1="94241844-c709-445f-a71c-49f8b65a7cfd"
-if grep -q "$PROD_D1" "$test_dir/wrangler.toml"; then
-  echo "ERROR: test-env/wrangler.toml references the PRODUCTION D1 database." >&2
-  exit 1
-fi
-if grep -qE '^[[:space:]]*bucket_name[[:space:]]*=[[:space:]]*"dnc-tracker-assets"' "$test_dir/wrangler.toml"; then
-  echo "ERROR: test-env/wrangler.toml references the PRODUCTION R2 bucket." >&2
-  exit 1
-fi
-if ! grep -qE '^[[:space:]]*ALLOW_PLATFORM_AUTH[[:space:]]*=[[:space:]]*"false"' "$test_dir/wrangler.toml"; then
-  echo "ERROR: ALLOW_PLATFORM_AUTH is not \"false\" in test-env/wrangler.toml." >&2
-  echo "       When true, anyone can become an administrator by sending a header." >&2
-  exit 1
-fi
+# config that still points at a production resource. The assertions live in
+# scripts/check-deploy-target.sh so the resource names are defined once and
+# cannot drift between the build script and the deploy scripts.
+bash "$project_root/scripts/check-deploy-target.sh" test
 
 echo
 echo "Test output: $test_out/_worker.js"
@@ -72,4 +61,4 @@ echo "  R2       $(grep -E '^bucket_name' "$test_dir/wrangler.toml" | cut -d'"' 
 echo "  auth     $(grep -E '^ALLOW_PLATFORM_AUTH' "$test_dir/wrangler.toml" | cut -d'"' -f2)"
 echo
 echo "Production output in pages-dist/ is untouched."
-echo "Next:  cd test-env && npx wrangler pages deploy --branch test"
+echo "Next:  npm run deploy:test   (builds and deploys in one step)"

@@ -47,8 +47,15 @@ git status --short && git log --oneline -1
 npm test
 
 # 4. Build and deploy
-npm run deploy               # = npm run build:pages && wrangler pages deploy
+npm run deploy:prod          # production — dnc.lagospm.com
 ```
+
+> **Pick the target explicitly.** `npm run deploy:prod` deploys production;
+> `npm run deploy:test` deploys the isolated review environment
+> (`dnc-tracker-pilot-dev`) and handles its own `cd test-env` internally. Both refuse to run
+> unless the corresponding `wrangler.toml` still names the resources that environment expects —
+> run `npm run check:prod` or `npm run check:test` to see those assertions on their own.
+> `npm run deploy` remains an alias for `deploy:prod`.
 
 `npm run build:pages` writes `pages-dist/_worker.js` and prints the bundle size. It **fails the
 build** only if the bundle exceeds Cloudflare's 64 MiB uncompressed limit, which it is nowhere
@@ -170,7 +177,145 @@ Schema changes, bulk data operations and handovers do. When to take one, how, an
 
 ---
 
-## 7. Related known behaviour
+## 7. The isolated test environment
+
+A second, fully separate environment exists for technical review. It runs **the same application
+code** as production — the identical `_worker.js`, byte for byte. Nothing in `worker/` branches on
+environment. **Isolation comes entirely from the Cloudflare bindings applied at deploy time**, which
+is why the deploy command you choose is the only thing keeping the two apart.
+
+### Environment overview
+
+| | Production | Test |
+|---|---|---|
+| **Pages project** | `dnc-tracker-pilot` | `dnc-tracker-pilot-dev` |
+| **URL** | `dnc.lagospm.com` | `dnc-tracker-pilot-dev.pages.dev` |
+| **D1 database** | `dnc-tracker-pilot` | `dnc-tracker-pilot-dev` |
+| **D1 id** | `94241844-c709-445f-a71c-49f8b65a7cfd` | `34dca57e-bd32-46cd-b154-8c362efaeb4c` |
+| **R2 bucket** | `dnc-tracker-assets` | `dnc-tracker-assets-dev` |
+| **Config file** | `wrangler.toml` (repository root) | `test-env/wrangler.toml` |
+| **Contents** | 74 real projects, real staff directory | 5 synthetic projects, 5 demo accounts |
+
+> The production names are strict **prefixes** of the test names (`dnc-tracker-pilot` /
+> `dnc-tracker-pilot-dev`). Any check written as a substring search matches both. Always compare
+> whole values.
+
+### Deployment workflow
+
+```sh
+npm run deploy:prod          # production — dnc.lagospm.com
+npm run deploy:test          # isolated test — dnc-tracker-pilot-dev
+```
+
+These exist so the command encodes the intent rather than relying on which directory you happen to
+be standing in:
+
+- **`wrangler pages deploy` has no `--config` flag.** It finds configuration by searching *upward*
+  from the working directory. Before these scripts, deploying test meant remembering
+  `cd test-env` first, and forgetting it deployed the client's live site instead.
+- **`deploy:test` performs that `cd` itself**, so `test-env/wrangler.toml` is always the config in
+  effect.
+- **Both refuse to run against a config that does not match.** `scripts/check-deploy-target.sh`
+  asserts the Pages project name, D1 name, D1 id, R2 bucket, both binding names and
+  `ALLOW_PLATFORM_AUTH = "false"`, and explicitly forbids the *other* environment's database id and
+  bucket. A failure aborts before anything is built or uploaded.
+
+Run the assertions on their own, without building or deploying:
+
+```sh
+npm run check:prod
+npm run check:test
+```
+
+`npm run deploy` remains an alias for `deploy:prod`.
+
+### Database workflow
+
+```sh
+npm run db:prod -- --command "SELECT COUNT(*) FROM projects"    # production
+npm run db:test -- --command "SELECT COUNT(*) FROM projects"    # test
+```
+
+These pass the **database id explicitly** and deliberately bypass `wrangler.toml` resolution. The
+binding name `DB` resolves differently depending on which config wrangler happens to find, so a
+command written against `DB` can silently hit either database. An id cannot.
+
+Everything after `--` is handed to `wrangler d1 execute`, so `--json`, `--file=…` and `--yes` all
+work as normal.
+
+> Read-only `SELECT`s are safe to run against production. Confirm `rows_written: 0` in the output.
+> Anything that writes deserves a second look at which command you typed.
+
+### How the test environment was built
+
+1. **Create a separate D1 database** — `dnc-tracker-pilot-dev`.
+2. **Apply migrations** — the six files in `drizzle/`, in order. They are not idempotent
+   (see §2 of [DATABASE.md](DATABASE.md)), so they run exactly once against an empty database.
+3. **Verify the schema matches production** — hash the normalised `sqlite_master` of both databases
+   and compare. Row counts alone would not catch a column-order difference.
+4. **Load synthetic demonstration data** — 5 projects, 9 history rows, 4 business units, taken from
+   the `sanitized-review-pilot` branch. No live record is copied.
+5. **Create dedicated test accounts** — five demonstration logins, below.
+6. **Create a separate R2 bucket** — `dnc-tracker-assets-dev`, private, empty.
+7. **Create a separate Pages project** — `dnc-tracker-pilot-dev`, production branch `test`.
+8. **Deploy** — `npm run deploy:test`.
+9. **Configure a custom domain** when one is available. Not currently attached; the environment is
+   reached at `dnc-tracker-pilot-dev.pages.dev`.
+10. **Verify isolation** — production D1 row counts unchanged, production Pages deployment list
+    unchanged, and the seed markers below still matching.
+
+#### The seed markers are load-bearing
+
+`ensureSeed()` and `ensureDirectorySeed()` populate a database with the 74 real projects and the
+real staff directory **unless** `app_meta` already holds the exact version string the running bundle
+expects. The test database carries those markers, which is why it stays at 5 projects after real
+sign-ins.
+
+```sh
+npm run db:test -- --command "SELECT key, value FROM app_meta"
+```
+
+They must match `SEED_VERSION` and `DIRECTORY_SEED_VERSION` in `worker/index.js`. **If either
+constant is ever changed, update the test database's markers in the same change** — otherwise the
+next request to the test site loads real project data into it.
+
+### Test accounts
+
+Five demonstration logins exist, all on `example.invalid`. Passwords are held outside the repository
+and are not recorded here.
+
+| Account | Role | Business-unit scope |
+|---|---|---|
+| Administrator | admin | All |
+| Viewer | viewer | All |
+| Editor | editor | All |
+| Gaming Viewer | viewer | **Gaming only** |
+| Gaming Editor | editor | **Gaming only** |
+
+The two restricted accounts see 1 of the 5 projects; the three unrestricted accounts see all 5.
+Note that **administrators bypass scope entirely** — `scopeFor()` returns unrestricted for the
+`admin` role before it reads `business_unit_scope`, so an admin with a unit scope still sees
+everything. That is by design, not a fault.
+
+### Safety notes
+
+- **Production accounts are untouched.** The test directory contains only the five synthetic
+  accounts above.
+- **The test deployment never uses production D1 or R2.** Enforced by the deploy checks, not by
+  convention.
+- **`ALLOW_PLATFORM_AUTH` must stay `"false"` in both environments** (see §5). The
+  `sanitized-review-pilot` branch sets it `"true"` for local inspection; that value must never reach
+  a reachable deployment.
+- **Never copy production users into the test environment.** Beyond the obvious, it would arm a
+  second path: `importRequestedProfilePhotos()` matches directory rows by real staff email and would
+  push seven real staff photographs into the test R2 bucket. Today nothing matches, which is the
+  only thing preventing it.
+- **Never run a production database command without confirming the target.** Use `db:prod` /
+  `db:test` rather than a bare `wrangler d1 execute DB`, and check `rows_written` afterwards.
+
+---
+
+## 8. Related known behaviour
 
 - `worker/index.js` intentionally differs from the `CHECKSUMS.sha256` manifest in the repository root,
   because of a required Cloudflare D1 compatibility fix — **[DATABASE.md](DATABASE.md) §6**.
