@@ -1,0 +1,74 @@
+# ISOLATED TEST ENVIRONMENT — technical review copy.
+#
+# This file exists so the review deployment can never reach production. It is a
+# SEPARATE Cloudflare Pages project with SEPARATE D1 and R2 resources. The root
+# wrangler.toml is the production configuration and is not touched by anything
+# here.
+#
+#   Production            Test (this file)
+#   ------------------    ----------------------------
+#   dnc-tracker-pilot     dnc-tracker-pilot-dev
+#   dnc.lagospm.com       dnc-tracker-pilot-dev.pages.dev
+#   D1  94241844-…        D1  34dca57e-…
+#   R2  dnc-tracker-assets  R2  dnc-tracker-assets-dev
+#
+# Build and deploy:
+#   bash scripts/build-test.sh          # from the repository root
+#   cd test-env && npx wrangler pages deploy --branch test
+#
+# Run the deploy from INSIDE test-env. Wrangler searches upward for a config
+# file, so running it from the repository root would pick up the production
+# wrangler.toml and deploy to the live client site. `wrangler pages deploy` has
+# no --config flag, so the working directory is the only selector.
+#
+# A config Pages cannot find fails SILENTLY: the site boots with no bindings and
+# then returns 503 "The project database is not available." on every request,
+# which reads like a database fault and is really a file-location fault.
+
+name = "dnc-tracker-pilot-dev"
+
+# Identical to production, so the review exercises the same runtime behaviour.
+compatibility_date = "2025-09-01"
+
+# Pages "advanced mode": this directory must contain a single `_worker.js` that
+# exports `default { fetch }`. Populated by scripts/build-test.sh, which copies
+# the production build artifact here unmodified. Resolved relative to THIS file.
+pages_build_output_dir = "pages-dist"
+
+
+# --- D1 (test) ---------------------------------------------------------------
+# Separate database. Schema is byte-identical to production (verified by hashing
+# sqlite_master), but the contents are 5 synthetic projects and 5 demonstration
+# accounts. Its app_meta seed markers are set to the values this bundle expects,
+# which is what stops ensureSeed() loading the 74 real Delaware North projects.
+[[d1_databases]]
+binding = "DB"
+database_name = "dnc-tracker-pilot-dev"
+database_id = "34dca57e-bd32-46cd-b154-8c362efaeb4c"
+
+
+# --- R2 (test) ---------------------------------------------------------------
+# Separate, empty, private bucket. The binding name `BUCKET` is fixed by the
+# application — worker/index.js references env.BUCKET at seven call sites — so
+# only the bucket_name differs from production.
+#
+# Keep this bucket PRIVATE. handleAvatar() enforces authentication, CSRF and
+# ownership before streaming bytes; enabling public access would bypass all of it.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "dnc-tracker-assets-dev"
+
+
+# --- Environment variables ---------------------------------------------------
+[vars]
+
+# SECURITY CRITICAL — must remain "false".
+# When "true", platformUserFrom() (worker/index.js:154) trusts the
+# `oai-authenticated-user-*` request headers. Nothing strips those on a public
+# Pages deployment, so ANY caller could send one and arrive as an administrator.
+# The sanitized-review-pilot branch sets this to "true" for local inspection;
+# that value must never be carried onto a reachable deployment, including this one.
+ALLOW_PLATFORM_AUTH = "false"
+
+# Empty, as in production. Does not create a login account.
+ADMIN_EMAILS = ""
