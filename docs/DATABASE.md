@@ -21,7 +21,7 @@ someone already authenticated to that account.
 
 | Table | Holds |
 |---|---|
-| `projects` | The 74 capital and development projects |
+| `projects` | Capital and development projects. 74 seeded, plus anything added since |
 | `business_units` | The 5 units: Corporate, Patina, Gaming, Parks & Resorts, Sportservice |
 | `project_updates` | Dated activity history, one row per project per reporting period |
 | `development_details` | Extra fields for Development Pipeline records |
@@ -78,7 +78,7 @@ npx wrangler d1 execute DB --remote --yes \
 
 ---
 
-## 3. Seed data — how the 74 projects got there
+## 3. Seed data — how the first 74 projects got there
 
 `ensureSeed()` in `worker/index.js` runs on the first API request against an empty database. It
 inserts `worker/seed.js` (the workbook baseline) and then writes a marker into `app_meta`:
@@ -94,6 +94,11 @@ if (marker?.value === SEED_VERSION) return;   // never runs again
 The seed logic contains `UPDATE` and upsert statements. Bumping `SEED_VERSION` to push new workbook
 data into an initialised database can overwrite values that users have since edited in the tracker.
 Later reconciliation must be a separate, agreed, backed-up procedure.
+
+**That procedure exists — see [WORKBOOK_IMPORT.md](WORKBOOK_IMPORT.md).** It reads the workbook,
+reconciles it against the tracker read-only, produces a report for review, and only then writes —
+adding activity history without touching any other project field. Use it for every workbook after
+the initial seed.
 
 ### What the seed contains
 
@@ -114,7 +119,7 @@ The source of truth is `worker/seed.js`. To check production still matches:
 
 ```sh
 npx wrangler d1 execute DB --remote --yes \
-  --command "SELECT COUNT(*) AS projects FROM projects"                    # 74
+  --command "SELECT COUNT(*) AS projects FROM projects"                    # 74 seeded + imports
 npx wrangler d1 execute DB --remote --yes \
   --command "SELECT COUNT(*) AS updates FROM project_updates"              # 127 seeded, plus any added since
 npx wrangler d1 execute DB --remote --yes \

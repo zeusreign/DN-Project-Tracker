@@ -194,7 +194,7 @@ is why the deploy command you choose is the only thing keeping the two apart.
 | **D1 id** | `94241844-c709-445f-a71c-49f8b65a7cfd` | `34dca57e-bd32-46cd-b154-8c362efaeb4c` |
 | **R2 bucket** | `dnc-tracker-assets` | `dnc-tracker-assets-dev` |
 | **Config file** | `wrangler.toml` (repository root) | `test-env/wrangler.toml` |
-| **Contents** | 74 real projects, real staff directory | 5 synthetic projects, 5 demo accounts |
+| **Contents** | Real projects (74 seeded + imports), real staff directory | 5 synthetic projects, 5 demo accounts |
 
 > The production names are strict **prefixes** of the test names (`dnc-tracker-pilot` /
 > `dnc-tracker-pilot-dev`). Any check written as a substring search matches both. Always compare
@@ -266,7 +266,7 @@ work as normal.
 
 #### The seed markers are load-bearing
 
-`ensureSeed()` and `ensureDirectorySeed()` populate a database with the 74 real projects and the
+`ensureSeed()` and `ensureDirectorySeed()` populate a database with the 74 seeded real projects and the
 real staff directory **unless** `app_meta` already holds the exact version string the running bundle
 expects. The test database carries those markers, which is why it stays at 5 projects after real
 sign-ins.

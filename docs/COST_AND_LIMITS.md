@@ -71,7 +71,7 @@ monthly fee). That is a deliberate click, not something the application can trig
 using the application rather than with the amount of data stored.
 
 The reason is structural: opening the application loads the **entire portfolio** in one request —
-all 74 projects, their development details and around 120 activity rows. Every page load, refresh
+every project, its development details and the full activity history. Every page load, refresh
 and export repeats that. A single user working actively can therefore account for a few thousand
 rows read per session.
 

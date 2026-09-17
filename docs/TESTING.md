@@ -120,10 +120,12 @@ rules being tested.
 curl -s -o /dev/null -w "%{http_code}\n" https://dnc.lagospm.com/health
 curl -s -o /dev/null -w "%{http_code}\n" https://dnc-tracker-pilot.pages.dev/health
 
-# data intact
-npx wrangler d1 execute DB --remote --yes --command "SELECT COUNT(*) AS n FROM projects"          # 74
+# data intact. The seeded baseline is 74 projects and 128 update rows; a workbook
+# import adds to both, so treat these as floors, not fixed values — see
+# WORKBOOK_IMPORT.md. What must never fall is the count.
+npx wrangler d1 execute DB --remote --yes --command "SELECT COUNT(*) AS n FROM projects"          # 74 seeded + imports
 npx wrangler d1 execute DB --remote --yes --command "SELECT COUNT(*) AS n FROM user_directory"    # varies
-npx wrangler d1 execute DB --remote --yes --command "SELECT COUNT(*) AS n FROM project_updates"   # 128
+npx wrangler d1 execute DB --remote --yes --command "SELECT COUNT(*) AS n FROM project_updates"   # 128 seeded + imports
 
 # security posture — all three must be 401
 curl -s -o /dev/null -w "%{http_code}\n" https://dnc.lagospm.com/api/bootstrap

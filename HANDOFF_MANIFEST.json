@@ -8,7 +8,7 @@
     "branch": "dev",
     "working_tree": "clean apart from this manifest and CHECKSUMS.sha256",
     "self_reference_note": "CHECKSUMS.sha256 cannot list its own hash, so it is the only tracked file absent from it. This manifest IS listed, because it is written first and hashed afterwards. Both files are generated from commit 3730d28 and therefore postdate it; every other file is byte-identical to that commit.",
-    "tracked_file_count": 75,
+    "tracked_file_count": 76,
     "commits_since_last_manifest": [
       "59b71a1  Update bundle size checks for current Cloudflare limits",
       "1ce6f0b  Add isolated test environment configuration",
@@ -52,7 +52,8 @@
     "dependencies_added": "none — the .xlsx reader is built on node:zlib and the zip central directory",
     "dates_policy": "Report dates are never derived. scripts/workbook/import-<date>.json states both explicitly and a run without them fails rather than guessing, because the workbook's own 'Previous Week Update' column was measured to be an unreliable roll-forward.",
     "idempotence": "Deterministic keys on the UNIQUE project_updates.source_key column, guarded UPDATEs, hash-guarded audit rows and a per-report app_meta run marker. Verified by executing the same file twice against production: the second run wrote 0 rows and left the database byte-size unchanged.",
-    "schema_migration_required": false
+    "schema_migration_required": false,
+    "documentation": "docs/WORKBOOK_IMPORT.md — the fortnightly runbook, including the pipeline in execution order, the mandatory backup and how to verify it, how to read the reconciliation report, and the rules that must not be relaxed."
   },
   "production_data_state": {
     "as_of_utc": "2026-09-17T08:30:00Z",
@@ -101,6 +102,6 @@
     "npm_test": "pass",
     "suite": "build, ESM artifact validation, smoke suite including session-timeout, background-activity, CSRF-resync and multi-tab regression tests",
     "workbook_suites": "scripts/workbook-parse-test.mjs, scripts/reconcile-test.mjs, scripts/apply-test.mjs — all pass; each regression test was confirmed to fail when its fix is reverted",
-    "checksums": "CHECKSUMS.sha256 covers all 74 other tracked files and verifies clean"
+    "checksums": "CHECKSUMS.sha256 covers all 75 other tracked files and verifies clean"
   }
 }

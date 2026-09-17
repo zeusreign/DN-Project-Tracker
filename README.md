@@ -74,6 +74,7 @@ Operational guides live in `docs/`. Each topic is documented in one place.
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Deploy a code change, or roll a release back |
 | [docs/BACKUP_AND_RESTORE.md](docs/BACKUP_AND_RESTORE.md) | Back up and restore the database and files, and verify a restore |
 | [docs/DATABASE.md](docs/DATABASE.md) | Understand the schema, migrations, seed data and known data behaviours |
+| [docs/WORKBOOK_IMPORT.md](docs/WORKBOOK_IMPORT.md) | Import a bi-weekly D&C workbook — the fortnightly reconciliation procedure |
 | [docs/USER_ADMINISTRATION.md](docs/USER_ADMINISTRATION.md) | Create, activate, suspend or remove a user |
 | [docs/PERMISSIONS.md](docs/PERMISSIONS.md) | Understand roles and business-unit access |
 | [docs/STORAGE.md](docs/STORAGE.md) | Understand how profile photographs are stored in R2 |
