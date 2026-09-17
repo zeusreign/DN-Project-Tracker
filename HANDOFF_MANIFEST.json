@@ -1,55 +1,106 @@
 {
-  "package": "DN_Project_Tracker_Faheem_Handoff",
-  "prepared_utc": "2026-09-08T06:20:50.201191+00:00",
-  "source_commit": "514f5f0cb1cf6b4f4c08ed0e7f30da77fbb6ee71",
-  "source_saved_version": 25,
-  "audit_change_deployed_to_original_live_site": false,
-  "content_type": "Full contractor source; workbook-derived data and directory metadata; not synthetic-only",
-  "data_boundary": "Embedded workbook seed only; no current live database or R2 export",
-  "seed": {
-    "project_count": 74,
-    "reporting_periods": [
-      "2026-08-28"
+  "application": "DN D&C Project Tracker",
+  "package": "DN-Project-Tracker-handoff",
+  "prepared_utc": "2026-09-17T08:35:00Z",
+  "source": {
+    "git_commit": "3730d287b237b8d2e7df5beae18649df3a3ebcc1",
+    "git_commit_short": "3730d28",
+    "branch": "dev",
+    "working_tree": "clean apart from this manifest and CHECKSUMS.sha256",
+    "self_reference_note": "CHECKSUMS.sha256 cannot list its own hash, so it is the only tracked file absent from it. This manifest IS listed, because it is written first and hashed afterwards. Both files are generated from commit 3730d28 and therefore postdate it; every other file is byte-identical to that commit.",
+    "tracked_file_count": 75,
+    "commits_since_last_manifest": [
+      "59b71a1  Update bundle size checks for current Cloudflare limits",
+      "1ce6f0b  Add isolated test environment configuration",
+      "fc77877  Add isolated test environment deployment workflow",
+      "3730d28  Add workbook import and reconciliation workflow"
     ]
   },
-  "original_tracked_file_count": 39,
-  "original_tracked_files_preserved_byte_for_byte": 36,
-  "export_adjustments": {
-    "worker/index.js": "Remove all legacy PILOT_CREDENTIALS hash/salt records; retain source behavior with empty credentials.",
-    ".openai/hosting.json": "Remove original Sites project identity; preserve DB and BUCKET logical bindings.",
-    "scripts/smoke-test.mjs": "Assert zero preconfigured password accounts; generate per-run test passwords."
+  "deployment": {
+    "platform": "Cloudflare Pages (advanced mode, Direct Upload)",
+    "project": "dnc-tracker-pilot",
+    "deployment_id": "e01712e5-30c0-437d-aa5f-32b7a3360d3c",
+    "environment": "Production",
+    "branch": "handoff",
+    "deployed_utc": "2026-09-15T07:26:00Z",
+    "production_url": "https://dnc.lagospm.com",
+    "deployment_url": "https://e01712e5.dnc-tracker-pilot.pages.dev",
+    "commit_uploaded_at": "e199045",
+    "runtime_equivalent_to_this_commit": true,
+    "redeploy_required": false,
+    "bundle_sha256": "a7d51198e39449fd27d0fa380276c52e54db2543d8e4ea79ef5e1991b61b9e8f",
+    "traceability_note": "The deployment was uploaded at commit e199045. Everything committed since then changed only build scripts, npm scripts, documentation, the local test harness and the new workbook import tooling. Verified two ways: `git diff e199045 3730d28 -- worker/ assets/` reports zero files, and rebuilding at 3730d28 reproduces bundle_sha256 above, which is the artifact that was deployed. The running production code is therefore the worker runtime of this commit and no redeploy is required."
   },
-  "database_migration_files": [
-    "drizzle/0000_dnc_project_hub.sql",
-    "drizzle/0001_workbook_structure_and_roles.sql",
-    "drizzle/0002_user_directory.sql",
-    "drizzle/0003_development_pipeline_and_directory.sql",
-    "drizzle/0004_pilot_authentication.sql",
-    "drizzle/0005_profile_photos.sql"
-  ],
-  "profile_photo_files": [
-    "assets/profile-photos/bill.png",
-    "assets/profile-photos/greg.png",
-    "assets/profile-photos/kevin.png",
-    "assets/profile-photos/madeline.png",
-    "assets/profile-photos/maxwell.png",
-    "assets/profile-photos/tim.png",
-    "assets/profile-photos/tom.png"
-  ],
-  "excluded": [
+  "isolated_test_environment": {
+    "purpose": "Technical review copy. Separate Cloudflare resources throughout; it never reaches production data.",
+    "pages_project": "dnc-tracker-pilot-dev",
+    "url": "https://dnc-tracker-pilot-dev.pages.dev",
+    "d1_database": "dnc-tracker-pilot-dev",
+    "d1_database_id": "34dca57e-bd32-46cd-b154-8c362efaeb4c",
+    "r2_bucket": "dnc-tracker-assets-dev",
+    "config_file": "test-env/wrangler.toml",
+    "contents": "5 synthetic projects and 5 demonstration accounts. No live record is present.",
+    "safety_note": "scripts/check-deploy-target.sh is the single definition of what each environment looks like. It asserts the project name, D1 name and id, R2 bucket, both binding names and ALLOW_PLATFORM_AUTH=\"false\", and explicitly forbids the other environment's database id and bucket. Both deploy scripts run it before building or uploading. Note that the production resource names are strict PREFIXES of the test ones, so every assertion anchors on the whole key = \"value\" line; a substring match would pass against either environment."
+  },
+  "workbook_import": {
+    "purpose": "Reconcile a bi-weekly D&C workbook into the tracker without disturbing existing data.",
+    "stages": [
+      "scripts/parse-workbook.mjs        read the .xlsx, emit normalised JSON (no database contact)",
+      "scripts/reconcile-workbook.mjs    match against the tracker, emit a report (read-only SELECTs)",
+      "scripts/apply-workbook-import.mjs generate SQL; execute only with --execute and an explicit --target"
+    ],
+    "dependencies_added": "none — the .xlsx reader is built on node:zlib and the zip central directory",
+    "dates_policy": "Report dates are never derived. scripts/workbook/import-<date>.json states both explicitly and a run without them fails rather than guessing, because the workbook's own 'Previous Week Update' column was measured to be an unreliable roll-forward.",
+    "idempotence": "Deterministic keys on the UNIQUE project_updates.source_key column, guarded UPDATEs, hash-guarded audit rows and a per-report app_meta run marker. Verified by executing the same file twice against production: the second run wrote 0 rows and left the database byte-size unchanged.",
+    "schema_migration_required": false
+  },
+  "production_data_state": {
+    "as_of_utc": "2026-09-17T08:30:00Z",
+    "projects": 76,
+    "project_updates": 164,
+    "user_directory": 78,
+    "audit_log": 81,
+    "last_workbook_import": "2026-09-11 (applied 2026-09-17; app_meta key workbook_import:2026-09-11)",
+    "note": "The September 11 workbook import added 2 projects and 36 history rows. All 128 pre-existing history rows were preserved, including the one user-authored update. Pre-import backup taken and verified by restoring it; see backup_before_import below."
+  },
+  "backup_before_import": {
+    "location": "~/dn-tracker-backups/pre-workbook-import-2026-09-17/d1-full.sql",
+    "sha256": "7ce65a7090bf0a2de887f40977afa6f5db0d39771c74d1b89b5d602499655599",
+    "bytes": 329023,
+    "contents": "Full D1 export at projects=74, project_updates=128, user_directory=78, audit_log=50, business_units=5",
+    "verified": "Restored into a scratch SQLite database; all five table counts matched production exactly.",
+    "in_package": false,
+    "note": "Held outside the repository. It contains password hashes, session records and every staff email address, and must never be committed."
+  },
+  "session_policy": {
+    "inactivity_timeout_seconds": 2700,
+    "inactivity_warning_seconds": 60,
+    "sliding_session_seconds": 28800,
+    "absolute_cap_hours": 24,
+    "activity_rule": "State-changing requests (POST/PATCH/PUT/DELETE) extend a session. All GET/HEAD/OPTIONS reads do not, so no background refresh or poll can keep an idle session alive.",
+    "login_history_display_limit": 200
+  },
+  "local_test_credentials": {
+    "policy": "No password literal exists anywhere in this package.",
+    "detail": "pages-test/setup.sh generates a random 20-character password per run and prints it, or uses LOCAL_PASS when supplied. Local development accounts only; never production credentials and never to be reused on a deployment."
+  },
+  "excluded_from_package": [
     ".git history",
     "node_modules",
-    "generated dist",
-    "old release archives",
-    "live database dumps",
-    "runtime R2 exports",
-    "legacy credential records",
-    "environment secrets"
+    "dist and pages-dist build output",
+    ".wrangler local D1/R2 state",
+    ".claude",
+    ".env and all environment secrets",
+    "API tokens, private keys and Cloudflare credentials",
+    "local databases, database dumps and R2 exports",
+    "client working documents and third-party review PDFs",
+    ".workbook-import/ — parsed workbooks, tracker snapshots, reconciliation reports and generated import SQL, all of which reproduce live project names and the full text of their activity updates",
+    "database backups under ~/dn-tracker-backups/"
   ],
-  "known_implementation_findings": [
-    "business-unit permissions lack server enforcement",
-    "first local administrator must be provisioned after seeding",
-    "original Vite preview requires updating for current auth/photos/transaction semantics",
-    "Pages deployment configuration must be supplied and verified by developer"
-  ]
+  "verification": {
+    "npm_test": "pass",
+    "suite": "build, ESM artifact validation, smoke suite including session-timeout, background-activity, CSRF-resync and multi-tab regression tests",
+    "workbook_suites": "scripts/workbook-parse-test.mjs, scripts/reconcile-test.mjs, scripts/apply-test.mjs — all pass; each regression test was confirmed to fail when its fix is reverted",
+    "checksums": "CHECKSUMS.sha256 covers all 74 other tracked files and verifies clean"
+  }
 }
