@@ -13,6 +13,12 @@
     "check:test": "bash scripts/check-deploy-target.sh test",
     "db:test": "wrangler d1 execute 34dca57e-bd32-46cd-b154-8c362efaeb4c --remote",
     "db:prod": "wrangler d1 execute 94241844-c709-445f-a71c-49f8b65a7cfd --remote",
+    "workbook:parse": "node scripts/parse-workbook.mjs",
+    "workbook:test": "node scripts/workbook-parse-test.mjs",
+    "workbook:reconcile": "node scripts/reconcile-workbook.mjs",
+    "workbook:reconcile:test": "node scripts/reconcile-test.mjs",
+    "workbook:apply": "node scripts/apply-workbook-import.mjs",
+    "workbook:apply:test": "node scripts/apply-test.mjs",
     "validate": "node scripts/validate-artifact.mjs",
     "test": "npm run build && npm run validate && node scripts/smoke-test.mjs"
   },

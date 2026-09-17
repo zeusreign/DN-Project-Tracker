@@ -1,0 +1,69 @@
+{
+  "workbook": "2026_0911 D&C Bi-Weekly Report Data.xlsx",
+  "report_date": "2026-09-11",
+  "previous_report_date": "2026-09-04",
+  "_dates": [
+    "Both dates are stated explicitly and are NEVER derived. A future import with",
+    "no config entry must fail rather than guess a date — the workbook's own",
+    "'Previous Week Update' column was measured to be an unreliable roll-forward:",
+    "of 42 rows matched by CAPP, 13 matched the tracker's current text, 22 matched",
+    "the tracker's PREVIOUS text (the column had been left stale a full cycle), and",
+    "7 matched nothing the tracker had ever held.",
+    "",
+    "previous_report_date = 2026-09-04 is therefore an ASSIGNED date, confirmed by",
+    "the client, not an observed one. The reconciliation step records that",
+    "provenance on every row it proposes so it stays auditable and correctable."
+  ],
+  "excluded_sheets": [
+    "DEAD DEVELOPMENT PROJECTS",
+    "CLOSED PROJECTS",
+    "DASHBOARD",
+    "Sheet1",
+    "THS Openings Chart"
+  ],
+
+  "_approved_new": [
+    "Rows explicitly approved by the client for creation as new projects, keyed",
+    "by the exact cell they came from. Anything else that fails to match is",
+    "reported as unresolved and is NEVER created: an unmatched row is far more",
+    "often a matching failure than a genuinely new project."
+  ],
+  "approved_new": [
+    {
+      "sheet": "Design & Development",
+      "row": 23,
+      "name": "Via Napoli",
+      "note": "Connex Box scope. Lead stays literally 'Jason' and must NOT be mapped to Jason Fatouros."
+    },
+    {
+      "sheet": "PATINA",
+      "row": 9,
+      "identifier": "8740",
+      "note": "Izakaya at DTD - Anaheim takeover. CAPP 8740."
+    }
+  ],
+
+  "_removed_from_approved_new": [
+    "Design & Development row 24, Lincoln Ristorante - East Dining Room/Bar &",
+    "Lounge, initiative 8608. It was approved for creation on the basis of an",
+    "earlier investigation that reported it as unmatched. That was wrong: the",
+    "project already exists as tracker id 70, whose initiative_number is stored",
+    "as the spreadsheet float '8608.0'. Creating it would have duplicated a live",
+    "project. Client decision: treat initiative 8608 as existing project id 70",
+    "and import it as a normal matched row."
+  ],
+
+  "_tracker_only": [
+    "A project absent from the workbook does NOT mean it is finished. Every",
+    "tracker project with no matching workbook row is reported and left alone,",
+    "except the single row listed here, which the client confirmed is complete."
+  ],
+  "tracker_only_decisions": [
+    {
+      "match_name": "Wheeling Island Outfall repair",
+      "action": "mark_complete",
+      "audit_actor": "Workbook Import",
+      "note": "Confirmed complete. Existing history is preserved; only status changes."
+    }
+  ]
+}

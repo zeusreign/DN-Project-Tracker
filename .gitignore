@@ -36,3 +36,10 @@ r2-keys.txt
 /FW Design  Construction BiWeekly Report.pdf
 /*.xlsx
 /*.pdf
+
+# Workbook import working directory. Holds the parsed workbook, the tracker
+# snapshot, the reconciliation report and the generated SQL — every one of which
+# reproduces live project names, project manager names and the full text of
+# their activity updates, straight out of production. Generated output, always
+# reproducible from the workbook plus a fresh read, and never to be committed.
+.workbook-import/
