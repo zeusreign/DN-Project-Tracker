@@ -229,6 +229,42 @@ console.log("Run 2: OK — re-running the import changed nothing");
   console.log("Newer-tracker-update guard: OK");
 }
 
+// --- Audit rows must render on the Admin screen -------------------------------
+// auditRowHtml() in worker/client.js reads the actor as
+//   details.actorName || actor_email || "System"
+// and shows the project name and before -> after values ONLY from details.changes[].
+// The first version wrote the actor into the actor_id column, which the UI never
+// reads, and used a bespoke {fields, before, after} shape. Result: rows that said
+// "Changed by System / project - 21 / Before-and-after values were not recorded".
+{
+  const shaped = report();
+  const built = buildStatements(shaped).statements;
+  const audit = built.filter((s) => s.sql.includes("INSERT INTO audit_log"));
+  assert.ok(audit.length, "audit statements are generated");
+
+  // EVERY audit row, including `create` — which builds its own INSERT rather than
+  // going through auditOnce() and so has to be handled separately.
+  for (const statement of audit) {
+    assert.match(statement.sql, /"actorName":"Workbook Import"/,
+      "audit rows must carry actorName, or the UI labels them 'Changed by System'");
+  }
+
+  // Still parked: showing the project name and the update text on activity rows.
+  // That needs auditFieldLabels in worker/client.js to gain a current_update key,
+  // and therefore a redeploy. The actor label above needs neither.
+
+  const fieldUpdate = audit.find((s) => s.sql.includes("'field_update'"));
+  assert.ok(fieldUpdate, "the status change writes a field_update audit row");
+  for (const required of ['"version":1', '"projectName":', '"changes":[', '"field":"status"',
+                          '"before":"Active"', '"after":"Complete"']) {
+    assert.ok(fieldUpdate.sql.includes(required),
+      `field_update details must match fieldAuditStatement()'s shape — missing ${required}`);
+  }
+  assert.ok(!fieldUpdate.sql.includes('"fields":["status"]'),
+    "the old bespoke shape must not come back");
+  console.log("Audit row shape: OK");
+}
+
 // --- Audit guards survive JSON escaping --------------------------------------
 // A real project is named `3 office build out "Transformation Dept"`, so its
 // source_key — and therefore the import key — contains double quotes. Those

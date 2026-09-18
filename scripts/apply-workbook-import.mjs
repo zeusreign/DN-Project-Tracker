@@ -71,7 +71,13 @@ export function buildStatements(report) {
   // that JSON escapes or that LIKE treats as wildcards.
   const auditOnce = (action, entityKey, details, key) => {
     const importId = createHash("sha256").update(key).digest("hex").slice(0, 16);
-    const detailsJson = JSON.stringify({ ...details, import_key: key, import_id: importId });
+    // `actorName` is what the audit screen reads — auditRowHtml() in
+    // worker/client.js resolves the actor as `details.actorName || actor_email ||
+    // "System"` and NEVER looks at actor_id. Writing the actor only into the
+    // actor_id column produced rows labelled "Changed by System".
+    const detailsJson = JSON.stringify({
+      actorName: AUDIT_ACTOR, ...details, import_key: key, import_id: importId,
+    });
     add(
       `INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)\n` +
       `  SELECT ${sqlLiteral(action)}, 'project', ${sqlLiteral(String(entityKey))}, ` +
@@ -203,7 +209,7 @@ export function buildStatements(report) {
     add(
       `INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)\n` +
       `  SELECT 'create', 'project', CAST(id AS TEXT), ${sqlLiteral(AUDIT_ACTOR)}, NULL,\n` +
-      `  ${sqlLiteral(JSON.stringify({ name: proposed.name, businessUnit: proposed.business_unit, import_key: sourceKey, import_id: createId }))}\n` +
+      `  ${sqlLiteral(JSON.stringify({ actorName: AUDIT_ACTOR, name: proposed.name, businessUnit: proposed.business_unit, import_key: sourceKey, import_id: createId }))}\n` +
       `  FROM projects WHERE source_key = ${sqlLiteral(sourceKey)}\n` +
       `    AND NOT EXISTS (SELECT 1 FROM audit_log\n` +
       `      WHERE details LIKE ${sqlLiteral('%"import_id":"' + createId + '"%')});`,
@@ -223,8 +229,15 @@ export function buildStatements(report) {
       `  WHERE id = ${id} AND status <> 'Complete';`,
       `mark project ${id} "${entry.project.name}" Complete`,
     );
+    // Shape must match fieldAuditStatement() in worker/index.js exactly:
+    // { version, projectName, actorName, changes: [{ field, before, after }] }.
+    // The audit screen renders the project name and the before -> after values
+    // ONLY from `changes[]`; any other shape falls through to
+    // "Before-and-after values were not recorded for this entry."
     auditOnce("field_update", id, {
-      fields: ["status"], before: entry.project.status, after: "Complete",
+      version: 1,
+      projectName: entry.project.name,
+      changes: [{ field: "status", before: entry.project.status, after: "Complete" }],
       reason: entry.decision.note,
     }, key);
     summary.status_changes++;
