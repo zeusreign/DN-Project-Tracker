@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { CLIENT } from "../worker/client.js";
@@ -280,19 +281,31 @@ const loginResponse = await worker.fetch(new Request("https://tracker.example/ap
 assert.equal(loginResponse.status, 200);
 assert.match(loginResponse.headers.get("set-cookie"), /^dnc_session=/);
 const sessionCookie = loginResponse.headers.get("set-cookie").split(";")[0];
+// DNC-003. A temporary password grants no access to project data. Bootstrap is
+// the whole workspace payload — projects, KPI summary and recent updates — and
+// it used to answer 200 here because the 428 gate sat BELOW it in the route
+// list and bootstrap returns early.
 const localBootstrapResponse = await worker.fetch(new Request("https://tracker.example/api/bootstrap", {
   headers: { cookie: sessionCookie },
 }), env, {});
-assert.equal(localBootstrapResponse.status, 200);
-const localBootstrap = await localBootstrapResponse.json();
-assert.equal(localBootstrap.me.email.toLowerCase(), billDirectory.user_email.toLowerCase());
-assert.equal(localBootstrap.me.auth_source, "local");
-assert.equal(localBootstrap.me.must_change_password, true);
-assert.ok(localBootstrap.me.csrf_token);
-const blockedBeforePasswordChange = await worker.fetch(new Request("https://tracker.example/api/projects", {
+assert.equal(localBootstrapResponse.status, 428, "bootstrap is blocked until the temporary password is replaced");
+const blockedBootstrapBody = await localBootstrapResponse.json();
+for (const leak of ["projects", "updates", "summary", "me"]) {
+  assert.equal(blockedBootstrapBody[leak], undefined, `the 428 body must not carry ${leak}`);
+}
+for (const route of ["/api/projects", "/api/updates", "/api/projects/1/history", "/api/admin"]) {
+  assert.equal((await worker.fetch(new Request("https://tracker.example" + route, {
+    headers: { cookie: sessionCookie },
+  }), env, {})).status, 428, `${route} is blocked before the password change`);
+}
+// The account must still be able to get out of this state: /api/session supplies
+// the CSRF token, /api/account/password performs the change, /api/logout leaves.
+const gatedSessionResponse = await worker.fetch(new Request("https://tracker.example/api/session", {
   headers: { cookie: sessionCookie },
 }), env, {});
-assert.equal(blockedBeforePasswordChange.status, 428);
+assert.equal(gatedSessionResponse.status, 200, "/api/session stays reachable while must_change_password is set");
+const localBootstrap = { me: await gatedSessionResponse.json() };
+assert.ok(localBootstrap.me.csrf_token, "the session probe still returns a CSRF token");
 const noCsrfChange = await worker.fetch(new Request("https://tracker.example/api/account/password", {
   method: "POST",
   headers: { "content-type": "application/json", cookie: sessionCookie },
@@ -488,6 +501,10 @@ const otherActivation = await call("/api/admin/users", {
   }),
 });
 assert.equal(otherActivation.status, 200);
+// Activation issues a temporary password, so this account starts behind the 428
+// gate. Cleared here because the subject of this block is multi-tab session
+// behaviour, not the password gate — which has its own coverage above.
+database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE id = ?").run(otherDirectory.id);
 const otherCookie = await loginAs(otherDirectory.username, otherTestPassword);
 assert.equal((await bootstrapWith(otherCookie)).status, 200);
 assert.equal(sessionCount(otherDirectory.id), 1);
@@ -813,8 +830,12 @@ assert.equal((await bootstrapWith(otherCookie)).status, 200);
 // The reset still behaves as before: new password works, old one does not, and the
 // forced password change is still applied.
 const billAfterReset = await loginAs(billDirectory.username, resetTestPassword);
-assert.equal((await (await bootstrapWith(billAfterReset)).json()).me.must_change_password, true,
-  "a reset must still force a password change");
+// The forced change is now proven by the gate itself: bootstrap refuses with 428
+// rather than returning a payload that merely reports the flag.
+assert.equal(database.prepare("SELECT must_change_password FROM user_directory WHERE id = ?")
+  .get(billDirectory.id).must_change_password, 1, "a reset must still force a password change");
+assert.equal((await bootstrapWith(billAfterReset)).status, 428,
+  "and that forced change must block the workspace payload");
 assert.equal((await worker.fetch(new Request("https://tracker.example/api/projects", {
   headers: { cookie: billAfterReset },
 }), env, {})).status, 428);
@@ -1098,6 +1119,250 @@ for (const [parent, child] of [
 ]) {
   assert.ok(insertedAt(parent) > -1 && insertedAt(parent) < insertedAt(child),
     `${parent} must be written before ${child}`);
+}
+
+
+// --- QA regression suite (DNC-001, -002, -004, -005) -------------------------
+// Each block reproduces a defect Mina reported and asserts the corrected
+// behaviour. DNC-003 is covered above, at the temporary-password gate.
+
+{
+  const capitalProject = (await (await call("/api/projects")).json())
+    .projects.find((project) => project.project_type === "Capital");
+
+  // --- DNC-001: monetary decimal precision ---------------------------------
+  // The details dialog seeded its currency inputs with moneyText(), which
+  // formats to whole dollars. Opening the dialog and saving without touching a
+  // field therefore rounded the cents away. setMoneyValue() now writes the raw
+  // value, so a dialog round trip is lossless.
+  const centsValue = 143336.8;
+  assert.equal((await call(`/api/projects/${capitalProject.id}/fields`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ construction_capp: centsValue }),
+  })).status, 200);
+  assert.equal(
+    database.prepare("SELECT construction_capp FROM projects WHERE id = ?").get(capitalProject.id).construction_capp,
+    centsValue, "fractional costs must survive a PATCH unrounded");
+
+  // The client-side guarantee: the seeded input value must parse back to the
+  // identical number. These are the real implementations lifted from CLIENT.
+  const moneyHelpers = new Function(`
+    ${CLIENT.match(/var money=new Intl\.NumberFormat\([^;]*\);/)[0]}
+    ${CLIENT.match(/function num\(v\)\{[^}]*\}/)[0]}
+    ${CLIENT.match(/function moneyText\(v\)\{[^}]*\}/)[0]}
+    ${CLIENT.match(/function moneyNumber\(v\)\{[\s\S]*?\n?.*?return Number\.isFinite\(n\)\?n:null\}/)[0]}
+    var store={};
+    function byId(id){return store[id]||(store[id]={value:"",dataset:{}})}
+    ${CLIENT.match(/function setMoneyValue\(id,value\)\{[^}]*\}/)[0]}
+    return {setMoneyValue:setMoneyValue,moneyNumber:moneyNumber,moneyText:moneyText,byId:byId};
+  `)();
+  for (const value of [143336.8, 2499096.55, 637960.25, 0.99, 0, 1000000]) {
+    moneyHelpers.setMoneyValue("fConstruction", value);
+    const readBack = moneyHelpers.moneyNumber(moneyHelpers.byId("fConstruction").value);
+    assert.equal(readBack, value,
+      `opening and saving the details dialog must not alter ${value} (read back ${readBack})`);
+  }
+  // Display formatting is unchanged — whole dollars in the table.
+  assert.equal(moneyHelpers.moneyText(143336.8), "$143,337");
+
+  // --- DNC-002: invalid values are rejected, nothing partially written ------
+  const beforeInvalid = database.prepare("SELECT * FROM projects WHERE id = ?").get(capitalProject.id);
+  const auditBeforeInvalid = database.prepare("SELECT COUNT(*) AS n FROM audit_log").get().n;
+  const invalidPayloads = [
+    [{ status: "Banana" }, "unsupported status"],
+    [{ budget_risk: "extreme" }, "unsupported risk"],
+    [{ schedule_risk: "" }, "blank risk"],
+    [{ original_start_date: "2026-13-45" }, "impossible date"],
+    [{ current_turnover_date: "not a date" }, "unparseable date"],
+    [{ current_start_date: "2026-02-30" }, "day that does not exist in that month"],
+    [{ precon_capp: "12abc" }, "non-numeric cost"],
+    [{ anticipated_final_cost: "N/A" }, "cost placeholder text"],
+    [{ name: "   " }, "blank project name"],
+    // Mixed valid + invalid must be rejected whole, not partially applied.
+    [{ project_manager: "A Real Person", status: "Banana" }, "valid field alongside an invalid one"],
+  ];
+  for (const [payload, label] of invalidPayloads) {
+    const response = await call(`/api/projects/${capitalProject.id}/fields`, {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    assert.equal(response.status, 400, `${label} must be rejected with 400`);
+    assert.ok((await response.json()).error, `${label} must explain why`);
+  }
+  assert.deepEqual(
+    database.prepare("SELECT * FROM projects WHERE id = ?").get(capitalProject.id), beforeInvalid,
+    "a rejected payload must not change a single column");
+  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM audit_log").get().n, auditBeforeInvalid,
+    "a rejected payload must not write an audit row");
+
+  // Valid values on the same fields still save.
+  assert.equal((await call(`/api/projects/${capitalProject.id}/fields`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "On Hold", budget_risk: "High", current_start_date: "2026-02-28" }),
+  })).status, 200, "valid values must still be accepted");
+  const afterValid = database.prepare("SELECT status, budget_risk, current_start_date FROM projects WHERE id = ?").get(capitalProject.id);
+  assert.equal(afterValid.status, "On Hold");
+  assert.equal(afterValid.budget_risk, "High");
+  assert.equal(afterValid.current_start_date, "2026-02-28");
+  // Blanking a date is legitimate — it clears the field.
+  assert.equal((await call(`/api/projects/${capitalProject.id}/fields`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ current_start_date: "" }),
+  })).status, 200, "a blank date clears the field rather than failing");
+
+  // Status vocabulary is per project type.
+  const developmentProject = (await (await call("/api/projects")).json())
+    .projects.find((project) => project.project_type === "Development");
+  assert.equal((await call(`/api/projects/${developmentProject.id}/fields`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "Needs Status" }),
+  })).status, 200, "Needs Status is valid for a Development project");
+  assert.equal((await call(`/api/projects/${capitalProject.id}/fields`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "Needs Status" }),
+  })).status, 400, "Needs Status is not valid for a Capital project");
+
+  // --- DNC-004: a double-clicked save leaves one history row ----------------
+  const activityText = "DNC-004 duplicate guard: one row expected.";
+  const historyBefore = database.prepare("SELECT COUNT(*) AS n FROM project_updates WHERE project_id = ?")
+    .get(capitalProject.id).n;
+  const auditBeforeActivity = database.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'activity_update'").get().n;
+  const previousSummary = database.prepare("SELECT current_update FROM projects WHERE id = ?").get(capitalProject.id).current_update;
+
+  const firstSubmit = await call(`/api/projects/${capitalProject.id}/activity`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ current_update: activityText, reporting_period: "2026-09-21" }),
+  });
+  assert.equal(firstSubmit.status, 200);
+
+  // The key must be derived from the project, period and text — not random. A
+  // random key is what let a second insert through, because the UNIQUE index on
+  // source_key had nothing to collide with.
+  const storedKey = database.prepare(
+    "SELECT source_key FROM project_updates WHERE project_id = ? ORDER BY id DESC LIMIT 1")
+    .get(capitalProject.id).source_key;
+  const expectedDigest = createHash("sha256").update(activityText).digest("hex");
+  assert.equal(storedKey, `update:${capitalProject.id}:2026-09-21:${expectedDigest}`,
+    "the activity source_key must be deterministic, so an identical resubmission collides");
+
+  // Now the second half of a double click. The two requests overlap in
+  // production, so the later one reads the project row BEFORE the earlier one
+  // has written it — it sees the old text and sails past the "same as current"
+  // check. Rewinding current_update reproduces exactly that stale read, and does
+  // so deterministically; Promise.all cannot, because this harness runs each
+  // batch() inside a real SQLite transaction and serialises them.
+  database.prepare("UPDATE projects SET current_update = ? WHERE id = ?")
+    .run(previousSummary, capitalProject.id);
+  const secondSubmit = await call(`/api/projects/${capitalProject.id}/activity`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ current_update: activityText, reporting_period: "2026-09-21" }),
+  });
+  assert.equal(secondSubmit.status, 200, "the duplicate submission is absorbed, not rejected noisily");
+  assert.equal(
+    database.prepare("SELECT COUNT(*) AS n FROM project_updates WHERE project_id = ?").get(capitalProject.id).n,
+    historyBefore + 1, "two identical submissions must leave exactly one history row");
+  assert.equal(
+    database.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'activity_update'").get().n,
+    auditBeforeActivity + 1, "and exactly one audit row");
+  assert.equal(
+    database.prepare("SELECT current_update FROM projects WHERE id = ?").get(capitalProject.id).current_update,
+    activityText, "the update still lands on the project");
+
+  // Genuinely different text still records its own row.
+  assert.equal((await call(`/api/projects/${capitalProject.id}/activity`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ current_update: "DNC-004: a different update.", reporting_period: "2026-09-21" }),
+  })).status, 200);
+  assert.equal(
+    database.prepare("SELECT COUNT(*) AS n FROM project_updates WHERE project_id = ?").get(capitalProject.id).n,
+    historyBefore + 2, "different text must still create a second row");
+
+  // Re-saving text that is already current remains a no-op.
+  const beforeUnchanged = database.prepare("SELECT COUNT(*) AS n FROM project_updates WHERE project_id = ?").get(capitalProject.id).n;
+  const unchangedResponse = await call(`/api/projects/${capitalProject.id}/activity`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ current_update: "DNC-004: a different update." }),
+  });
+  assert.equal(unchangedResponse.status, 200);
+  assert.equal((await unchangedResponse.json()).unchanged, true);
+  assert.equal(
+    database.prepare("SELECT COUNT(*) AS n FROM project_updates WHERE project_id = ?").get(capitalProject.id).n,
+    beforeUnchanged, "an unchanged resave must write nothing");
+
+  // The dialog button must refuse a second click while the first is in flight.
+  assert.match(CLIENT, /async function saveModalActivity\(\)\{var button=byId\("saveActivityBtn"\);if\(button\.disabled\)return;/,
+    "saveModalActivity must guard against a double click");
+
+  // --- DNC-005: Development save with no development_details row ------------
+  // A Development project created outside POST /api/projects has no row in
+  // development_details. The PATCH was an UPDATE only, so it matched nothing,
+  // wrote nothing, and still answered ok — the dialog reported success and the
+  // values were gone after a refresh.
+  const orphan = database.prepare(`
+    INSERT INTO projects (source_key, business_unit_id, venue, project_type, name,
+      initiative_number, development_lead, status, phase, scope_description,
+      current_update, reporting_period, section_name, source_sheet, updated_at)
+    SELECT 'test:orphan-development', business_unit_id, 'Orphan Venue', 'Development',
+      'Orphan Development Fixture', 'ORPHAN-001', 'Test Development Lead', 'Active',
+      'Development', 'Development project with no development_details row.',
+      'Synthetic update.', '2026-09-04', 'Orphan Section', 'TEST', datetime('now')
+    FROM projects WHERE id = ? RETURNING id
+  `).get(developmentProject.id);
+  assert.equal(
+    database.prepare("SELECT COUNT(*) AS n FROM development_details WHERE project_id = ?").get(orphan.id).n, 0,
+    "the fixture starts with no development_details row");
+
+  const orphanSave = await call(`/api/projects/${orphan.id}/development`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ requestor: "Mina QA", current_estimate: 12345.67, deliverable_due_date: "2026-10-15" }),
+  });
+  assert.equal(orphanSave.status, 200, "the save reports success");
+  assert.equal(
+    database.prepare("SELECT COUNT(*) AS n FROM development_details WHERE project_id = ?").get(orphan.id).n, 1,
+    "and the row it needed is created");
+
+  // The real test: the values survive the read the UI performs after a refresh.
+  const afterRefresh = (await (await call("/api/projects")).json())
+    .projects.find((project) => project.id === orphan.id);
+  assert.equal(afterRefresh.development_requestor, "Mina QA", "requestor survives a refresh");
+  assert.equal(afterRefresh.development_current_estimate, 12345.67, "estimate survives a refresh, cents intact");
+  assert.equal(afterRefresh.development_deliverable_due_date, "2026-10-15", "due date survives a refresh");
+
+  // Saving again updates in place rather than duplicating the row.
+  assert.equal((await call(`/api/projects/${orphan.id}/development`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ requestor: "Mina QA second pass" }),
+  })).status, 200);
+  assert.equal(
+    database.prepare("SELECT COUNT(*) AS n FROM development_details WHERE project_id = ?").get(orphan.id).n, 1,
+    "a second save must not create a second row");
+  assert.equal(
+    database.prepare("SELECT requestor FROM development_details WHERE project_id = ?").get(orphan.id).requestor,
+    "Mina QA second pass");
+
+  // The audit trail still records the change.
+  const orphanAudit = JSON.parse(database.prepare(
+    "SELECT details FROM audit_log WHERE action = 'development_update' ORDER BY id DESC LIMIT 1").get().details);
+  assert.ok(orphanAudit.changes.some((change) => change.field === "requestor"),
+    "the development save is audited");
+
+  // Invalid development input is rejected by the same rules (DNC-002).
+  assert.equal((await call(`/api/projects/${orphan.id}/development`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ current_estimate: "not a number" }),
+  })).status, 400, "development costs are validated too");
+  assert.equal((await call(`/api/projects/${orphan.id}/development`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ deliverable_due_date: "2026-13-01" }),
+  })).status, 400, "development dates are validated too");
+
+  // A non-Development project still cannot use this route.
+  assert.equal((await call(`/api/projects/${capitalProject.id}/development`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ requestor: "nobody" }),
+  })).status, 404, "the development route stays closed to Capital projects");
+
+  console.log("QA regressions: DNC-001, DNC-002, DNC-004 and DNC-005 covered.");
 }
 
 console.log("Smoke test passed: source data, KPIs, development workflow, history, formulas, export, secure roles, directory, and PDF guide.");

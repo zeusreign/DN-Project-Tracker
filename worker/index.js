@@ -241,6 +241,76 @@ function asText(value, max = 12000) {
   return cleaned ? cleaned.slice(0, max) : null;
 }
 
+// --- Field validation --------------------------------------------------------
+// The browser only ever offers valid choices — status is a <select>, risk is a
+// <select>, dates come from <input type="date">. None of that binds a caller
+// reaching the API directly, and the schema does not constrain these columns
+// either: projects.status is TEXT NOT NULL DEFAULT 'Active' with no CHECK, and
+// every date column is plain TEXT. So "Banana" and "2026-13-45" both stored
+// happily, and unparseable cost text was silently coerced to NULL and reported
+// as a successful save. These validators put the UI's own rules on the API.
+
+const STATUS_VALUES = {
+  Capital: ["Active", "On Hold", "Closeout", "Complete"],
+  Development: ["Active", "On Hold", "Complete", "Needs Status"],
+};
+const RISK_VALUES = ["High", "Medium", "Low", "Not Rated"];
+const COST_FIELDS = new Set([
+  "precon_capp", "construction_capp", "add_capp", "anticipated_final_cost",
+  "subsidiary_expense_total", "original_estimate", "current_estimate",
+]);
+
+// Rejects impossible dates as well as malformed ones. A plain regex accepts
+// 2026-13-45; round-tripping through Date is what catches it, because
+// Date.UTC normalises overflow (month 13 becomes January of the next year) and
+// the result no longer matches the input.
+function isValidDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+}
+
+// Returns a list of human-readable problems; empty means the payload is usable.
+// Validation runs over the WHOLE body before anything is written, so a mixed
+// valid/invalid payload is rejected outright rather than partially applied.
+function validateProjectFields(body, projectType) {
+  const problems = [];
+  const isBlank = (value) => value === null || value === undefined || String(value).trim() === "";
+
+  for (const [key, value] of Object.entries(body)) {
+    // status and both risk columns are NOT NULL in the schema, so a blank value
+    // is not "clear this field" — it is a constraint violation. Checking against
+    // the whitelist rejects blank along with everything else, which turns what
+    // was a 500 from the database into a 400 that explains itself.
+    if (key === "status") {
+      const allowed = STATUS_VALUES[projectType] || STATUS_VALUES.Capital;
+      if (!allowed.includes(String(value ?? "").trim())) {
+        problems.push(`Status must be one of: ${allowed.join(", ")}.`);
+      }
+    }
+    if (key === "budget_risk" || key === "schedule_risk") {
+      if (!RISK_VALUES.includes(String(value ?? "").trim())) {
+        problems.push(`${key === "budget_risk" ? "Budget" : "Schedule"} risk must be one of: ${RISK_VALUES.join(", ")}.`);
+      }
+    }
+    // Blank clears a date, which is legitimate. Anything else must be a real one.
+    if (key.endsWith("_date") && !isBlank(value) && !isValidDate(String(value).trim())) {
+      problems.push(`${key.replaceAll("_", " ")} must be a real date in YYYY-MM-DD form.`);
+    }
+    // Blank clears a cost. Unparseable text used to become NULL silently.
+    if (COST_FIELDS.has(key) && !isBlank(value) && asNumber(value) === null) {
+      problems.push(`${key.replaceAll("_", " ")} must be a number.`);
+    }
+    // name is NOT NULL in the schema; clearing it would fail at the database.
+    if (key === "name" && isBlank(value)) problems.push("Project name cannot be blank.");
+  }
+  return problems;
+}
+
 function platformUserFrom(request) {
   const encodedName = request.headers.get("oai-authenticated-user-full-name");
   const encoding = request.headers.get("oai-authenticated-user-full-name-encoding");
@@ -1055,8 +1125,21 @@ async function handleApi(request, env, url) {
     });
   }
 
+  // A temporary password grants no access to project data. Everything above this
+  // line is what such an account still needs: /api/session to keep the tab
+  // alive, /api/account/password to escape the state, and /api/logout to leave.
+  //
+  // This gate used to sit BELOW the bootstrap route, which returns the whole
+  // scoped portfolio — projects, KPI summary and 120 recent updates. Because
+  // bootstrap returns early, the gate never ran for it, so an account that had
+  // not yet replaced its temporary password could still read everything the
+  // workspace shows.
+  if (user.auth_source === "local" && user.must_change_password) {
+    return error("Replace the temporary password before using the tracker.", 428);
+  }
+
   if (request.method === "GET" && url.pathname === "/api/bootstrap") {
-    if (role === "admin" && !user.must_change_password) await importRequestedProfilePhotos(env, user);
+    if (role === "admin") await importRequestedProfilePhotos(env, user);
     const projects = await projectRows(env.DB, scope);
     const profile = user.directory_id ? await readProfile(env.DB, user.directory_id) : null;
     // Renew an active session, never an expired one. Keep an absolute 24-hour cap.
@@ -1086,9 +1169,6 @@ async function handleApi(request, env, url) {
         profile,
       },
     }, 200, sessionHeaders);
-  }
-  if (user.auth_source === "local" && user.must_change_password) {
-    return error("Replace the temporary password before using the tracker.", 428);
   }
   const exportMatch = url.pathname.match(/^\/api\/export\.(csv|tsv|xlsx)$/);
   if (request.method === "GET" && exportMatch) return exportProjects(request, env, exportMatch[1], user, role, scope);
@@ -1396,29 +1476,52 @@ async function handleApi(request, env, url) {
     const currentSummary = asText(body.current_update);
     if (!currentSummary) return error("An activity update is required.");
     if (currentSummary === existing.current_update) return json({ ok: true, unchanged: true });
-    const sourceKey = "update:" + projectId + ":" + crypto.randomUUID();
+    // The check above catches a repeat save of text that has already landed. It
+    // cannot catch two requests in flight together — a double-clicked button —
+    // because both read `existing` before either writes, so both see the old
+    // text and both pass.
+    //
+    // A random UUID made the two inserts distinct, so the UNIQUE index on
+    // project_updates.source_key could not reject the second one. Deriving the
+    // key from the project, the reporting period and the text means an identical
+    // resubmission produces an identical key, and INSERT OR IGNORE lets the
+    // database settle it. Two different texts still yield two different keys.
+    const sourceKey = "update:" + projectId + ":" + reportingPeriod + ":" + await sha256Hex(currentSummary);
     await env.DB.batch([
       env.DB.prepare(`
         UPDATE projects
         SET previous_update = current_update, current_update = ?,
             reporting_period = ?, updated_at = datetime('now')
         WHERE id = ?
-      `).bind(currentSummary, reportingPeriod, projectId),
+          AND (current_update IS NULL OR current_update <> ?)
+      `).bind(currentSummary, reportingPeriod, projectId, currentSummary),
+      // The audit row is written BEFORE the history row, and only when that
+      // history row does not exist yet. audit_log has no unique constraint to
+      // lean on, so it borrows the UNIQUE index on project_updates.source_key:
+      // on a duplicate submission the row is already there and this inserts
+      // nothing, leaving one audit entry per history entry.
+      //
+      // An earlier version guarded this with `details LIKE '%<key>%'`. That
+      // passed locally and failed on D1 with "LIKE or GLOB pattern too complex"
+      // — the pattern carried a 64-character digest, and D1 caps LIKE patterns
+      // far below SQLite's own default. An equality test on an indexed column
+      // avoids the limit entirely and reads better besides.
       env.DB.prepare(`
-        INSERT INTO project_updates (
+        INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)
+        SELECT ?, 'project', ?, ?, ?, ?
+        WHERE NOT EXISTS (SELECT 1 FROM project_updates WHERE source_key = ?)
+      `).bind(
+        "activity_update", String(projectId), user.id, user.email,
+        JSON.stringify({ reportingPeriod, updateKey: sourceKey }), sourceKey
+      ),
+      env.DB.prepare(`
+        INSERT OR IGNORE INTO project_updates (
           source_key, project_id, reporting_period, current_summary, previous_summary,
           author_name, author_email, author_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       `).bind(
         sourceKey, projectId, reportingPeriod, currentSummary, existing.current_update,
         user.name || user.email || "Signed-in user", user.email, user.id
-      ),
-      env.DB.prepare(`
-        INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)
-        VALUES ('activity_update', 'project', ?, ?, ?, ?)
-      `).bind(
-        String(projectId), user.id, user.email,
-        JSON.stringify({ reportingPeriod })
       ),
     ]);
     return json({ ok: true, reporting_period: reportingPeriod });
@@ -1433,6 +1536,10 @@ async function handleApi(request, env, url) {
     if (!await projectInScope(env.DB, projectId, scope)) return error("Development project not found.", 404);
     const project = await env.DB.prepare("SELECT id FROM projects WHERE id = ? AND project_type = 'Development'").bind(projectId).first();
     if (!project) return error("Development project not found.", 404);
+    // Same rules as the project route: real dates, numeric costs, nothing
+    // partially applied. This route carries no status or risk fields.
+    const developmentProblems = validateProjectFields(body, "Development");
+    if (developmentProblems.length) return error(developmentProblems.join(" "), 400);
     const textFields = new Set([
       "request_date", "requestor", "deliverable_due_date", "consultants",
       "food_service_design", "design_capp", "original_estimate_date", "current_estimate_date",
@@ -1454,7 +1561,18 @@ async function handleApi(request, env, url) {
     }
     if (!sets.length) return error("No editable development fields were supplied.");
     sets.push("updated_at = datetime('now')");
+    // A Development project does not always have a development_details row. One
+    // is created alongside projects made through POST /api/projects and by the
+    // seed, but a record inserted any other way has none — and then this UPDATE
+    // matched zero rows, wrote nothing, and still returned ok, so the dialog
+    // reported success and the values vanished on the next refresh.
+    //
+    // project_id is the PRIMARY KEY of development_details, so OR IGNORE makes
+    // the insert a no-op whenever the row already exists. It runs first, in the
+    // same batch, so the UPDATE below always has a row to find.
     await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO development_details (project_id, updated_at) VALUES (?, datetime('now'))")
+        .bind(projectId),
       fieldAuditStatement(env.DB, user, projectId, "development_update", "development_details", fields, values),
       env.DB.prepare("UPDATE development_details SET " + sets.join(", ") + " WHERE project_id = ?")
         .bind(...values, projectId),
@@ -1507,8 +1625,12 @@ async function handleApi(request, env, url) {
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return error("Invalid project fields.");
     if (!await projectInScope(env.DB, projectId, scope)) return error("Project not found.", 404);
-    const project = await env.DB.prepare("SELECT id FROM projects WHERE id = ?").bind(projectId).first();
+    const project = await env.DB.prepare("SELECT id, project_type FROM projects WHERE id = ?").bind(projectId).first();
     if (!project) return error("Project not found.", 404);
+    // Checked against the whole body before a single statement is prepared, so a
+    // payload mixing valid and invalid fields writes nothing at all.
+    const problems = validateProjectFields(body, project.project_type);
+    if (problems.length) return error(problems.join(" "), 400);
     const textFields = new Set([
       "name", "capp_number", "initiative_number", "project_manager", "development_lead",
       "status", "phase", "budget_risk", "schedule_risk", "original_start_date",
