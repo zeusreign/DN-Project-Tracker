@@ -1,19 +1,16 @@
 {
   "application": "DN D&C Project Tracker",
   "package": "DN-Project-Tracker-handoff",
-  "prepared_utc": "2026-09-17T08:35:00Z",
+  "prepared_utc": "2026-09-22T15:11:57Z",
   "source": {
-    "git_commit": "3730d287b237b8d2e7df5beae18649df3a3ebcc1",
-    "git_commit_short": "3730d28",
+    "git_commit": "de7ee74b58f4736c7f2c56d7e4835bc8c65bd84e",
+    "git_commit_short": "de7ee74",
     "branch": "dev",
     "working_tree": "clean apart from this manifest and CHECKSUMS.sha256",
-    "self_reference_note": "CHECKSUMS.sha256 cannot list its own hash, so it is the only tracked file absent from it. This manifest IS listed, because it is written first and hashed afterwards. Both files are generated from commit 3730d28 and therefore postdate it; every other file is byte-identical to that commit.",
+    "self_reference_note": "CHECKSUMS.sha256 cannot list its own hash, so it is the only tracked file absent from it. This manifest IS listed, because it is written first and hashed afterwards. All other package files are byte-identical to commit de7ee74.",
     "tracked_file_count": 76,
     "commits_since_last_manifest": [
-      "59b71a1  Update bundle size checks for current Cloudflare limits",
-      "1ce6f0b  Add isolated test environment configuration",
-      "fc77877  Add isolated test environment deployment workflow",
-      "3730d28  Add workbook import and reconciliation workflow"
+      "de7ee74  Fix QA findings for test environment"
     ]
   },
   "deployment": {
@@ -29,7 +26,7 @@
     "runtime_equivalent_to_this_commit": true,
     "redeploy_required": false,
     "bundle_sha256": "a7d51198e39449fd27d0fa380276c52e54db2543d8e4ea79ef5e1991b61b9e8f",
-    "traceability_note": "The deployment was uploaded at commit e199045. Everything committed since then changed only build scripts, npm scripts, documentation, the local test harness and the new workbook import tooling. Verified two ways: `git diff e199045 3730d28 -- worker/ assets/` reports zero files, and rebuilding at 3730d28 reproduces bundle_sha256 above, which is the artifact that was deployed. The running production code is therefore the worker runtime of this commit and no redeploy is required."
+    "traceability_note": "The deployment was uploaded at commit e199045. Every commit since changed only build scripts, npm scripts, documentation and the workbook import tooling. Verified two ways: `git diff e199045 e678538 -- worker/ assets/` reports zero files, and rebuilding at e678538 reproduces bundle_sha256 above, which is the artifact serving dnc.lagospm.com. No redeploy is required."
   },
   "isolated_test_environment": {
     "purpose": "Technical review copy. Separate Cloudflare resources throughout; it never reaches production data.",
@@ -40,7 +37,15 @@
     "r2_bucket": "dnc-tracker-assets-dev",
     "config_file": "test-env/wrangler.toml",
     "contents": "5 synthetic projects and 5 demonstration accounts. No live record is present.",
-    "safety_note": "scripts/check-deploy-target.sh is the single definition of what each environment looks like. It asserts the project name, D1 name and id, R2 bucket, both binding names and ALLOW_PLATFORM_AUTH=\"false\", and explicitly forbids the other environment's database id and bucket. Both deploy scripts run it before building or uploading. Note that the production resource names are strict PREFIXES of the test ones, so every assertion anchors on the whole key = \"value\" line; a substring match would pass against either environment."
+    "safety_note": "scripts/check-deploy-target.sh is the single definition of what each environment looks like. It asserts the project name, D1 name and id, R2 bucket, both binding names and ALLOW_PLATFORM_AUTH=\"false\", and explicitly forbids the other environment's database id and bucket. Both deploy scripts run it before building or uploading. Note that the production resource names are strict PREFIXES of the test ones, so every assertion anchors on the whole key = \"value\" line; a substring match would pass against either environment.",
+    "latest_deployment": {
+      "deployment_id": "4e5ed958-0e74-4f2a-ab86-a8bd5ba75cdf",
+      "url": "https://4e5ed958.dnc-tracker-pilot-dev.pages.dev",
+      "branch": "test",
+      "cloudflare_project": "dnc-tracker-pilot-dev",
+      "source_commit": "de7ee74b58f4736c7f2c56d7e4835bc8c65bd84e",
+      "result": "53/53 deployed-test checks passed, 0 failed"
+    }
   },
   "workbook_import": {
     "purpose": "Reconcile a bi-weekly D&C workbook into the tracker without disturbing existing data.",
@@ -49,20 +54,21 @@
       "scripts/reconcile-workbook.mjs    match against the tracker, emit a report (read-only SELECTs)",
       "scripts/apply-workbook-import.mjs generate SQL; execute only with --execute and an explicit --target"
     ],
-    "dependencies_added": "none — the .xlsx reader is built on node:zlib and the zip central directory",
+    "dependencies_added": "none \u2014 the .xlsx reader is built on node:zlib and the zip central directory",
     "dates_policy": "Report dates are never derived. scripts/workbook/import-<date>.json states both explicitly and a run without them fails rather than guessing, because the workbook's own 'Previous Week Update' column was measured to be an unreliable roll-forward.",
     "idempotence": "Deterministic keys on the UNIQUE project_updates.source_key column, guarded UPDATEs, hash-guarded audit rows and a per-report app_meta run marker. Verified by executing the same file twice against production: the second run wrote 0 rows and left the database byte-size unchanged.",
     "schema_migration_required": false,
-    "documentation": "docs/WORKBOOK_IMPORT.md — the fortnightly runbook, including the pipeline in execution order, the mandatory backup and how to verify it, how to read the reconciliation report, and the rules that must not be relaxed."
+    "documentation": "docs/WORKBOOK_IMPORT.md \u2014 the fortnightly runbook, including the pipeline in execution order, the mandatory backup and how to verify it, how to read the reconciliation report, and the rules that must not be relaxed."
   },
   "production_data_state": {
-    "as_of_utc": "2026-09-17T08:30:00Z",
+    "as_of_utc": "2026-09-18T06:20:00Z",
     "projects": 76,
     "project_updates": 164,
     "user_directory": 78,
     "audit_log": 81,
     "last_workbook_import": "2026-09-11 (applied 2026-09-17; app_meta key workbook_import:2026-09-11)",
-    "note": "The September 11 workbook import added 2 projects and 36 history rows. All 128 pre-existing history rows were preserved, including the one user-authored update. Pre-import backup taken and verified by restoring it; see backup_before_import below."
+    "note": "The September 11 workbook import added 2 projects and 36 history rows. All 128 pre-existing history rows were preserved, including the one user-authored update. Pre-import backup taken and verified by restoring it; see backup_before_import below.",
+    "audit_trail_note": "All 31 audit rows from the import are attributed to 'Workbook Import' and share the timestamp 2026-09-17 08:24:50 \u2014 one import run. The Wheeling Island status change records status: Active -> Complete in the same shape the application writes for a human edit."
   },
   "backup_before_import": {
     "location": "~/dn-tracker-backups/pre-workbook-import-2026-09-17/d1-full.sql",
@@ -95,13 +101,28 @@
     "API tokens, private keys and Cloudflare credentials",
     "local databases, database dumps and R2 exports",
     "client working documents and third-party review PDFs",
-    ".workbook-import/ — parsed workbooks, tracker snapshots, reconciliation reports and generated import SQL, all of which reproduce live project names and the full text of their activity updates",
+    ".workbook-import/ \u2014 parsed workbooks, tracker snapshots, reconciliation reports and generated import SQL, all of which reproduce live project names and the full text of their activity updates",
     "database backups under ~/dn-tracker-backups/"
   ],
   "verification": {
     "npm_test": "pass",
     "suite": "build, ESM artifact validation, smoke suite including session-timeout, background-activity, CSRF-resync and multi-tab regression tests",
-    "workbook_suites": "scripts/workbook-parse-test.mjs, scripts/reconcile-test.mjs, scripts/apply-test.mjs — all pass; each regression test was confirmed to fail when its fix is reverted",
-    "checksums": "CHECKSUMS.sha256 covers all 75 other tracked files and verifies clean"
+    "workbook_suites": "scripts/workbook-parse-test.mjs, scripts/reconcile-test.mjs, scripts/apply-test.mjs \u2014 all pass; each regression test was confirmed to fail when its fix is reverted",
+    "checksums": "CHECKSUMS.sha256 covers all other tracked package files and is refreshed for de7ee74.",
+    "application_commit": "de7ee74b58f4736c7f2c56d7e4835bc8c65bd84e",
+    "deployed_test": {
+      "deployment_id": "4e5ed958-0e74-4f2a-ab86-a8bd5ba75cdf",
+      "result": "53/53 passed, 0 failed",
+      "environment": "isolated test environment",
+      "production_unchanged": true
+    },
+    "qa_findings": {
+      "DNC-003": "Temporary-password users are blocked from protected data until password change; session, password change and logout remain available.",
+      "DNC-001": "Monetary values retain decimal precision through edit and save round trips.",
+      "DNC-002": "Invalid costs, dates, statuses and risk values are rejected with HTTP 400 and no partial write.",
+      "DNC-004": "Duplicate activity submissions are reduced to one history row while different text remains separate.",
+      "DNC-005": "Development details are created when missing and persist through save and refresh."
+    },
+    "migration_required": false
   }
 }
