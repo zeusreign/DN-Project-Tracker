@@ -1116,12 +1116,23 @@ async function handleApi(request, env, url) {
     // away: the token is already handed to any authenticated caller by
     // /api/bootstrap, the response is same-origin only, and the cookie is
     // SameSite=Strict, so no cross-site page can read either.
+    //
+    // auth_source and must_change_password ride along too, and they are the only
+    // way the browser can learn it is in the forced-change state. The password
+    // dialog used to be opened from the bootstrap response; bootstrap is now
+    // refused for exactly these accounts, so without this the user is told to
+    // replace their temporary password and given no form to do it in. Neither
+    // field reveals anything: the caller is already authenticated as that user.
     return json({
       ok: true,
       idle_seconds: idleSecondsFor(env),
       idle_warning_seconds: idleWarningFor(env),
       idle_remaining: idleRemainingFor(user, activity, idleSecondsFor(env)),
       csrf_token: user.csrf_token || null,
+      auth_source: user.auth_source,
+      must_change_password: Boolean(user.must_change_password),
+      email: user.email,
+      name: user.name || user.email,
     });
   }
 

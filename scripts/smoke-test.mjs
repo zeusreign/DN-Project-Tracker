@@ -67,6 +67,18 @@ assert.match(CLIENT, /<tr class="project-row" data-record-row>/);
 assert.match(CLIENT, /<tr data-record-row><td><div class="directory-person">/);
 assert.match(CLIENT, /<div class="attention" data-record-row>/);
 const pageSource = await readFile(new URL("../worker/page.js", import.meta.url), "utf8");
+
+// worker/client.js is one big template literal, so every backslash in it must be
+// written doubled in the source or it is eaten before the browser ever sees it.
+// This has caused two silent breakages: a backtick in a comment terminated the
+// literal, and single-escaped regexes shipped as /[$,s]/ instead of /[$,\s]/ —
+// which strips the letter "s" rather than whitespace, and quietly mangles every
+// currency value. Neither shows up as a build error.
+assert.match(CLIENT, /replace\(\/\[\$,\\s\]\/g,""\)/,
+  "the currency cleaner must keep its whitespace escape through the template literal");
+assert.match(CLIENT, /\/\^\\\(\.\*\\\)\$\//,
+  "the bracketed-negative test must keep its parenthesis escapes");
+assert.doesNotMatch(CLIENT, /[^\\]`/, "a stray backtick would terminate the CLIENT literal");
 assert.match(pageSource, /<label>Business Unit Permissions<\/label>/);
 assert.match(pageSource, /<th>Business Unit Permissions<\/th>/);
 assert.doesNotMatch(pageSource, /business-unit scope/i);
@@ -1150,7 +1162,7 @@ for (const [parent, child] of [
     ${CLIENT.match(/var money=new Intl\.NumberFormat\([^;]*\);/)[0]}
     ${CLIENT.match(/function num\(v\)\{[^}]*\}/)[0]}
     ${CLIENT.match(/function moneyText\(v\)\{[^}]*\}/)[0]}
-    ${CLIENT.match(/function moneyNumber\(v\)\{[\s\S]*?\n?.*?return Number\.isFinite\(n\)\?n:null\}/)[0]}
+    ${CLIENT.match(/function moneyNumber\(v\)\{[\s\S]*?return Number\.isFinite\(n\)\?n:undefined\}/)[0]}
     var store={};
     function byId(id){return store[id]||(store[id]={value:"",dataset:{}})}
     ${CLIENT.match(/function setMoneyValue\(id,value\)\{[^}]*\}/)[0]}
@@ -1164,6 +1176,30 @@ for (const [parent, child] of [
   }
   // Display formatting is unchanged — whole dollars in the table.
   assert.equal(moneyHelpers.moneyText(143336.8), "$143,337");
+
+  // Blank and unparseable must be DIFFERENT answers. They were both null, which
+  // is why typing "not a number" into a cost field silently cleared the stored
+  // amount: the browser sent null, and null is a valid instruction to clear.
+  assert.equal(moneyHelpers.moneyNumber(""), null, "blank still clears the field");
+  assert.equal(moneyHelpers.moneyNumber("   "), null, "whitespace still clears the field");
+  assert.equal(moneyHelpers.moneyNumber("not a number"), undefined, "unparseable text is not a clear instruction");
+  assert.equal(moneyHelpers.moneyNumber("abc123"), undefined, "partially numeric text is still invalid");
+  assert.equal(moneyHelpers.moneyNumber("$143,336.80"), 143336.8, "formatted currency still parses");
+  assert.equal(moneyHelpers.moneyNumber("(500)"), -500, "bracketed negatives still parse");
+  assert.equal(moneyHelpers.moneyNumber("45000.0"), 45000, "a trailing .0 is the same number");
+
+  // The save paths must refuse rather than transmit an undefined value.
+  for (const fragment of [
+    /var money=collectMoney\(\{precon_capp:"fPrecon"/,
+    /if\(money\.invalid\)return toast\(/,
+    /var devMoney=collectMoney\(\{subsidiary_expense_total:"dExpense"/,
+    /if\(devMoney\.invalid\)return toast\(/,
+    /if\(value===undefined\)\{el\.value=moneyText\(before\);toast\(/,
+  ]) {
+    assert.match(CLIENT, fragment, `a money save path is missing its guard: ${fragment}`);
+  }
+  assert.doesNotMatch(CLIENT, /precon_capp:moneyNumber\(/,
+    "the details dialog must not send a raw moneyNumber result");
 
   // --- DNC-002: invalid values are rejected, nothing partially written ------
   const beforeInvalid = database.prepare("SELECT * FROM projects WHERE id = ?").get(capitalProject.id);
