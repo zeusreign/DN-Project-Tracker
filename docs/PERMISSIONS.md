@@ -21,15 +21,33 @@ but can change nothing.
 
 ## 2. Roles
 
-| Role | View | Edit projects | Admin screen (users, audit) |
-|---|---|---|---|
-| `admin` | Yes | Yes | Yes |
-| `editor` | Yes | Yes | No |
-| `viewer` | Yes | **No** | No |
+| Role | View | Download (CSV/TSV/XLSX) | Choose Columns | Edit projects | Admin screen (users, audit) |
+|---|---|---|---|---|---|
+| `admin` | Yes | Yes | Yes | Yes | Yes |
+| `editor` | Yes | Yes | Yes | Yes | No |
+| `viewer` | Yes | Yes | Yes | **No** | No |
 
 - A Viewer's write attempt returns **403**, whatever their scope.
 - Only `admin` reaches `/api/admin`. Editors and Viewers get 403.
 - **Admins always have full cross-unit access**, regardless of what their scope field says.
+
+### Download and Choose Columns are view capabilities
+
+Both belong in the View column, not the Edit column, and **every role keeps them, Viewers
+included**. Neither changes a stored value: Choose Columns re-arranges the table the person is
+already looking at, and Download hands them a file of rows the tracker has already shown them —
+always scoped to their own units (see §4). Taking either away from a Viewer would remove a way of
+reading data they are permitted to read, which is not what the role means.
+
+The server agrees, and it is the authority: `/api/export.*` asks only for a **resolved role** and a
+**replaced temporary password**. It never asks which role. So the browser must not hide these
+controls from a role the worker would serve — a mismatch there was DNC-008, where they stayed
+hidden after a temporary-password user changed their password until the page was reloaded by hand.
+
+One exception applies to everyone regardless of role: an account that has not yet replaced its
+temporary password can neither view nor download. `/api/export.*` returns **428**, the same answer
+the rest of the application gives that account, and the controls are hidden until the change is
+complete.
 
 ---
 

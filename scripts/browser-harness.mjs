@@ -561,14 +561,28 @@ export function createBrowser({ page, handler, origin = "https://tracker.example
 
   // Waits for the page to go quiet: no request in flight, no short timer left to
   // run. Long timers (the inactivity watch) are deliberately left pending.
-  async function settle(maxDelay = 250) {
-    for (let pass = 0; pass < 500; pass += 1) {
+  //
+  // Bounded by elapsed time, not by a pass count. An in-process handler settles
+  // in microseconds, so a setImmediate spin is enough for it; a handler that
+  // reaches a deployed environment over the network does not, and a spin of any
+  // fixed length simply expires before the first response arrives. While a
+  // request is outstanding this yields to the event loop for a few real
+  // milliseconds instead, which is what lets the same harness be pointed at a
+  // real origin. `setTimeout` here is the host's own — the client's shadowed,
+  // virtual one exists only inside the script's function scope.
+  async function settle(maxDelay = 250, timeoutMs = 30000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (pending > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        continue;
+      }
       await new Promise((resolve) => setImmediate(resolve));
       if (pending > 0) continue;
       if (runDueTimers(maxDelay)) continue;
       return;
     }
-    throw new Error("The page never went quiet.");
+    throw new Error(`The page never went quiet within ${timeoutMs}ms (${pending} request(s) still in flight).`);
   }
 
   // What a person can actually see: hidden subtrees and closed dialogs contribute

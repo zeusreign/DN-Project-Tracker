@@ -1,18 +1,17 @@
 {
   "application": "DN D&C Project Tracker",
   "package": "DN-Project-Tracker-handoff",
-  "prepared_utc": "2026-09-23T06:30:00Z",
+  "prepared_utc": "2026-09-25T06:55:00Z",
   "source": {
-    "git_commit": "3a1abdb54ccffeb2bbaca93901878c9dc5671832",
-    "git_commit_short": "3a1abdb",
+    "git_commit": "56fd45a1c6dd6337cda47f946c78bc893c06937f",
+    "git_commit_short": "56fd45a",
     "branch": "dev",
-    "working_tree": "clean apart from this manifest and CHECKSUMS.sha256",
-    "self_reference_note": "CHECKSUMS.sha256 cannot list its own hash, so it is the only tracked file absent from it. This manifest IS listed, because it is written first and hashed afterwards. Both are generated from commit 3a1abdb and therefore postdate it; every other file in this package is byte-identical to that commit.",
-    "tracked_file_count": 76,
+    "working_tree": "clean apart from docs/PERMISSIONS.md, scripts/browser-harness.mjs, this manifest and CHECKSUMS.sha256, which together are this metadata refresh and are committed immediately after it",
+    "self_reference_note": "CHECKSUMS.sha256 cannot list its own hash, so it is the only tracked file absent from it. This manifest IS listed, because it is written first and hashed afterwards. Both are generated from commit 56fd45a and therefore postdate it. Every other file is byte-identical to that commit except docs/PERMISSIONS.md and scripts/browser-harness.mjs, which are part of this same refresh; neither is bundled, so the deployed artifact is unaffected and still matches 56fd45a exactly.",
+    "tracked_file_count": 77,
     "commits_since_last_manifest": [
-      "de7ee74  Fix QA findings for test environment",
-      "f36f7e9  Refresh handoff metadata for QA release",
-      "3a1abdb  Fix invalid cost clearing saved amounts and restore temporary-password change form"
+      "354fb4b  Fix browser session regression findings (DNC-007, DNC-008)",
+      "56fd45a  Complete browser regression coverage for DNC-007 and DNC-008"
     ]
   },
   "deployment": {
@@ -42,16 +41,18 @@
     "contents": "5 synthetic projects and 5 demonstration accounts. No live record is present.",
     "safety_note": "scripts/check-deploy-target.sh is the single definition of what each environment looks like. It asserts the project name, D1 name and id, R2 bucket, both binding names and ALLOW_PLATFORM_AUTH=\"false\", and explicitly forbids the other environment's database id and bucket. Both deploy scripts run it before building or uploading. Note that the production resource names are strict PREFIXES of the test ones, so every assertion anchors on the whole key = \"value\" line; a substring match would pass against either environment.",
     "latest_deployment": {
-      "deployment_id": "d0ce6505-fcbb-42c1-8e25-f2d138a21e15",
-      "url": "https://d0ce6505.dnc-tracker-pilot-dev.pages.dev",
+      "deployment_id": "13389a84-783d-4e30-8e93-6024c606b126",
+      "url": "https://13389a84.dnc-tracker-pilot-dev.pages.dev",
       "stable_url": "https://dnc-tracker-pilot-dev.pages.dev",
       "branch": "test",
       "cloudflare_project": "dnc-tracker-pilot-dev",
-      "cloudflare_commit_label": "f36f7e9",
-      "actual_source_commit": "3a1abdb54ccffeb2bbaca93901878c9dc5671832",
-      "bundle_sha256": "c0dd9673f3b070cb4bdc2550d47ef76962e943fdfa5c73412e0407edc89ef0b2",
-      "label_note": "Cloudflare stamped this deployment f36f7e9 because that was HEAD when it was uploaded; the fixes were still uncommitted at that moment and were committed immediately afterwards as 3a1abdb. The artifact is 3a1abdb's: rebuilding at 3a1abdb reproduces bundle_sha256 above byte for byte.",
-      "result": "63/63 deployed-test checks passed, 0 failed"
+      "cloudflare_commit_label": "56fd45a",
+      "actual_source_commit": "56fd45a1c6dd6337cda47f946c78bc893c06937f",
+      "bundle_sha256": "33a2d01f237cd49a4b8d1516e1dfa989ef5a519dc75c9566f49ab8c9229575bc",
+      "served_page_sha256": "f52bbcd5a5b76ac695039131ab8933ff2fd18d1d96cee3a810c2b8a6cec62496",
+      "verified_how": "Listed with `wrangler pages deployment list --project-name dnc-tracker-pilot-dev`, which reports this id on branch test with source label 56fd45a. The page it serves was downloaded and is byte-identical to the page this tree builds — same 166456 bytes, same sha256 — so the deployed client is provably the DNC-007/DNC-008 build and not an earlier one.",
+      "result": "20/20 credential-free remote checks passed, 0 failed. Authenticated behaviour was NOT re-tested remotely; see verification.deployed_test_environment for exactly what that does and does not cover.",
+      "previous_deployment": "d0ce6505-fcbb-42c1-8e25-f2d138a21e15 (label f36f7e9, artifact 3a1abdb) carried DNC-001 to DNC-006 and is the deployment the 63/63 figure belongs to."
     }
   },
   "workbook_import": {
@@ -113,27 +114,51 @@
   ],
   "verification": {
     "npm_test": "pass",
-    "suite": "build, ESM artifact validation, smoke suite including the QA regression block for all five findings",
+    "suite": "build, ESM artifact validation, smoke suite including the QA regression blocks for DNC-001, -002, -004, -005 and for DNC-007 and DNC-008",
     "workbook_suites": "scripts/workbook-parse-test.mjs, scripts/reconcile-test.mjs, scripts/apply-test.mjs — all pass",
-    "deployed_test_environment": "63/63 checks passed, 0 failed, against d0ce6505 and real D1",
-    "regression_discipline": "each fix was reverted individually and confirmed to fail its own named assertion",
-    "checksums": "CHECKSUMS.sha256 covers all 75 other tracked files and verifies clean"
+    "deployed_test_environment": "20/20 credential-free checks passed, 0 failed, against deployment 13389a84 and its real D1, run 2026-09-25. They cover reachability, the unauthenticated security posture (every API and export route returns 401, and the platform-auth header bypass returns 401, proving ALLOW_PLATFORM_AUTH=false), the identity of the served client, and the deployed page executed over the network as far as a signed-out session reaches. NO authenticated remote behaviour was exercised: the six synthetic test accounts have hashed passwords that are not recoverable, and obtaining a session would require writing to the shared test D1.",
+    "regression_discipline": "each fix was reverted individually and confirmed to fail its own named assertion, DNC-007 and DNC-008 included",
+    "checksums": "CHECKSUMS.sha256 covers all 76 other tracked files and verifies clean",
+    "browser_suite": "DNC-007 and DNC-008 are browser defects, so the suite now runs the page the worker serves: scripts/browser-harness.mjs parses the markup returned by GET /, executes the real inline script inside it, and routes fetch() back into the worker with a cookie jar between them. The regression drives the whole Editor to sign-out to temporary-password Viewer to password-change sequence by submitting the page's own forms and clicking its own buttons. No new dependency.",
+    "remote_suite_availability": "There is no committed automated suite that targets a deployed environment. scripts/smoke-test.mjs is entirely in-process — it builds an in-memory SQLite from drizzle/ and calls the worker's fetch directly, and reaches no network. docs/TESTING.md section 5 and docs/DEPLOY.md prescribe manual curl checks plus a manual signed-in UI pass. The 63/63 figure recorded for d0ce6505 came from an ad-hoc run that is not in this repository, so it cannot be reproduced from the package.",
+    "coverage_by_finding": {
+      "tested_remotely_on_13389a84": [
+        "Unauthenticated security posture — every API and export route 401, header bypass 401",
+        "Served-client identity — the deployed page is byte-identical to this tree's build, so the DNC-001 to DNC-008 fixes are confirmed PRESENT in the deployed artifact",
+        "DNC-008 (part) — signed out, applyCapabilities() exposes no Download or Choose Columns control, executed against the deployed worker over the network",
+        "DNC-007 (part) — signed out, no project data is rendered into the deployed page"
+      ],
+      "tested_locally_only": [
+        "DNC-001 monetary decimal precision — npm test",
+        "DNC-002 invalid cost/date/status rejection — npm test",
+        "DNC-003 temporary-password 428 gate — npm test",
+        "DNC-004 duplicate activity history — npm test",
+        "DNC-005 development upsert — npm test",
+        "DNC-006 temporary-password change form — npm test",
+        "DNC-007 account transition, full sequence — npm test, served page driven end to end",
+        "DNC-008 capability restore after a forced password change — npm test, served page driven end to end including the compare-against-a-refresh check"
+      ],
+      "note": "DNC-001 to DNC-006 were additionally verified on the EARLIER deployment d0ce6505 by the ad-hoc 63/63 run. They have not been re-run against 13389a84. Every finding's authenticated behaviour on 13389a84 is therefore unverified remotely, even though the deployed code is confirmed to contain each fix."
+    }
   },
   "qa_findings": {
     "source": "Mina Ramzy, sanitized review and re-test",
     "verified_against": "the deployed isolated test environment and its real D1 database",
-    "result": "63/63 passed, 0 failed",
+    "result": "DNC-001 to DNC-008 all FIXED and covered by npm test. DNC-001 to DNC-006 additionally passed 63/63 on the earlier deployment d0ce6505. DNC-007 and DNC-008 are deployed on 13389a84 and their fixes are confirmed present in the served artifact, but no authenticated remote re-test has been run for any finding on 13389a84.",
     "findings": [
       "DNC-001  monetary decimal precision on save — FIXED",
       "DNC-002  invalid cost, date and status values accepted — FIXED (400, nothing partially written)",
       "DNC-003  temporary-password users could read project data — FIXED (428 before any project payload)",
       "DNC-004  double-clicked activity save created duplicate history — FIXED (one row, one audit entry)",
-      "DNC-005  Development save reported success then lost the values — FIXED (upsert; values survive refresh)"
+      "DNC-005  Development save reported success then lost the values — FIXED (upsert; values survive refresh)",
+      "DNC-007  previous account's project data stayed on screen through an account change — FIXED (rendered content cleared on sign-out; workspace stays hidden through a forced password change)",
+      "DNC-008  Download and Choose Columns stayed hidden after a temporary-password change until a manual refresh — FIXED (one capability pass restores every role-dependent control; a forced change reloads as a fresh session)"
     ],
     "follow_up_regressions": [
       "Invalid money still cleared the saved amount through the BROWSER: the client converted unparseable text to null before sending, and null is a valid instruction to clear. The server validator never saw the text. moneyNumber() now distinguishes blank (clear) from invalid (refuse), and all three save paths refuse.",
       "Temporary-password users could not reach the password form. Blocking /api/bootstrap — correct in itself — removed the only route the client had to that dialog, because it read must_change_password from the bootstrap payload. /api/session now reports it, and the client opens the dialog from there. The 428 restriction is unchanged."
     ],
-    "note": "Both follow-ups were server-correct but browser-broken, and were missed because verification stopped at the API. The suite now exercises the served client code as well."
+    "note": "DNC-007 and DNC-008 were server-correct and browser-broken, as both earlier follow-ups were: every request in the failing sequence was answered properly while the screen was wrong. Verification that stops at the API cannot see this class of defect, and neither can a test that calls a client helper in isolation, because the defect is in state carried across a sign-in. The suite now drives the served page end to end.",
+    "role_clarification": "Tom confirmed that Download is a VIEW capability: it changes no stored value and returns only rows the account has already been served, scoped to its own business units. Viewers therefore keep both Download and Choose Columns. This overrides the earlier assumption that Viewers should not download. The worker already worked this way — /api/export.* asks only for a resolved role and a replaced temporary password — so the fix was to stop the browser hiding a control the server would serve. Recorded in docs/PERMISSIONS.md section 2."
   }
 }
