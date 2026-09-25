@@ -18,10 +18,27 @@ That runs three steps:
 |---|---|
 | `npm run build` | The Worker bundle compiles |
 | `npm run validate` | The bundle is a valid ES module exporting `default.fetch`, which is what Pages requires |
-| `scripts/smoke-test.mjs` | Seed data, KPI calculations, development workflow, history, formulas, exports, role checks, the directory, the PDF guide, and audit behaviour including transaction rollback |
+| `scripts/smoke-test.mjs` | Seed data, KPI calculations, development workflow, history, formulas, exports, role checks, the directory, the PDF guide, audit behaviour including transaction rollback, and the browser behaviour of the served page (see below) |
 
 It uses an in-memory SQLite database created from the real migration files, so schema changes are
 exercised too.
+
+### The served page is tested too, not only the API
+
+Two QA findings in a row (DNC-007 and DNC-008) were **server-correct and browser-broken**: every
+request in the sequence was answered properly while the screen was wrong. An API-only test cannot
+see either one, and a test that calls a client helper in isolation cannot see them either — both are
+defects of *state carried across a sign-in*.
+
+So part of the smoke suite runs the page the Worker actually serves. `scripts/browser-harness.mjs`
+implements the DOM surface `worker/client.js` uses, parses the real markup out of `GET /`, executes
+the real inline script inside it, and routes `fetch()` straight back into the Worker with a cookie
+jar in between. Tests then drive it the way a person would — fill the sign-in form and submit it,
+click **Sign off**, submit the password form — and assert on what is on screen afterwards.
+
+It is deliberately not a general-purpose DOM. It supports the selectors, properties and events this
+one client uses and nothing more; anything richer would be untested scaffolding. It needs no
+dependency and no browser, so it runs anywhere `npm test` runs.
 
 **A passing `npm test` is necessary but not sufficient** — see §3.
 

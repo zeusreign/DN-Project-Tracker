@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { CLIENT } from "../worker/client.js";
 import { PROFILE_PHOTOS, PROFILE_PHOTO_BATCH } from "../worker/profile-photos.js";
 import { EXPORT_FORMATS } from "../worker/exports.js";
+import { createBrowser } from "./browser-harness.mjs";
 
 // The browser script is embedded in a template; validate its generated syntax too.
 new Function(CLIENT);
@@ -1399,6 +1400,196 @@ for (const [parent, child] of [
   })).status, 404, "the development route stays closed to Capital projects");
 
   console.log("QA regressions: DNC-001, DNC-002, DNC-004 and DNC-005 covered.");
+}
+
+// --- DNC-007 and DNC-008: one tab, two accounts ------------------------------
+// Both defects live in the browser, not the API: the worker answered every
+// request in this sequence correctly while the screen was wrong. So this block
+// runs the page the worker actually serves - its real markup, its real script -
+// against this same in-memory database, and drives it by submitting its forms
+// and clicking its buttons. Nothing here calls a client function directly, which
+// is the point: neither defect is reachable from a helper in isolation.
+{
+  const servedPage = await (await call("/")).text();
+  assert.match(servedPage, /<script>/, "the served page must carry the client script");
+  const literal = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const editorTemporary = "Ff6!" + crypto.randomUUID();
+  const viewerTemporary = "Hh8!" + crypto.randomUUID();
+  const viewerPassword = "Ii9!" + crypto.randomUUID();
+
+  const createAccount = async (person) => {
+    const response = await call("/api/admin/users", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(person),
+    });
+    assert.equal(response.status, 200, `could not create ${person.user_email}`);
+    return (await response.json()).id;
+  };
+  const transitionEditorId = await createAccount({
+    first_name: "Transition", last_name: "Editor",
+    username: "dnc007-editor@example.invalid", user_email: "dnc007-editor@example.invalid",
+    role: "editor", business_unit_scope: "All", account_status: "active",
+    site_access_status: "authorized",
+    temporary_password: editorTemporary, confirm_password: editorTemporary,
+  });
+  await createAccount({
+    first_name: "Transition", last_name: "Viewer",
+    username: "dnc007-viewer@example.invalid", user_email: "dnc007-viewer@example.invalid",
+    role: "viewer", business_unit_scope: "Gaming", account_status: "active",
+    site_access_status: "authorized",
+    temporary_password: viewerTemporary, confirm_password: viewerTemporary,
+  });
+  // The Editor is a settled account by the time Mina's sequence starts: it has
+  // already replaced the temporary password every new account is issued with.
+  // Done here rather than through the browser so that this block contains exactly
+  // one temporary-password account - the Viewer, which is its subject.
+  database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE id = ?").run(transitionEditorId);
+
+  // The marker: a Capital project outside Gaming, whose name appears nowhere in
+  // the Gaming records. The Viewer is scoped to Gaming and must never see it -
+  // not in the table, not behind the password form, not anywhere in the document.
+  const everyProject = (await (await call("/api/projects")).json()).projects;
+  const gamingText = JSON.stringify(everyProject.filter((project) => project.business_unit === "Gaming"));
+  const outsideGaming = everyProject.find((project) =>
+    project.business_unit !== "Gaming" && project.project_type === "Capital"
+    && !gamingText.includes(project.name));
+  assert.ok(outsideGaming, "a non-Gaming project is required as the marker");
+
+  const browser = await createBrowser({
+    page: servedPage, handler: (request) => worker.fetch(request, env, {}),
+  }).start();
+  const signInAs = async (username, password) => {
+    browser.type("loginUsername", username);
+    browser.type("loginPassword", password);
+    await browser.fire("loginForm", "submit").results;
+    await browser.settle();
+  };
+  const lastStatus = (path) => browser.requests.filter((entry) => entry.path === path).at(-1)?.status;
+  // Every container clearAccountData() is responsible for, written out here as
+  // well as in the client so that dropping one from either side fails by name.
+  const ACCOUNT_CONTAINERS = [
+    "projectsHead", "projectsBody", "costHead", "costBody", "riskHead", "riskBody",
+    "developmentHead", "developmentBody", "businessUnitBar", "unitSummary", "attentionList",
+    "highRiskCards", "portfolioDonut", "portfolioLegend", "needsStatusCallout", "historyList",
+    "roleList", "auditList", "adminPagination", "loginEventList", "loginPagination", "headerAvatar",
+    "projectCount", "developmentCount", "unitSelectionText", "kpiActive", "kpiBudget", "kpiHigh",
+    "kpiDevelopment", "devTotal", "devCurrent", "devNeeds", "devEstimate", "sumPrecon",
+    "sumConstruction", "sumApproved", "sumAfc", "riskHigh", "riskMedium", "riskLow", "riskUnrated",
+    "adminCounts", "directoryCount", "loginEventCount", "userChip",
+  ];
+  const assertNothingRendered = (moment) => {
+    for (const id of ACCOUNT_CONTAINERS) {
+      assert.equal(browser.byId(id).textContent, "", `${id} still holds account content ${moment}`);
+    }
+    assert.doesNotMatch(browser.document.body.textContent, new RegExp(literal(outsideGaming.name)),
+      `the previous account's projects are still in the document ${moment}`);
+  };
+
+  // The page opens signed out.
+  assert.equal(lastStatus("/api/bootstrap"), 401);
+  assert.equal(browser.byId("signedOut").hidden, false);
+  assert.equal(browser.byId("workspace").hidden, true);
+
+  // 1. The All-scope Editor signs in and can see project data.
+  await signInAs("dnc007-editor@example.invalid", editorTemporary);
+  assert.equal(lastStatus("/api/bootstrap"), 200, "the settled Editor reaches the workspace");
+  assert.equal(browser.byId("workspace").hidden, false);
+  assert.ok(browser.byId("projectsBody").textContent.includes(outsideGaming.name),
+    "the Editor must really be looking at project data, or the rest of this proves nothing");
+  assert.ok(browser.visibleText().includes(outsideGaming.name),
+    "and it must be on screen, not merely in the document");
+  // An Editor may write and - per Tom's clarification - may download and choose columns.
+  assert.equal(browser.isVisible("addBtn"), true, "an Editor may add projects");
+  assert.equal(browser.isVisible("exportBtn"), true, "an Editor may download");
+  assert.equal(browser.isVisible("columnsBtn"), true, "an Editor may choose columns");
+  assert.equal(browser.isVisible("adminNav"), false, "an Editor is not an administrator");
+
+  // 2. The Editor signs out. DNC-007: hiding the workspace is not enough. The
+  // rendered rows have to go, because the next account can be shown this same
+  // shell before it has any data of its own.
+  await browser.fire("logoutBtn", "click").results;
+  await browser.settle();
+  assert.equal(browser.byId("workspace").hidden, true);
+  assert.equal(browser.byId("signedOut").hidden, false);
+  assertNothingRendered("after sign-out");
+
+  // 3. A temporary-password Viewer signs in, in the SAME tab. The worker refuses
+  // the workspace payload with 428 - DNC-003, unchanged - and the client puts the
+  // password form over the shell.
+  await signInAs("dnc007-viewer@example.invalid", viewerTemporary);
+  assert.equal(lastStatus("/api/bootstrap"), 428, "a temporary password still earns no project data");
+  assert.equal(browser.byId("passwordDialog").open, true, "the password form must be offered (DNC-006)");
+  assert.equal(browser.byId("workspace").hidden, true,
+    "the workspace must stay hidden until the temporary password is replaced");
+  // This is DNC-007 itself.
+  assert.doesNotMatch(browser.visibleText(), new RegExp(literal(outsideGaming.name)),
+    "the previous Editor's project data was still on screen behind the password form");
+  assertNothingRendered("on the password screen");
+  // Nothing needing data this account has not been given is reachable.
+  for (const id of ["addBtn", "exportBtn", "columnsBtn", "adminNav", "saveActivityBtn", "projectsControls"]) {
+    assert.equal(browser.isVisible(id), false, `${id} must be out of reach until the password is replaced`);
+  }
+  assert.equal(browser.isVisible("logoutBtn"), true, "signing out is still a way out of the forced change");
+
+  // 4. The Viewer replaces the password. DNC-008: the tracker must come back
+  // complete, with this role's capabilities, and with no manual refresh.
+  browser.type("currentPassword", viewerTemporary);
+  browser.type("newPassword", viewerPassword);
+  browser.type("newPasswordConfirm", viewerPassword);
+  await browser.fire("passwordForm", "submit").results;
+  await browser.settle();
+  assert.equal(browser.byId("passwordDialog").open, false, "the forced change is finished");
+  assert.equal(lastStatus("/api/bootstrap"), 200, "and the workspace payload is released");
+  assert.equal(browser.byId("workspace").hidden, false);
+  // Tom's clarification: Download is a view capability and stays with Viewers.
+  assert.equal(browser.isVisible("exportBtn"), true,
+    "Download must return immediately after the password change, with no refresh");
+  assert.equal(browser.isVisible("columnsBtn"), true,
+    "Choose Columns must return immediately after the password change, with no refresh");
+  // ...and nothing a Viewer may not do came back with them.
+  assert.equal(browser.isVisible("addBtn"), false, "a Viewer may not add projects");
+  assert.equal(browser.isVisible("saveActivityBtn"), false, "a Viewer may not save activity updates");
+  assert.equal(browser.isVisible("adminNav"), false, "a Viewer may not reach Admin");
+  assert.match(browser.text("userChip"), /Viewer$/, "the header must name the new account, not the old one");
+  // The control being shown has to be backed by a download that actually works,
+  // or showing it to a Viewer would only move the defect.
+  assert.equal((await worker.fetch(new Request("https://tracker.example/api/export.csv", {
+    headers: { cookie: browser.cookie },
+  }), env, {})).status, 200, "a Viewer's download must succeed, not just be offered");
+
+  // 5. The Viewer sees its own permitted data, and only that.
+  assert.ok(browser.byId("projectsBody").textContent.length > 0,
+    "a Gaming Viewer still has Gaming projects to look at");
+  assert.doesNotMatch(browser.document.body.textContent, new RegExp(literal(outsideGaming.name)),
+    "a scoped Viewer must never receive the previous account's out-of-scope rows");
+  assert.deepEqual(
+    browser.byId("businessUnitBar").querySelectorAll("[data-business-unit]")
+      .map((button) => button.dataset.businessUnit),
+    ["All", "Gaming"], "the unit switcher must show only the Viewer's own scope");
+
+  // 6. The requirement as Tom and Mina put it: identical to what a refresh would
+  // show. A second browser is opened on the same session cookie - which is what a
+  // refresh is - and the two screens are compared. Before the fix this failed on
+  // exportBtn and columnsBtn alone, which is exactly how it was reported.
+  const refreshed = await createBrowser({
+    page: servedPage, handler: (request) => worker.fetch(request, env, {}), cookie: browser.cookie,
+  }).start();
+  const snapshot = (instance) => ({
+    download: instance.isVisible("exportBtn"),
+    chooseColumns: instance.isVisible("columnsBtn"),
+    add: instance.isVisible("addBtn"),
+    admin: instance.isVisible("adminNav"),
+    activitySave: instance.isVisible("saveActivityBtn"),
+    signOut: instance.isVisible("logoutBtn"),
+    changePassword: instance.isVisible("changePasswordBtn"),
+    rows: instance.byId("projectsBody").textContent,
+    count: instance.text("projectCount"),
+    chip: instance.text("userChip"),
+  });
+  assert.deepEqual(snapshot(browser), snapshot(refreshed),
+    "after the password change the tracker must already match what a refresh would show");
+
+  console.log("QA regressions: DNC-007 and DNC-008 covered through the served page.");
 }
 
 console.log("Smoke test passed: source data, KPIs, development workflow, history, formulas, export, secure roles, directory, and PDF guide.");

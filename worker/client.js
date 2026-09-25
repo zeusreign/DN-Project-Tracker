@@ -102,6 +102,64 @@ function renderCost(){var rows=filteredCapital();var sums={precon_capp:0,constru
 function renderRisk(){var rows=visibleProjects().filter(matchesProjectFilters),counts={High:0,Medium:0,Low:0,"Not Rated":0};rows.forEach(function(p){var levels=[riskValue(p.budget_risk),riskValue(p.schedule_risk)],level=levels.includes("High")?"High":levels.includes("Medium")?"Medium":levels.includes("Low")?"Low":"Not Rated";counts[level]++});byId("riskHigh").textContent=counts.High;byId("riskMedium").textContent=counts.Medium;byId("riskLow").textContent=counts.Low;byId("riskUnrated").textContent=counts["Not Rated"];var high=rows.filter(function(p){return riskValue(p.budget_risk)==="High"||riskValue(p.schedule_risk)==="High"});byId("highRiskCards").innerHTML=high.map(function(p){return'<div class="card high-card"><strong>'+esc(p.name)+'</strong><p>'+esc(p.business_unit)+'</p><div class="risk-flags">'+(riskValue(p.budget_risk)==="High"?'<span class="risk-flag budget">B High</span>':"")+(riskValue(p.schedule_risk)==="High"?'<span class="risk-flag schedule">S High</span>':"")+'</div></div>'}).join("");var cols=["name","budget_risk","schedule_risk","approved_budget","anticipated_final_cost","forecast_variance","variance_pct","original_turnover_date","current_turnover_date","duration_change_days","actions"];byId("riskHead").innerHTML=headHtml(cols);byId("riskBody").innerHTML=bodyHtml(rows,cols);enhanceTable("riskBody",byId("search").value)}
 function renderAll(){renderUnitBar();renderProjects();renderPortfolio();renderDevelopment();renderCost();renderRisk();fitFilterControls()}
 
+// --- Account transition -------------------------------------------------------
+// Everything below turns on one fact: the workspace is HIDDEN when an account
+// leaves, never unloaded. Hiding is enough while the same person signs back in,
+// because load() overwrites every container before the workspace is shown again.
+// It is not enough when the account CHANGES, because the next account can be
+// shown that same workspace before any of its own data exists — a
+// temporary-password sign-in does exactly that, since the shell has to be
+// revealed to put the password form in front of it. The previous Editor's rows,
+// totals, history and audit entries were still sitting there, in the DOM, under
+// the dialog. So they are removed on the way out rather than covered up.
+//
+// These two lists are every container renderAll(), renderProfileHeader() and the
+// admin views write account data into. They are deliberately written out rather
+// than derived from a selector: a container that stops being cleared should break
+// a named assertion, not silently drop out of a query.
+var ACCOUNT_HTML=["projectsHead","projectsBody","costHead","costBody","riskHead","riskBody","developmentHead","developmentBody","businessUnitBar","unitSummary","attentionList","highRiskCards","portfolioDonut","portfolioLegend","needsStatusCallout","historyList","roleList","auditList","adminPagination","loginEventList","loginPagination","headerAvatar"];
+var ACCOUNT_TEXT=["projectCount","developmentCount","unitSelectionText","kpiActive","kpiBudget","kpiHigh","kpiDevelopment","devTotal","devCurrent","devNeeds","devEstimate","sumPrecon","sumConstruction","sumApproved","sumAfc","riskHigh","riskMedium","riskLow","riskUnrated","adminCounts","directoryCount","loginEventCount","userChip","activityTitle","activityMeta","detailsTitle","detailsMeta","developmentTitle","developmentMeta","promoteMeta"];
+var ACCOUNT_FORMS=["detailsForm","developmentForm","promoteForm","userForm","profileForm","addForm","passwordForm"];
+function clearAccountData(){
+  state.projects=[];state.summary={};state.updates=[];
+  state.adminUsers=[];state.adminAudit=[];state.adminLoginEvents=[];
+  state.adminPage=1;state.loginPage=1;state.activityId=null;state.unitScope="All";
+  ACCOUNT_HTML.forEach(function(id){var el=byId(id);if(el)el.innerHTML=""});
+  ACCOUNT_TEXT.forEach(function(id){var el=byId(id);if(el)el.textContent=""});
+  ACCOUNT_FORMS.forEach(function(id){var form=byId(id);if(form)form.reset()});
+  byId("needsStatusCallout").hidden=true;
+  byId("activityEditor").value="";
+  // Filters belong to the person who typed them. Left in place they would keep
+  // silently narrowing the next account's table.
+  ["search","developmentSearch","statusFilter","riskFilter","developmentStatus"].forEach(function(id){byId(id).value=""});
+}
+
+// Every control whose visibility depends on WHO is signed in, resolved in one
+// place from state.me. It used to be spread across load() and
+// showPasswordChangeOnly(), and the two disagreed: the password shell hid
+// exportBtn and columnsBtn, and load() — which only ever set the controls it
+// knew about — never set them back. That is DNC-008: after a successful password
+// change the tracker returned, but Download and Choose Columns stayed hidden
+// until the page was reloaded by hand.
+//
+// Download and Choose Columns are VIEW capabilities: neither changes any stored
+// value, both only re-present data the account has already been served. So every
+// signed-in role keeps them, Viewer included — which is exactly what the worker
+// enforces, since /api/export.* asks only for a resolved role and a replaced
+// temporary password.
+function canDownload(){return Boolean(state.me&&state.me.role&&!state.me.must_change_password)}
+function canChooseColumns(){return canDownload()}
+function applyCapabilities(){
+  var me=state.me,local=Boolean(me)&&me.auth_source==="local";
+  byId("adminNav").hidden=!me||me.role!=="admin";
+  byId("addBtn").hidden=!canWrite();
+  byId("saveActivityBtn").hidden=!canWrite();
+  byId("exportBtn").hidden=!canDownload();
+  byId("columnsBtn").hidden=!canChooseColumns();
+  byId("logoutBtn").hidden=!local;
+  byId("changePasswordBtn").hidden=!local;
+}
+
 // Minimal shell for an account that must replace its temporary password before
 // anything else. No project data is fetched or rendered; the only way out is to
 // change the password or sign out.
@@ -112,11 +170,21 @@ async function showPasswordChangeOnly(){
   if(!session||!session.ok){showSignIn("Sign in again to continue.");return false}
   state.me={email:session.email,name:session.name,role:null,auth_source:session.auth_source,must_change_password:true,csrf_token:session.csrf_token};
   state.csrf=session.csrf_token||null;
-  byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;
-  // Hide everything that would need project data we have not been given.
-  ["adminNav","addBtn","saveActivityBtn","exportBtn","projectsControls","developmentControls","columnsBtn"].forEach(function(id){var el=byId(id);if(el)el.hidden=true});
-  byId("logoutBtn").hidden=session.auth_source!=="local";
-  byId("changePasswordBtn").hidden=session.auth_source!=="local";
+  // Emptied first, then kept hidden. Either alone would do for the screen the
+  // user sees, but neither alone is honest: revealing the workspace here is what
+  // put the previous Editor's rows behind the password form, and leaving those
+  // rows in the document means they are one stray unhide away from being shown
+  // again. The password dialog is a sibling of the workspace, not a child of it,
+  // so keeping the workspace hidden costs nothing — the form is still there.
+  clearAccountData();
+  byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=true;
+  // state.me.role is null here, so this hides everything that would need project
+  // data we have not been given, and leaves only sign-out and the password form.
+  applyCapabilities();
+  // Inside the hidden workspace, and hidden in their own right, so that revealing
+  // the workspace could never on its own hand this account a control it may not use.
+  ["projectsControls","developmentControls"].forEach(function(id){byId(id).hidden=true});
+  byId("columnsBtn").parentElement.hidden=true;
   byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;
   if(!byId("passwordDialog").open)byId("passwordDialog").showModal();
   toast("Replace your temporary password to continue.");
@@ -128,7 +196,7 @@ async function load(reset){if(reset){state.preset="progress";state.sortKey="sour
 // the details come from /api/session instead, which sits above that gate. Before
 // this the user was simply told to replace the password with no form to do it in.
 if(r.status===428)return showPasswordChangeOnly();
-var data=await r.json();if(!r.ok)throw new Error(data.error||"Tracker unavailable");state.projects=data.projects;state.summary=data.summary;state.updates=data.updates;state.me=data.me;state.csrf=data.me.csrf_token||null;renderProfileHeader();byId("adminNav").hidden=state.me.role!=="admin";byId("addBtn").hidden=!canWrite();byId("saveActivityBtn").hidden=!canWrite();byId("logoutBtn").hidden=state.me.auth_source!=="local";byId("changePasswordBtn").hidden=state.me.auth_source!=="local";renderAll();byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;setView(location.hash.replace("#","")||"projects",!reset);startIdleWatch();if(state.me.auth_source==="local"&&state.me.must_change_password){byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;setTimeout(function(){if(!byId("passwordDialog").open)byId("passwordDialog").showModal()},80)}return true}
+var data=await r.json();if(!r.ok)throw new Error(data.error||"Tracker unavailable");state.projects=data.projects;state.summary=data.summary;state.updates=data.updates;state.me=data.me;state.csrf=data.me.csrf_token||null;renderProfileHeader();applyCapabilities();renderAll();byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;setView(location.hash.replace("#","")||"projects",!reset);startIdleWatch();if(state.me.auth_source==="local"&&state.me.must_change_password){byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;setTimeout(function(){if(!byId("passwordDialog").open)byId("passwordDialog").showModal()},80)}return true}
 async function signIn(event){event.preventDefault();var button=byId("loginBtn"),message=byId("loginError"),username=byId("loginUsername").value.trim(),password=byId("loginPassword").value;message.textContent="";button.disabled=true;button.textContent="Signing in…";try{await api("/api/login",{method:"POST",body:JSON.stringify({username:username,password:password})});byId("loginForm").reset();await load(true);announceSession({type:"signed-in"})}catch(error){message.textContent=error.message+" Confirm that the User ID above is your Delaware North email."}finally{button.disabled=false;button.textContent="Sign in"}}
 // --- Inactivity timeout -------------------------------------------------------
 // The duration lives in the worker (IDLE_SECONDS) and arrives on state.me, so
@@ -298,7 +366,12 @@ function onSessionMessage(message){
 // because the request failed strands the user in a session they cannot use and
 // cannot leave; showSignIn() clears every piece of client-side state regardless.
 async function signOut(){var failed=false;try{await api("/api/logout",{method:"POST",body:"{}"})}catch(error){failed=true}announceSession({type:"signed-out"});showSignIn(failed?"You were signed off on this device. Sign in again to confirm the session ended.":"")}
-async function changePassword(event){event.preventDefault();var next=byId("newPassword").value,confirm=byId("newPasswordConfirm").value;if(next!==confirm)return toast("The new passwords do not match.");try{await api("/api/account/password",{method:"POST",body:JSON.stringify({current_password:byId("currentPassword").value,new_password:next,confirm_password:confirm})});byId("passwordForm").reset();byId("passwordDialog").close();toast("Your password was changed.");await load(false)}catch(error){toast(error.message)}}
+// A FORCED change is an account arriving, not a signed-in person editing a
+// setting: the shell it happens in has no data, no filters and no capabilities
+// resolved yet. Reloading with reset=true is what a manual browser refresh would
+// do, and the point of DNC-008 is that no manual refresh should be needed. A
+// voluntary change keeps reset=false so the person's filters and sort survive it.
+async function changePassword(event){event.preventDefault();var forced=Boolean(state.me&&state.me.must_change_password),next=byId("newPassword").value,confirm=byId("newPasswordConfirm").value;if(next!==confirm)return toast("The new passwords do not match.");try{await api("/api/account/password",{method:"POST",body:JSON.stringify({current_password:byId("currentPassword").value,new_password:next,confirm_password:confirm})});byId("passwordForm").reset();byId("passwordDialog").close();toast("Your password was changed.");await load(forced)}catch(error){toast(error.message)}}
 async function patchFields(id,fields,message){await api("/api/projects/"+id+"/fields",{method:"PATCH",body:JSON.stringify(fields)});if(message)toast(message);await load(false)}
 async function saveInline(el){var before=el.dataset.before||"",after=el.textContent.trim();if(!after){el.textContent=before;return toast("Activity update cannot be blank.")}if(after===before)return;el.setAttribute("contenteditable","false");try{await api("/api/projects/"+el.dataset.activity+"/activity",{method:"POST",body:JSON.stringify({current_update:after})});toast("Activity saved with today's date.");await load(false)}catch(e){el.textContent=before;toast(e.message)}finally{if(canWrite())el.setAttribute("contenteditable","true")}}
 async function openActivity(id){state.activityId=Number(id);var p=state.projects.find(function(x){return x.id===state.activityId});if(!p)return;byId("activityTitle").textContent=p.name;var location=p.project_type==="Development"?"Development Pipeline":(p.section_name||p.venue||"Project");byId("activityMeta").textContent=p.business_unit+" • "+location+" • "+dateText(p.reporting_period);byId("activityEditor").value=p.current_update||"";byId("activityEditor").readOnly=!canWrite();byId("historyList").innerHTML='<div class="loading"><div class="spinner"></div>Loading history…</div>';byId("activityDialog").showModal();try{var data=await api("/api/projects/"+id+"/history");byId("historyList").innerHTML=data.history.map(function(h){return'<article class="history-entry"><h4>'+esc(dateText(h.reporting_period))+'</h4><small>'+esc(h.author_name||h.author_email||"Workbook Import")+'</small><p>'+esc(h.current_summary)+'</p></article>'}).join("")||'<div class="count-note">No activity history recorded.</div>'}catch(e){byId("historyList").innerHTML='<div class="count-note">'+esc(e.message)+"</div>"}}
@@ -516,11 +589,15 @@ function renderProfileHeader(){
 function showSignIn(message){
   stopIdleWatch();
   closeExportMenu();
-  state.me=null;state.csrf=null;state.projects=[];state.adminUsers=[];state.adminAudit=[];state.adminLoginEvents=[];
+  state.me=null;state.csrf=null;
+  // Not just the state: the rendered rows too. Hiding the workspace used to be
+  // the whole of this, which left the previous account's portfolio in the DOM
+  // for whoever signed in next to be shown. See clearAccountData().
+  clearAccountData();
   document.querySelectorAll("dialog[open]").forEach(function(dialog){dialog.close()});
   byId("workspace").hidden=true;byId("loading").hidden=true;byId("signedOut").hidden=false;
-  ["profileBtn","logoutBtn","changePasswordBtn","adminNav"].forEach(function(id){byId(id).hidden=true});
-  byId("userChip").textContent="";byId("loginError").textContent=message;
+  byId("profileBtn").hidden=true;applyCapabilities();
+  byId("loginError").textContent=message;
   byId("loginPassword").value="";setTimeout(function(){byId("loginUsername").focus()},30);
 }
 function closeExportMenu(returnFocus){
