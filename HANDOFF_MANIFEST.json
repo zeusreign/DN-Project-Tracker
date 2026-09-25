@@ -1,17 +1,18 @@
 {
   "application": "DN D&C Project Tracker",
   "package": "DN-Project-Tracker-handoff",
-  "prepared_utc": "2026-09-25T06:55:00Z",
+  "prepared_utc": "2026-09-25T07:45:00Z",
   "source": {
-    "git_commit": "56fd45a1c6dd6337cda47f946c78bc893c06937f",
-    "git_commit_short": "56fd45a",
+    "git_commit": "9e64ac538929c46d3deb8f05021a41da0ffa8da2",
+    "git_commit_short": "9e64ac5",
     "branch": "dev",
-    "working_tree": "clean apart from docs/PERMISSIONS.md, scripts/browser-harness.mjs, this manifest and CHECKSUMS.sha256, which together are this metadata refresh and are committed immediately after it",
-    "self_reference_note": "CHECKSUMS.sha256 cannot list its own hash, so it is the only tracked file absent from it. This manifest IS listed, because it is written first and hashed afterwards. Both are generated from commit 56fd45a and therefore postdate it. Every other file is byte-identical to that commit except docs/PERMISSIONS.md and scripts/browser-harness.mjs, which are part of this same refresh; neither is bundled, so the deployed artifact is unaffected and still matches 56fd45a exactly.",
-    "tracked_file_count": 77,
+    "working_tree": "clean apart from scripts/remote-check.mjs, package.json, docs/TESTING.md, this manifest and CHECKSUMS.sha256, which together are the remote-verification change and are committed immediately after it",
+    "self_reference_note": "CHECKSUMS.sha256 cannot list its own hash, so it is the only tracked file absent from it. This manifest IS listed, because it is written first and hashed afterwards. None of the files in this refresh is bundled, so the deployed artifact is unaffected and still matches the build described under isolated_test_environment.latest_deployment exactly.",
+    "tracked_file_count": 78,
     "commits_since_last_manifest": [
       "354fb4b  Fix browser session regression findings (DNC-007, DNC-008)",
-      "56fd45a  Complete browser regression coverage for DNC-007 and DNC-008"
+      "56fd45a  Complete browser regression coverage for DNC-007 and DNC-008",
+      "9e64ac5  Finalize DNC QA handoff metadata and browser harness"
     ]
   },
   "deployment": {
@@ -51,7 +52,7 @@
       "bundle_sha256": "33a2d01f237cd49a4b8d1516e1dfa989ef5a519dc75c9566f49ab8c9229575bc",
       "served_page_sha256": "f52bbcd5a5b76ac695039131ab8933ff2fd18d1d96cee3a810c2b8a6cec62496",
       "verified_how": "Listed with `wrangler pages deployment list --project-name dnc-tracker-pilot-dev`, which reports this id on branch test with source label 56fd45a. The page it serves was downloaded and is byte-identical to the page this tree builds — same 166456 bytes, same sha256 — so the deployed client is provably the DNC-007/DNC-008 build and not an earlier one.",
-      "result": "20/20 credential-free remote checks passed, 0 failed. Authenticated behaviour was NOT re-tested remotely; see verification.deployed_test_environment for exactly what that does and does not cover.",
+      "result": "32/32 remote checks passed, 0 failed, 0 skipped — 20 credential-free plus the 12-check authenticated account-transition sequence, run 2026-09-25 with `npm run check:remote` against this deployment and its real D1.",
       "previous_deployment": "d0ce6505-fcbb-42c1-8e25-f2d138a21e15 (label f36f7e9, artifact 3a1abdb) carried DNC-001 to DNC-006 and is the deployment the 63/63 figure belongs to."
     }
   },
@@ -116,35 +117,37 @@
     "npm_test": "pass",
     "suite": "build, ESM artifact validation, smoke suite including the QA regression blocks for DNC-001, -002, -004, -005 and for DNC-007 and DNC-008",
     "workbook_suites": "scripts/workbook-parse-test.mjs, scripts/reconcile-test.mjs, scripts/apply-test.mjs — all pass",
-    "deployed_test_environment": "20/20 credential-free checks passed, 0 failed, against deployment 13389a84 and its real D1, run 2026-09-25. They cover reachability, the unauthenticated security posture (every API and export route returns 401, and the platform-auth header bypass returns 401, proving ALLOW_PLATFORM_AUTH=false), the identity of the served client, and the deployed page executed over the network as far as a signed-out session reaches. NO authenticated remote behaviour was exercised: the six synthetic test accounts have hashed passwords that are not recoverable, and obtaining a session would require writing to the shared test D1.",
+    "deployed_test_environment": "32/32 checks passed, 0 failed, 0 skipped, against deployment 13389a84 and its real D1, run 2026-09-25 with `npm run check:remote`. Covered: reachability; the unauthenticated security posture (every API and export route 401, and the platform-auth header bypass 401, proving ALLOW_PLATFORM_AUTH=false); the identity of the served client; the deployed page executed over the network signed out; and the full authenticated account transition — Editor signs in and sees project data, signs out, a temporary-password Viewer signs in to the same tab, replaces the password, and the tracker returns with that role's capabilities.",
     "regression_discipline": "each fix was reverted individually and confirmed to fail its own named assertion, DNC-007 and DNC-008 included",
     "checksums": "CHECKSUMS.sha256 covers all 76 other tracked files and verifies clean",
     "browser_suite": "DNC-007 and DNC-008 are browser defects, so the suite now runs the page the worker serves: scripts/browser-harness.mjs parses the markup returned by GET /, executes the real inline script inside it, and routes fetch() back into the worker with a cookie jar between them. The regression drives the whole Editor to sign-out to temporary-password Viewer to password-change sequence by submitting the page's own forms and clicking its own buttons. No new dependency.",
-    "remote_suite_availability": "There is no committed automated suite that targets a deployed environment. scripts/smoke-test.mjs is entirely in-process — it builds an in-memory SQLite from drizzle/ and calls the worker's fetch directly, and reaches no network. docs/TESTING.md section 5 and docs/DEPLOY.md prescribe manual curl checks plus a manual signed-in UI pass. The 63/63 figure recorded for d0ce6505 came from an ad-hoc run that is not in this repository, so it cannot be reproduced from the package.",
+    "remote_suite_availability": "scripts/remote-check.mjs, run as `npm run check:remote -- <origin>`. Added because the repository previously had NO automated suite targeting a deployed environment — the 63/63 figure recorded for the earlier deployment d0ce6505 came from an ad-hoc run that is not in this package and therefore cannot be reproduced or audited. The new script is read-only and credential-free by default; the authenticated half runs only when two deliberately provisioned synthetic accounts are supplied by environment variable, and it reports skipped checks as SKIP, never as passes.",
     "coverage_by_finding": {
       "tested_remotely_on_13389a84": [
         "Unauthenticated security posture — every API and export route 401, header bypass 401",
-        "Served-client identity — the deployed page is byte-identical to this tree's build, so the DNC-001 to DNC-008 fixes are confirmed PRESENT in the deployed artifact",
-        "DNC-008 (part) — signed out, applyCapabilities() exposes no Download or Choose Columns control, executed against the deployed worker over the network",
-        "DNC-007 (part) — signed out, no project data is rendered into the deployed page"
+        "Served-client identity — the page served is byte-identical to the build from commit 56fd45a, so the DNC-001 to DNC-008 fixes are confirmed PRESENT in the deployed artifact",
+        "DNC-003 — a temporary-password Viewer is refused the workspace payload with 428",
+        "DNC-006 — the password-change form is offered to that account, so it is not a dead end",
+        "DNC-007 — the full account transition: sign-out empties every rendered container, and the previous Editor's project is absent from the document behind the password form",
+        "DNC-008 — Download and Choose Columns return immediately after the password change with no browser refresh; a Viewer's download really returns 200, not merely an enabled control",
+        "Role and scope enforcement for the new account — a Viewer cannot write, /api/admin returns 403, and the unit switcher shows only that Viewer's own business unit"
       ],
       "tested_locally_only": [
-        "DNC-001 monetary decimal precision — npm test",
-        "DNC-002 invalid cost/date/status rejection — npm test",
-        "DNC-003 temporary-password 428 gate — npm test",
-        "DNC-004 duplicate activity history — npm test",
-        "DNC-005 development upsert — npm test",
-        "DNC-006 temporary-password change form — npm test",
-        "DNC-007 account transition, full sequence — npm test, served page driven end to end",
-        "DNC-008 capability restore after a forced password change — npm test, served page driven end to end including the compare-against-a-refresh check"
+        "DNC-001 monetary decimal precision",
+        "DNC-002 invalid cost/date/status rejection",
+        "DNC-004 duplicate activity history",
+        "DNC-005 development upsert",
+        "DNC-008 (one check) — the compare-against-a-refresh assertion, which opens a second browser on the same session cookie and requires the two screens to be deepEqual; it lives in the smoke suite only"
       ],
-      "note": "DNC-001 to DNC-006 were additionally verified on the EARLIER deployment d0ce6505 by the ad-hoc 63/63 run. They have not been re-run against 13389a84. Every finding's authenticated behaviour on 13389a84 is therefore unverified remotely, even though the deployed code is confirmed to contain each fix."
-    }
+      "not_tested_remotely_and_why": "DNC-001, -002, -004 and -005 are deliberately excluded from the remote suite: each writes to projects, project_updates or development_details, which is not acceptable against a shared QA environment other people are testing in. They are covered by npm test against an in-memory database built from the real migrations.",
+      "earlier_deployment": "DNC-001 to DNC-006 passed 63/63 on the EARLIER deployment d0ce6505 in an ad-hoc run that is not reproducible from this package. That figure is retained for history only; the reproducible result for the current deployment is the 32/32 above."
+    },
+    "remote_test_data_safety": "The authenticated half needed an All-scope Editor and a Gaming Viewer holding a temporary password; neither state existed among the six synthetic accounts, so two additive dnc-remote-*@example.invalid accounts were created for the run and deleted immediately after it, together with their sessions, login events and role rows. No existing account was modified and no password was reset, so no other tester's session was disturbed. Before and after row counts are identical: 6 users, 10 projects, 59 project_updates, 2 login_sessions. The six original accounts are unchanged. Project, activity and development data were never written to, by design — see coverage_by_finding.not_tested_remotely_and_why."
   },
   "qa_findings": {
     "source": "Mina Ramzy, sanitized review and re-test",
     "verified_against": "the deployed isolated test environment and its real D1 database",
-    "result": "DNC-001 to DNC-008 all FIXED and covered by npm test. DNC-001 to DNC-006 additionally passed 63/63 on the earlier deployment d0ce6505. DNC-007 and DNC-008 are deployed on 13389a84 and their fixes are confirmed present in the served artifact, but no authenticated remote re-test has been run for any finding on 13389a84.",
+    "result": "DNC-001 to DNC-008 all FIXED. All eight are covered by npm test. DNC-003, DNC-006, DNC-007 and DNC-008 were additionally verified against the deployed test environment 13389a84 and its real D1, as part of 32/32 remote checks passing with 0 failed and 0 skipped. DNC-001, -002, -004 and -005 remain locally verified only, by design, because each writes to project data.",
     "findings": [
       "DNC-001  monetary decimal precision on save — FIXED",
       "DNC-002  invalid cost, date and status values accepted — FIXED (400, nothing partially written)",

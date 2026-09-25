@@ -128,7 +128,50 @@ rules being tested.
 
 ---
 
-## 5. Verifying production after a deploy
+## 5. Verifying a deployment automatically
+
+```sh
+npm run check:remote -- https://<deployment>.pages.dev
+```
+
+`scripts/remote-check.mjs` checks a **deployed** environment. Until it existed there was no such
+suite in this repository at all, which is why an earlier "63/63 checks passed" figure could never be
+reproduced — it came from an ad-hoc run that no longer exists. Everything this script reports is
+reproducible from the package.
+
+By default it is **read-only and needs no credentials**: it signs nothing in, creates nothing and
+writes nothing, so it is safe against any environment. It covers reachability, the unauthenticated
+security posture (every API and export route must return 401, and the platform-auth header bypass
+must return 401 — see §5.1 below), which build is actually deployed, and the deployed page executed
+over the network as far as a signed-out session reaches.
+
+### The authenticated half
+
+DNC-007 and DNC-008 are both about an account *change* in one tab, and the second account has to
+arrive holding a **temporary password**. That cannot be faked from outside, so the authenticated
+half runs only when you supply two deliberately provisioned synthetic accounts:
+
+```sh
+DNC_EDITOR_USER=... DNC_EDITOR_PASS=... \
+DNC_VIEWER_USER=... DNC_VIEWER_PASS=... DNC_VIEWER_NEWPASS=... DNC_VIEWER_SCOPE=Gaming \
+  npm run check:remote -- https://<deployment>.pages.dev
+```
+
+Rules for that half:
+
+- **Never point it at production**, and never at an account a real person uses. Completing the
+  password change consumes the temporary-password state and sets a new password.
+- Use `example.invalid` accounts created for the run and deleted afterwards. Creating them is a
+  write to a shared QA database — agree it with whoever is testing there first.
+- A Viewer that is not on a temporary password is reported as **SKIP**, not as a pass. Skipped
+  checks are coverage the run did not have; read the summary line, not just the exit code.
+- `DNC-001`, `-002`, `-004` and `-005` are deliberately **not** in the remote suite: each writes to
+  `projects`, `project_updates` or `development_details`, which is not acceptable against shared
+  data. They are covered by `npm test` against the in-memory database.
+
+---
+
+## 5.1 Verifying production after a deploy
 
 ### Quick automated pass
 

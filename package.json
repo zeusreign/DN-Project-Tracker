@@ -11,6 +11,7 @@
     "deploy:test": "bash scripts/deploy-test.sh",
     "check:prod": "bash scripts/check-deploy-target.sh prod",
     "check:test": "bash scripts/check-deploy-target.sh test",
+    "check:remote": "node scripts/remote-check.mjs",
     "db:test": "wrangler d1 execute 34dca57e-bd32-46cd-b154-8c362efaeb4c --remote",
     "db:prod": "wrangler d1 execute 94241844-c709-445f-a71c-49f8b65a7cfd --remote",
     "workbook:parse": "node scripts/parse-workbook.mjs",
