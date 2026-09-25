@@ -43,3 +43,12 @@ r2-keys.txt
 # their activity updates, straight out of production. Generated output, always
 # reproducible from the workbook plus a fresh read, and never to be committed.
 .workbook-import/
+
+# Interactive prototype drops. Tom's enhanced-tracker demos are standalone HTML
+# files that inline a full production extract — the 18 September drop embeds 76
+# real projects, 120 activity updates with author names and email addresses, and
+# the complete capital figures. They are a database export wearing a UI, so they
+# are treated exactly like the backups above and never committed. Anchored to the
+# repository root; no HTML is tracked anywhere in the tree, and the Pages build is
+# worker-based, so this cannot mask a build entry point.
+/DN_Tracker_*.html
