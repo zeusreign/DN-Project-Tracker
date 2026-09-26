@@ -27,12 +27,25 @@ const profilePhotos = await Promise.all(PROFILE_PHOTOS.map(async photo => ({
   base64: (await readFile(resolve(projectRoot, "assets/profile-photos", photo.file))).toString("base64"),
 })));
 
+const [enhanced, enhancedStyles, projectImages] = await Promise.all(["enhanced.js", "enhanced-styles.js", "project-images.js"].map(name => readFile(resolve(workerRoot, name), "utf8")));
+
+const workflows = await readFile(resolve(workerRoot, "enhanced-workflows.js"), "utf8");
+const enhancedApi = await readFile(resolve(workerRoot, "enhanced-api.js"), "utf8");
+const photoModule = await readFile(resolve(workerRoot, "enhanced-photos.js"), "utf8");
+const photoDrop = await readFile(resolve(workerRoot, "enhanced-drop.js"), "utf8");
 const bundled = [
+  photoDrop.replace("export const PHOTO_DROP", "const PHOTO_DROP"),
+  photoModule.replace("export const PHOTO_MODULE", "const PHOTO_MODULE"),
+  workflows.replace("export const ENHANCED_WORKFLOWS", "const ENHANCED_WORKFLOWS"),
+  enhancedApi.replace(/^export /gm, ""),
+  projectImages.replace("export const PROJECT_IMAGES", "const PROJECT_IMAGES"),
+  enhanced.replace(/^import .*;\n/gm, "").replace("export const ENHANCED_CLIENT", "const ENHANCED_CLIENT"),
+  enhancedStyles.replace("export const ENHANCED_STYLES", "const ENHANCED_STYLES"),
   `const PROFILE_PHOTO_BATCH = ${JSON.stringify(PROFILE_PHOTO_BATCH)};`,
   `const PROFILE_PHOTOS = ${JSON.stringify(profilePhotos)};`,
   seed.replace("export const SEED_PROJECTS", "const SEED_PROJECTS"),
-  styles.replace("export const STYLES", "const STYLES"),
-  client.replace("export const CLIENT", "const CLIENT"),
+  styles.replace(/^import .*;\n/gm, "").replace("export const STYLES", "const STYLES"),
+  client.replace(/^import .*;\n/gm, "").replace("export const CLIENT", "const CLIENT"),
   page.replace("export const PAGE", "const PAGE"),
   `const OG_IMAGE_BASE64 = "${social.toString("base64")}";`,
   `const DN_LOGO_BASE64 = "${logo.toString("base64")}";`,
