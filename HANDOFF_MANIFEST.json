@@ -18,18 +18,16 @@
   "deployment": {
     "platform": "Cloudflare Pages (advanced mode, Direct Upload)",
     "project": "dnc-tracker-pilot",
-    "deployment_id": "e01712e5-30c0-437d-aa5f-32b7a3360d3c",
+    "deployment_id": "d172266b-9548-4b84-9381-bfab0a35428a",
     "environment": "Production",
     "branch": "handoff",
-    "deployed_utc": "2026-09-15T07:26:00Z",
+    "deployed_utc": "2026-09-26T10:32:00Z",
     "production_url": "https://dnc.lagospm.com",
-    "deployment_url": "https://e01712e5.dnc-tracker-pilot.pages.dev",
-    "commit_uploaded_at": "e199045",
-    "live_bundle_sha256": "a7d51198e39449fd27d0fa380276c52e54db2543d8e4ea79ef5e1991b61b9e8f",
-    "this_commit_bundle_sha256": "c0dd9673f3b070cb4bdc2550d47ef76962e943fdfa5c73412e0407edc89ef0b2",
-    "runtime_equivalent_to_this_commit": false,
-    "redeploy_required": true,
-    "traceability_note": "PRODUCTION DOES NOT YET CARRY THE QA FIXES. Earlier manifests recorded production as runtime-equivalent to the packaged commit; that was true while every commit since e199045 touched only scripts and documentation. It is no longer true. `git diff e199045 3a1abdb -- worker/` now reports two changed files (worker/index.js, worker/client.js), and the two bundle hashes above differ. The five QA findings and the two follow-up regressions are fixed, verified on the isolated test environment, and awaiting a production deploy. Production continues to serve the e199045 runtime until `npm run deploy:prod` is run."
+    "deployment_url": "https://d172266b.dnc-tracker-pilot.pages.dev",
+    "commit_uploaded_at": "e302b3e",
+    "live_bundle_sha256": "c08e92003f41a15876c06db54229157fda7ed44b6809867b1daab5153dcb47e1",
+    "runtime_equivalent_to_this_commit": true,
+    "traceability_note": "Production serves the integrated Classic/Enhanced build: Enhanced revision 17 merged onto corrected Classic 7b4eb5a (DNC-001 to 008). The deployment was uploaded from e302b3e; the packaged commit differs from it only in this manifest, which is not part of the worker bundle, so pages-dist/_worker.js built from either commit has the sha256 above. Rollback target: 1585d667-100e-4ca1-bbd1-d34c920ab899 (7b4eb5a, Classic only). A preview of the same build, 1a74169c, was checked before promotion."
   },
   "isolated_test_environment": {
     "purpose": "Technical review copy. Separate Cloudflare resources throughout; it never reaches production data.",
@@ -70,14 +68,11 @@
     "documentation": "docs/WORKBOOK_IMPORT.md — the fortnightly runbook, including the pipeline in execution order, the mandatory backup and how to verify it, how to read the reconciliation report, and the rules that must not be relaxed."
   },
   "production_data_state": {
-    "as_of_utc": "2026-09-18T06:20:00Z",
+    "as_of_utc": "2026-09-26T10:32:00Z",
     "projects": 76,
     "project_updates": 164,
-    "user_directory": 78,
-    "audit_log": 81,
-    "last_workbook_import": "2026-09-11 (applied 2026-09-17; app_meta key workbook_import:2026-09-11)",
-    "note": "The September 11 workbook import added 2 projects and 36 history rows. All 128 pre-existing history rows were preserved, including the one user-authored update. Pre-import backup taken and verified by restoring it; see backup_before_import below.",
-    "audit_trail_note": "All 31 audit rows from the import are attributed to 'Workbook Import' and share the timestamp 2026-09-17 08:24:50 — one import run. The Wheeling Island status change records status: Active -> Complete in the same shape the application writes for a human edit."
+    "project_photos": 5,
+    "note": "Accounts, password hashes, roles and history untouched; no seed, restore or workbook reimport was run."
   },
   "backup_before_import": {
     "location": "~/dn-tracker-backups/pre-workbook-import-2026-09-17/d1-full.sql",
@@ -142,7 +137,8 @@
       "not_tested_remotely_and_why": "DNC-001, -002, -004 and -005 are deliberately excluded from the remote suite: each writes to projects, project_updates or development_details, which is not acceptable against a shared QA environment other people are testing in. They are covered by npm test against an in-memory database built from the real migrations.",
       "earlier_deployment": "DNC-001 to DNC-006 passed 63/63 on the EARLIER deployment d0ce6505 in an ad-hoc run that is not reproducible from this package. That figure is retained for history only; the reproducible result for the current deployment is the 32/32 above."
     },
-    "remote_test_data_safety": "The authenticated half needed an All-scope Editor and a Gaming Viewer holding a temporary password; neither state existed among the six synthetic accounts, so two additive dnc-remote-*@example.invalid accounts were created for the run and deleted immediately after it, together with their sessions, login events and role rows. No existing account was modified and no password was reset, so no other tester's session was disturbed. Before and after row counts are identical: 6 users, 10 projects, 59 project_updates, 2 login_sessions. The six original accounts are unchanged. Project, activity and development data were never written to, by design — see coverage_by_finding.not_tested_remotely_and_why."
+    "remote_test_data_safety": "The authenticated half needed an All-scope Editor and a Gaming Viewer holding a temporary password; neither state existed among the six synthetic accounts, so two additive dnc-remote-*@example.invalid accounts were created for the run and deleted immediately after it, together with their sessions, login events and role rows. No existing account was modified and no password was reset, so no other tester's session was disturbed. Before and after row counts are identical: 6 users, 10 projects, 59 project_updates, 2 login_sessions. The six original accounts are unchanged. Project, activity and development data were never written to, by design — see coverage_by_finding.not_tested_remotely_and_why.",
+    "enhanced_integration_2026_09_26": "npm test (including DNC-001 to 008 regressions) pass; test:enhanced 4/4 pass; workbook reconcile and apply tests pass; qa/photos-connected.cjs pass in Chrome. qa/enhanced-browser.cjs and qa/enhanced-workflows.cjs fail identically on unmodified revision 17 (they target pre-revision-15 layouts). scripts/export-integrity-test.mjs not run: needs Python openpyxl. Live: / 200, /api/bootstrap and photo routes 401 when signed out; preview login, Classic/Enhanced switch and Central City photos checked by Faheem."
   },
   "qa_findings": {
     "source": "Mina Ramzy, sanitized review and re-test",
@@ -163,5 +159,17 @@
     ],
     "note": "DNC-007 and DNC-008 were server-correct and browser-broken, as both earlier follow-ups were: every request in the failing sequence was answered properly while the screen was wrong. Verification that stops at the API cannot see this class of defect, and neither can a test that calls a client helper in isolation, because the defect is in state carried across a sign-in. The suite now drives the served page end to end.",
     "role_clarification": "Tom confirmed that Download is a VIEW capability: it changes no stored value and returns only rows the account has already been served, scoped to its own business units. Viewers therefore keep both Download and Choose Columns. This overrides the earlier assumption that Viewers should not download. The worker already worked this way — /api/export.* asks only for a resolved role and a replaced temporary password — so the fix was to stop the browser hiding a control the server would serve. Recorded in docs/PERMISSIONS.md section 2."
+  },
+  "enhanced_integration": {
+    "source": "DN_Tracker_Enhanced_Source_2026-09-24.zip, revision 17 (base e678538); package CHECKSUMS.sha256 verified clean before import",
+    "history": "4f4a410 imports revision 17 verbatim onto e678538; 0d8b44e merges it into dev (b59c847, descendant of 7b4eb5a); e302b3e adds scripts/import-central-city.mjs",
+    "conflicts": "CHECKSUMS.sha256 and HANDOFF_MANIFEST.json only; dev's versions kept, both are generated at package time",
+    "backup_before_changes": "~/dn-tracker-backups/20260926T095659Z (full D1 export, schema, 8 R2 profile photos, CHECKSUMS.sha256); kept off-repository",
+    "migrations_applied_to_production": [
+      "drizzle/0006_enhanced_media_and_revisions.sql",
+      "drizzle/0007_photo_details.sql"
+    ],
+    "migration_effect": "Additive only: project_photos, activity_revisions, photo_number_sequences. No existing table altered. Projects 76 and project_updates 164 unchanged.",
+    "central_city_import": "scripts/import-central-city.mjs --target prod: dry run showed project 37 (New Construction Complex / CENTRAL CITY); applied 1 cover (GGGR-concept.png) and 4 progress photos PTL26060214, 15, 16, 24 with audit entries. R2 objects verified byte-identical to assets/central-city. Repeat dry run reports all 5 already present."
   }
 }
