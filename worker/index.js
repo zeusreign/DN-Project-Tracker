@@ -1,3 +1,4 @@
+import { enhancedApi, editDeadline } from "./enhanced-api.js";
 import { PAGE } from "./page.js";
 import { SEED_PROJECTS } from "./seed.js";
 import { OG_IMAGE_BASE64 } from "./social.js";
@@ -1116,6 +1117,8 @@ async function handleApi(request, env, url) {
   if (request.method === "GET" && url.pathname === "/api/updates") {
     return json({ updates: await recentUpdates(env.DB, url.searchParams.get("limit") || 100, scope) });
   }
+  const enhancedResponse = await enhancedApi(request, env, user, role, scope, {json,error,projectInScope,canWrite});
+  if(enhancedResponse) return enhancedResponse;
   const historyMatch = url.pathname.match(/^\/api\/projects\/(\d+)\/history$/);
   if (request.method === "GET" && historyMatch) {
     const projectId = Number(historyMatch[1]);
@@ -1136,7 +1139,8 @@ async function handleApi(request, env, url) {
       WHERE project_id = ?
       ORDER BY reporting_period DESC, created_at DESC, id DESC
     `).bind(projectId).all();
-    return json({ project, history: history.results || [] });
+    const revisions = await env.DB.prepare("SELECT r.* FROM activity_revisions r JOIN project_updates u ON u.id=r.update_id WHERE u.project_id=? ORDER BY r.created_at DESC,r.id DESC").bind(projectId).all();
+    return json({ project, server_time: new Date().toISOString(), history: (history.results || []).map(h=>({...h,edit_deadline:new Date(editDeadline(h.created_at)).toISOString(),editable:canWrite(role)&&Date.now()<editDeadline(h.created_at),revisions:(revisions.results||[]).filter(r=>r.update_id===h.id)})) });
   }
   if (request.method === "GET" && url.pathname === "/api/admin/backup") {
     // Administrators only. Editors and Viewers are refused here, before any
@@ -1682,6 +1686,8 @@ async function buildBackupArchive(db, stamp) {
            avatar_key, avatar_mime, avatar_version
     FROM user_directory WHERE avatar_key IS NOT NULL ORDER BY avatar_key
   `).all()).results || [];
+  const projectPhotos = (await db.prepare("SELECT id,project_id,kind,reporting_period,object_key,object_key AS avatar_key,mime FROM project_photos WHERE deleted_at IS NULL ORDER BY object_key").all()).results || [];
+  photos.push(...projectPhotos);
   const manifest = JSON.stringify({ generated: stamp, bucket: "dnc-tracker-assets", objects: photos }, null, 2);
   const keys = photos.map((p) => p.avatar_key).join("\n") + (photos.length ? "\n" : "");
 

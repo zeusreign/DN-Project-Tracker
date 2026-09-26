@@ -175,6 +175,8 @@ database.exec(await readFile(new URL("../drizzle/0002_user_directory.sql", impor
 database.exec(await readFile(new URL("../drizzle/0003_development_pipeline_and_directory.sql", import.meta.url), "utf8"));
 database.exec(await readFile(new URL("../drizzle/0004_pilot_authentication.sql", import.meta.url), "utf8"));
 database.exec(await readFile(new URL("../drizzle/0005_profile_photos.sql", import.meta.url), "utf8"));
+database.exec(await readFile(new URL("../drizzle/0006_enhanced_media_and_revisions.sql", import.meta.url), "utf8"));
+database.exec(await readFile(new URL("../drizzle/0007_photo_details.sql", import.meta.url), "utf8"));
 const DB = new D1Database(database);
 const photoObjects = new Map();
 const BUCKET = {
