@@ -278,6 +278,24 @@ function isValidDate(value) {
 // Returns a list of human-readable problems; empty means the payload is usable.
 // Validation runs over the WHOLE body before anything is written, so a mixed
 // valid/invalid payload is rejected outright rather than partially applied.
+// The Days column. duration_change_days is a STORED column: the workbook import
+// writes it from the sheet's "duration change" cell, and nothing recomputed it
+// afterwards, so editing either turnover date left the old number on screen.
+// It is derived data, so it is recomputed from the row itself after any write
+// that can move a turnover date — the same shape as the approved_budget
+// recompute that follows a cost edit. Applied as SQL rather than in JS so it
+// reads the values the statement before it just committed, whichever of the two
+// dates the caller actually supplied.
+const DURATION_CHANGE_DAYS_SQL = `
+  duration_change_days = CASE
+    WHEN original_turnover_date IS NULL OR current_turnover_date IS NULL
+      OR trim(original_turnover_date) = '' OR trim(current_turnover_date) = ''
+      OR julianday(original_turnover_date) IS NULL OR julianday(current_turnover_date) IS NULL
+    THEN NULL
+    ELSE CAST(julianday(current_turnover_date) - julianday(original_turnover_date) AS INTEGER)
+  END
+`;
+
 function validateProjectFields(body, projectType) {
   const problems = [];
   const isBlank = (value) => value === null || value === undefined || String(value).trim() === "";
@@ -1450,6 +1468,10 @@ async function handleApi(request, env, url) {
         asText(body.current_turnover_date, 20), reportingPeriod,
         asText(body.section_name, 180) || asText(body.venue, 180) || "Portfolio"
       ),
+      // The INSERT above does not list duration_change_days, so a project created
+      // with both turnover dates would show "—" until someone edited a date. Keyed
+      // on source_key because the insert's row id is not available inside a batch.
+      env.DB.prepare("UPDATE projects SET " + DURATION_CHANGE_DAYS_SQL + " WHERE source_key = ?").bind(sourceKey),
       env.DB.prepare(`
         INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)
         VALUES ('create', 'project', ?, ?, ?, ?)
@@ -1657,11 +1679,13 @@ async function handleApi(request, env, url) {
     const values = [];
     const fields = [];
     let costChanged = false;
+    let turnoverChanged = false;
     for (const [key, value] of Object.entries(body)) {
       if (textFields.has(key)) {
         sets.push(key + " = ?");
         values.push(asText(value));
         fields.push(key);
+        if (key === "original_turnover_date" || key === "current_turnover_date") turnoverChanged = true;
       } else if (numberFields.has(key)) {
         sets.push(key + " = ?");
         values.push(asNumber(value));
@@ -1680,6 +1704,9 @@ async function handleApi(request, env, url) {
       UPDATE projects SET approved_budget = COALESCE(precon_capp, 0) + COALESCE(construction_capp, 0) + COALESCE(add_capp, 0)
       WHERE id = ?
     `).bind(projectId));
+    if (turnoverChanged) statements.push(
+      env.DB.prepare("UPDATE projects SET " + DURATION_CHANGE_DAYS_SQL + " WHERE id = ?").bind(projectId)
+    );
     await env.DB.batch(statements);
     return json({ ok: true });
   }
