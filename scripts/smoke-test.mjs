@@ -969,6 +969,42 @@ assert.equal(costDetails.projectName, capital.name);
 assert.equal(costDetails.actorName, "Pilot Owner");
 assert.equal(costAudit.actor_email, "owner@example.com");
 assert.deepEqual(costDetails.changes.find(change => change.field === "precon_capp"), {field:"precon_capp",before:capital.precon_capp,after:100});
+
+// Days column: duration_change_days is derived from the two turnover dates and
+// must be recomputed whenever either one moves. It used to be a stored value the
+// workbook import wrote once, so QA saw the old number survive an edit: the exact
+// sequence below reported 21 throughout, whatever the dates were changed to.
+const daysOf = (id) => database.prepare("SELECT duration_change_days FROM projects WHERE id = ?").get(id).duration_change_days;
+const patchDates = (payload) => call(`/api/projects/${capital.id}/fields`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(payload),
+});
+
+assert.equal((await patchDates({ original_turnover_date: "2027-03-05", current_turnover_date: "2027-03-31" })).status, 200);
+assert.equal(daysOf(capital.id), 26, "Days must be Current minus Original in calendar days, not a stored value");
+
+// Only the current date moves: 2027-03-05 -> 2027-03-25.
+assert.equal((await patchDates({ current_turnover_date: "2027-03-25" })).status, 200);
+assert.equal(daysOf(capital.id), 20, "changing Current Turnover alone must recalculate Days");
+
+// Only the original date moves: 2027-03-01 -> 2027-03-25.
+assert.equal((await patchDates({ original_turnover_date: "2027-03-01" })).status, 200);
+assert.equal(daysOf(capital.id), 24, "changing Original Turnover alone must recalculate Days");
+
+// A negative difference is meaningful: turnover pulled earlier than planned.
+assert.equal((await patchDates({ current_turnover_date: "2027-02-24" })).status, 200);
+assert.equal(daysOf(capital.id), -5, "Days must be able to go negative");
+
+// Clearing either date leaves nothing to subtract, so the column goes empty.
+assert.equal((await patchDates({ current_turnover_date: "" })).status, 200);
+assert.equal(daysOf(capital.id), null, "clearing a turnover date must blank Days, not keep a stale number");
+
+// An edit that touches neither turnover date must leave Days alone.
+assert.equal((await patchDates({ original_turnover_date: "2027-03-01", current_turnover_date: "2027-03-25" })).status, 200);
+assert.equal(daysOf(capital.id), 24);
+assert.equal((await patchDates({ project_manager: "Days Column Probe" })).status, 200);
+assert.equal(daysOf(capital.id), 24, "an unrelated field edit must not disturb Days");
 assert.equal(costDetails.changes.find(change => change.field === "anticipated_final_cost").after, 400);
 const priorActivityHistory = JSON.stringify(database.prepare("SELECT * FROM project_updates ORDER BY id").all());
 database.prepare("UPDATE projects SET budget_risk = 'Low' WHERE id = ?").run(capital.id);
