@@ -1,0 +1,32 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const {spawn}=require('node:child_process');
+const server=spawn(process.execPath,['scripts/preview-enhanced.mjs'],{stdio:['ignore','pipe','inherit']});
+(async()=>{
+ await new Promise((resolve,reject)=>{server.stdout.on('data',d=>{if(String(d).includes('Local preview'))resolve()});server.on('error',reject);server.on('exit',c=>reject(Error('Preview exited '+c)))});
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});const page=await browser.newPage({viewport:{width:1536,height:960},deviceScaleFactor:1});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('http://127.0.0.1:4173');await page.locator('#workspace').waitFor({state:'visible'});
+ await page.locator('#enToggle').click();await page.locator('#businessUnitBar [data-business-unit="Gaming"]').click();
+ await page.locator('#enToolbar-projects [data-en-layout="cards"]').click();assert.equal(await page.locator('#enPanel-projects .en-card').count(),await page.evaluate(()=>filteredCapital().length));
+ await page.screenshot({path:'qa/enhanced-cards.png',fullPage:false});
+ await page.locator('#enPanel-projects [data-en-open]').first().click();
+ await page.locator('[data-en-history]').click();await page.locator('.en-history-item').first().waitFor();
+ const before=await page.locator('.en-record h2').textContent();
+ await page.locator('#enToolbar-projects [data-en-layout="list"]').click();await page.locator('#enToolbar-projects [data-en-layout="record"]').click();assert.equal(await page.locator('.en-record h2').textContent(),before);
+ await page.locator('[data-en-history]').click();await page.locator('.en-history-item').first().waitFor();await page.screenshot({path:'qa/enhanced-record.png',fullPage:false});
+ await page.locator('#enToolbar-projects [data-en-move="last"]').click();assert.equal(await page.locator('#enToolbar-projects [data-en-move="next"]').isDisabled(),true);
+ await page.locator('#projectsControls [data-en-picker]').click();await page.locator('#projectsControls [data-en-choice=slider]').click();await page.locator('#enBottomNav [data-en-slider]').fill('2');await page.locator('#enBottomNav [data-en-slider]').dispatchEvent('change');assert.equal(await page.locator('#enBottomNav [data-en-position]').inputValue(),'2');
+ await page.locator('#search').fill('zzzz-no-match');assert.equal(await page.locator('#enPanel-projects .en-empty').count(),1);await page.locator('#search').fill('');
+ await page.locator('#enToolbar-projects [data-en-layout="collage"]').click();await page.screenshot({path:'qa/enhanced-collage.png',fullPage:false});
+ await page.locator('#enToggle').click();assert.equal(await page.locator('#enPanel-projects').isVisible(),false);assert.equal(await page.locator('#projectsBody').isVisible(),true);
+ await page.locator('#enToggle').click();await page.locator('[data-view="development"]').click();await page.locator('#enToolbar-development [data-en-layout="record"]').click();await page.locator('#enPanel-development .en-record').waitFor();
+ await page.locator('[data-view="projects"]').click();await page.locator('#enToolbar-projects [data-en-layout="record"]').click();
+ await page.locator('#enPanel-projects [data-details]').click();await page.locator('#fName').fill('Unsaved QA edit');page.once('dialog',d=>d.dismiss());await page.locator('#detailsDialog [data-close]').first().click();assert.equal(await page.locator('#detailsDialog').evaluate(x=>x.open),true);page.once('dialog',d=>d.accept());await page.locator('#detailsDialog [data-close]').first().click();
+ await page.reload();await page.locator('#workspace').waitFor({state:'visible'});assert.equal(await page.locator('body').evaluate(x=>x.classList.contains('is-enhanced')),true);
+ await page.setViewportSize({width:960,height:650});await page.screenshot({path:'qa/enhanced-small.png',fullPage:false});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+ await page.setViewportSize({width:390,height:844});await page.screenshot({path:'qa/enhanced-mobile.png',fullPage:false});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+ const viewer=await browser.newContext({viewport:{width:1536,height:960}});await viewer.addCookies([{name:'preview_role',value:'gaming.viewer',url:'http://127.0.0.1:4173'}]);const vp=await viewer.newPage();vp.on('pageerror',e=>errors.push(e.message));await vp.goto('http://127.0.0.1:4173');await vp.locator('#workspace').waitFor({state:'visible'});await vp.locator('#enToggle').click();await vp.locator('#enToolbar-projects [data-en-layout="record"]').click();assert.equal(await vp.locator('#enPanel-projects').getByText('Edit project',{exact:true}).count(),0);const scope=await vp.evaluate(()=>state.projects.every(p=>p.business_unit==='Gaming'));assert.equal(scope,true);assert.equal(await vp.locator('[data-business-unit="Parks & Resorts"]').count(),0);
+
+ const editor=await browser.newContext({viewport:{width:1536,height:960}});await editor.addCookies([{name:'preview_role',value:'editor',url:'http://127.0.0.1:4173'}]);const ep=await editor.newPage();ep.on('pageerror',e=>errors.push(e.message));await ep.goto('http://127.0.0.1:4173');await ep.locator('#workspace').waitFor({state:'visible'});await ep.locator('#enToggle').click();await ep.locator('#enToolbar-projects [data-en-layout="record"]').click();await ep.locator('#enPanel-projects [data-details]').click();const editId=await ep.locator('#detailsId').inputValue();await ep.locator('#fName').fill('QA persisted Enhanced edit');await ep.locator('#fBudgetRisk').selectOption('High');await ep.getByRole('button',{name:'Save project fields',exact:true}).click();await ep.locator('#detailsDialog').waitFor({state:'hidden'});await ep.reload();await ep.locator('#workspace').waitFor({state:'visible'});assert.deepEqual(await ep.evaluate(id=>{const p=state.projects.find(p=>p.id===Number(id));return [p.name,p.budget_risk]},editId),['QA persisted Enhanced edit','High']);
+ assert.deepEqual(errors,[]);console.log('PASS: layouts, preserved selection/filters, navigation bounds, slider, empty results, Classic fallback, development records, unsaved edits, per-user preferences, responsive widths, scoped Viewer, Editor save/reload persistence. No browser errors.');await browser.close();server.kill();
+})().catch(e=>{console.error(e);server.kill();process.exit(1)});

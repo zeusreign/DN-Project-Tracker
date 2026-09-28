@@ -1,13 +1,13 @@
 {
   "application": "DN D&C Project Tracker",
   "package": "DN-Project-Tracker-handoff",
-  "prepared_utc": "2026-09-25T07:45:00Z",
+  "prepared_utc": "2026-09-28T07:39:39Z",
   "source": {
-    "git_commit": "9e64ac538929c46d3deb8f05021a41da0ffa8da2",
-    "git_commit_short": "9e64ac5",
-    "branch": "dev",
-    "working_tree": "clean apart from scripts/remote-check.mjs, package.json, docs/TESTING.md, this manifest and CHECKSUMS.sha256, which together are the remote-verification change and are committed immediately after it",
-    "self_reference_note": "CHECKSUMS.sha256 cannot list its own hash, so it is the only tracked file absent from it. This manifest IS listed, because it is written first and hashed afterwards. None of the files in this refresh is bundled, so the deployed artifact is unaffected and still matches the build described under isolated_test_environment.latest_deployment exactly.",
+    "git_commit": "06edf0d36a86494686fad37b7bc20a8dacd39e1d",
+    "git_commit_short": "06edf0d",
+    "branch": "enhanced-integration",
+    "working_tree": "clean apart from this manifest and CHECKSUMS.sha256, which are the metadata refresh for the Enhanced integration release and are committed together in one commit.",
+    "self_reference_note": "A commit hash is derived from its content, so a tracked manifest cannot name the commit that contains it. git_commit above names 06edf0d — the commit built and deployed to TEST as 37c13e13 — while this refreshed copy lands in the single metadata commit immediately after it. That commit changes only HANDOFF_MANIFEST.json and CHECKSUMS.sha256, neither of which is part of the worker bundle, so the deployed artifact is unaffected and still hashes to the bundle_sha256 recorded below. CHECKSUMS.sha256 cannot list its own hash and is the only tracked file absent from it; this manifest IS listed, because it is written first and hashed afterwards. scripts/package-handoff.sh regenerates both from `git archive HEAD` for the handoff zip.",
     "tracked_file_count": 78,
     "commits_since_last_manifest": [
       "354fb4b  Fix browser session regression findings (DNC-007, DNC-008)",
@@ -18,18 +18,16 @@
   "deployment": {
     "platform": "Cloudflare Pages (advanced mode, Direct Upload)",
     "project": "dnc-tracker-pilot",
-    "deployment_id": "e01712e5-30c0-437d-aa5f-32b7a3360d3c",
+    "deployment_id": "d172266b-9548-4b84-9381-bfab0a35428a",
     "environment": "Production",
     "branch": "handoff",
-    "deployed_utc": "2026-09-15T07:26:00Z",
+    "deployed_utc": "2026-09-26T10:32:00Z",
     "production_url": "https://dnc.lagospm.com",
-    "deployment_url": "https://e01712e5.dnc-tracker-pilot.pages.dev",
-    "commit_uploaded_at": "e199045",
-    "live_bundle_sha256": "a7d51198e39449fd27d0fa380276c52e54db2543d8e4ea79ef5e1991b61b9e8f",
-    "this_commit_bundle_sha256": "c0dd9673f3b070cb4bdc2550d47ef76962e943fdfa5c73412e0407edc89ef0b2",
-    "runtime_equivalent_to_this_commit": false,
-    "redeploy_required": true,
-    "traceability_note": "PRODUCTION DOES NOT YET CARRY THE QA FIXES. Earlier manifests recorded production as runtime-equivalent to the packaged commit; that was true while every commit since e199045 touched only scripts and documentation. It is no longer true. `git diff e199045 3a1abdb -- worker/` now reports two changed files (worker/index.js, worker/client.js), and the two bundle hashes above differ. The five QA findings and the two follow-up regressions are fixed, verified on the isolated test environment, and awaiting a production deploy. Production continues to serve the e199045 runtime until `npm run deploy:prod` is run."
+    "deployment_url": "https://d172266b.dnc-tracker-pilot.pages.dev",
+    "commit_uploaded_at": "e302b3e",
+    "live_bundle_sha256": "c08e92003f41a15876c06db54229157fda7ed44b6809867b1daab5153dcb47e1",
+    "runtime_equivalent_to_this_commit": true,
+    "traceability_note": "Production serves the integrated Classic/Enhanced build: Enhanced revision 17 merged onto corrected Classic 7b4eb5a (DNC-001 to 008). The deployment was uploaded from e302b3e; the packaged commit differs from it only in this manifest, which is not part of the worker bundle, so pages-dist/_worker.js built from either commit has the sha256 above. Rollback target: 1585d667-100e-4ca1-bbd1-d34c920ab899 (7b4eb5a, Classic only). A preview of the same build, 1a74169c, was checked before promotion."
   },
   "isolated_test_environment": {
     "purpose": "Technical review copy. Separate Cloudflare resources throughout; it never reaches production data.",
@@ -42,18 +40,23 @@
     "contents": "5 synthetic projects and 5 demonstration accounts. No live record is present.",
     "safety_note": "scripts/check-deploy-target.sh is the single definition of what each environment looks like. It asserts the project name, D1 name and id, R2 bucket, both binding names and ALLOW_PLATFORM_AUTH=\"false\", and explicitly forbids the other environment's database id and bucket. Both deploy scripts run it before building or uploading. Note that the production resource names are strict PREFIXES of the test ones, so every assertion anchors on the whole key = \"value\" line; a substring match would pass against either environment.",
     "latest_deployment": {
-      "deployment_id": "13389a84-783d-4e30-8e93-6024c606b126",
-      "url": "https://13389a84.dnc-tracker-pilot-dev.pages.dev",
-      "stable_url": "https://dnc-tracker-pilot-dev.pages.dev",
+      "deployment_id": "37c13e13-dfdd-4459-980d-673964ba7bb0",
+      "url": "https://37c13e13.dnc-tracker-pilot-dev.pages.dev",
+      "stable_url": "https://dev.dnc.lagospm.com",
       "branch": "test",
       "cloudflare_project": "dnc-tracker-pilot-dev",
-      "cloudflare_commit_label": "56fd45a",
-      "actual_source_commit": "56fd45a1c6dd6337cda47f946c78bc893c06937f",
-      "bundle_sha256": "33a2d01f237cd49a4b8d1516e1dfa989ef5a519dc75c9566f49ab8c9229575bc",
-      "served_page_sha256": "f52bbcd5a5b76ac695039131ab8933ff2fd18d1d96cee3a810c2b8a6cec62496",
-      "verified_how": "Listed with `wrangler pages deployment list --project-name dnc-tracker-pilot-dev`, which reports this id on branch test with source label 56fd45a. The page it serves was downloaded and is byte-identical to the page this tree builds — same 166456 bytes, same sha256 — so the deployed client is provably the DNC-007/DNC-008 build and not an earlier one.",
-      "result": "32/32 remote checks passed, 0 failed, 0 skipped — 20 credential-free plus the 12-check authenticated account-transition sequence, run 2026-09-25 with `npm run check:remote` against this deployment and its real D1.",
-      "previous_deployment": "d0ce6505-fcbb-42c1-8e25-f2d138a21e15 (label f36f7e9, artifact 3a1abdb) carried DNC-001 to DNC-006 and is the deployment the 63/63 figure belongs to."
+      "cloudflare_commit_label": "06edf0d",
+      "actual_source_commit": "06edf0d36a86494686fad37b7bc20a8dacd39e1d",
+      "git_branch": "enhanced-integration",
+      "release": "Enhanced integration release — Classic/Enhanced integrated build",
+      "deployed_utc": "2026-09-26T00:00:00Z",
+      "bundle_sha256": "c08e92003f41a15876c06db54229157fda7ed44b6809867b1daab5153dcb47e1",
+      "served_page_sha256": "838e1f3c5416d45415ec22337d8d132f8e2ff89fa641de3b7b018e9d1ecf5e90",
+      "served_page_bytes": 1048646,
+      "bundle_identical_to_production": true,
+      "verified_how": "Listed with `wrangler pages deployment list --project-name dnc-tracker-pilot-dev`, which reports this id on branch test with source label 06edf0d. The page served at https://dev.dnc.lagospm.com was downloaded and hashes to the served_page_sha256 above at 1,048,646 bytes, carrying 27 Enhanced, 19 Rolodex and 18 en-rolodex markers — so the deployed client is provably the integrated Classic/Enhanced build. bundle_sha256 is identical to deployment.live_bundle_sha256, because worker/ is byte-identical between e302b3e and 06edf0d.",
+      "schema_state": "drizzle/0006_enhanced_media_and_revisions.sql and drizzle/0007_photo_details.sql were applied to the TEST D1 (dnc-tracker-pilot-dev, 34dca57e-bd32-46cd-b154-8c362efaeb4c) on 2026-09-26. Additive only: 0 destructive statements, existing rows unchanged (projects 17, project_updates 74, user_directory 7 before and after).",
+      "previous_deployment": "13389a84-783d-4e30-8e93-6024c606b126 (label 56fd45a) carried the Classic DNC-001 to 008 build and is the deployment the earlier 32/32 figure belongs to."
     }
   },
   "workbook_import": {
@@ -70,14 +73,11 @@
     "documentation": "docs/WORKBOOK_IMPORT.md — the fortnightly runbook, including the pipeline in execution order, the mandatory backup and how to verify it, how to read the reconciliation report, and the rules that must not be relaxed."
   },
   "production_data_state": {
-    "as_of_utc": "2026-09-18T06:20:00Z",
+    "as_of_utc": "2026-09-26T10:32:00Z",
     "projects": 76,
     "project_updates": 164,
-    "user_directory": 78,
-    "audit_log": 81,
-    "last_workbook_import": "2026-09-11 (applied 2026-09-17; app_meta key workbook_import:2026-09-11)",
-    "note": "The September 11 workbook import added 2 projects and 36 history rows. All 128 pre-existing history rows were preserved, including the one user-authored update. Pre-import backup taken and verified by restoring it; see backup_before_import below.",
-    "audit_trail_note": "All 31 audit rows from the import are attributed to 'Workbook Import' and share the timestamp 2026-09-17 08:24:50 — one import run. The Wheeling Island status change records status: Active -> Complete in the same shape the application writes for a human edit."
+    "project_photos": 5,
+    "note": "Accounts, password hashes, roles and history untouched; no seed, restore or workbook reimport was run."
   },
   "backup_before_import": {
     "location": "~/dn-tracker-backups/pre-workbook-import-2026-09-17/d1-full.sql",
@@ -142,7 +142,32 @@
       "not_tested_remotely_and_why": "DNC-001, -002, -004 and -005 are deliberately excluded from the remote suite: each writes to projects, project_updates or development_details, which is not acceptable against a shared QA environment other people are testing in. They are covered by npm test against an in-memory database built from the real migrations.",
       "earlier_deployment": "DNC-001 to DNC-006 passed 63/63 on the EARLIER deployment d0ce6505 in an ad-hoc run that is not reproducible from this package. That figure is retained for history only; the reproducible result for the current deployment is the 32/32 above."
     },
-    "remote_test_data_safety": "The authenticated half needed an All-scope Editor and a Gaming Viewer holding a temporary password; neither state existed among the six synthetic accounts, so two additive dnc-remote-*@example.invalid accounts were created for the run and deleted immediately after it, together with their sessions, login events and role rows. No existing account was modified and no password was reset, so no other tester's session was disturbed. Before and after row counts are identical: 6 users, 10 projects, 59 project_updates, 2 login_sessions. The six original accounts are unchanged. Project, activity and development data were never written to, by design — see coverage_by_finding.not_tested_remotely_and_why."
+    "remote_test_data_safety": "The authenticated half needed an All-scope Editor and a Gaming Viewer holding a temporary password; neither state existed among the six synthetic accounts, so two additive dnc-remote-*@example.invalid accounts were created for the run and deleted immediately after it, together with their sessions, login events and role rows. No existing account was modified and no password was reset, so no other tester's session was disturbed. Before and after row counts are identical: 6 users, 10 projects, 59 project_updates, 2 login_sessions. The six original accounts are unchanged. Project, activity and development data were never written to, by design — see coverage_by_finding.not_tested_remotely_and_why.",
+    "enhanced_integration_2026_09_26": "npm test (including DNC-001 to 008 regressions) pass; test:enhanced 4/4 pass; workbook reconcile and apply tests pass; qa/photos-connected.cjs pass in Chrome. qa/enhanced-browser.cjs and qa/enhanced-workflows.cjs fail identically on unmodified revision 17 (they target pre-revision-15 layouts). scripts/export-integrity-test.mjs not run: needs Python openpyxl. Live: / 200, /api/bootstrap and photo routes 401 when signed out; preview login, Classic/Enhanced switch and Central City photos checked by Faheem.",
+    "enhanced_regression_2026_09_28": {
+      "target": "https://dev.dnc.lagospm.com — deployment 37c13e13-dfdd-4459-980d-673964ba7bb0, commit 06edf0d, branch enhanced-integration",
+      "result": "74 reported checks, 74 passed, 0 failed. 12 credential-gated checks skipped; 13 suites blocked by absent optional dependencies.",
+      "npm_test": "PASS — build, ESM artifact validation and the smoke suite (401 assertion sites). DNC-001, -002, -004, -005 covered in-process; DNC-007 and DNC-008 covered through the served page.",
+      "enhanced_suite": "PASS — `npm run test:enhanced` (53 assertion sites), 4 groups: history revisions/date preservation, 10-day cutoff, conflicts, empty text, newest-summary protection, Viewer and business-unit restrictions, cover replacement, weekly photos, image validation and size; photo metadata persistence, input validation, stale-edit conflict, audit, Viewer and business-unit access; initials/date numbering, sequence advance, delete authorisation, deleted reads blocked, number never reused, 99 cap.",
+      "workbook_suites": "PASS — scripts/workbook-parse-test.mjs (73 project rows across 6 sheets), scripts/reconcile-test.mjs, scripts/apply-test.mjs (audit row shape, quoted-identifier guard, SQL escaping).",
+      "remote_checks": "20/20 PASS, 0 failed, 12 skipped, credential-free mode, run with `node scripts/remote-check.mjs https://dev.dnc.lagospm.com`. Covers reachability, the unauthenticated security posture (every API and export route 401, platform-auth header bypass 401) and served-client identity for DNC-001/002, -006, -007 and -008.",
+      "dnc_001_to_008": "All eight covered. DNC-001, -002, -004, -005 in-process against an in-memory database built from drizzle/*.sql; DNC-006, -007, -008 additionally confirmed present in the served client on the deployed TEST environment.",
+      "central_city": "PASS — import dry run resolves the project, four progress photos carry their original IDs, dates and descriptions, and a repeat import creates no duplicates.",
+      "schema_verification": "TEST and PRODUCTION schemas are byte-identical: 30 sqlite_master objects each with identical DDL. project_photos 18 columns, activity_revisions 6, photo_number_sequences 2. project_photos, activity_revisions, photo_number_sequences, idx_project_photos and idx_photo_number all present in both.",
+      "production_untouched": "Production was not changed during this regression run. No deploy, no migration, no write. Production D1 unchanged at projects 76, project_updates 164, user_directory 79, project_photos 5; production deployment remained d172266b-9548-4b84-9381-bfab0a35428a (commit e302b3e) throughout.",
+      "test_data_untouched": "TEST D1 unchanged by the run: projects 17, project_updates 74, user_directory 7, project_photos 0, activity_revisions 0 before and after. No temporary records were created, so no cleanup was required — the local suites run against in-memory SQLite and the remote suite was credential-free and read-only.",
+      "blocked_suites": [
+        "scripts/export-integrity-test.mjs — requires Python openpyxl for an INDEPENDENT XLSX cross-check; not installed. Export itself remains covered inside the smoke suite (export.csv, export.tsv, export.xlsx and Choose Columns).",
+        "qa/*.cjs (12 suites: enhanced-browser, enhanced-workflows, photos-connected, preview-browser, rolodex-animation and revision-two/twelve/thirteen/fourteen/fifteen/sixteen/seventeen) — require playwright, which is not installed and is not in package.json devDependencies (vite and wrangler only). They also spawn a local preview server, so they exercise a local build rather than the deployed origin."
+      ],
+      "known_limitations": [
+        "Classic/Enhanced switching has NO automated coverage in any runnable suite — zero references to enToggle in scripts/smoke-test.mjs or scripts/enhanced-workflows-test.mjs. It exists only in the blocked playwright suites and is currently unverified.",
+        "Physical iPad/Safari photo upload is NOT covered and is not automatable here. No suite exercises a real iOS device or Safari; the harnesses are a Node DOM shim and headless Chromium. Real-device upload — HEIC handling, camera capture, image orientation — remains a manual test.",
+        "12 credential-gated remote checks were skipped: authenticated role and permission behaviour, login/logout, the password-change flow and the Download / Choose Columns controls. They need an All-scope Editor and a temporary-password scoped Viewer, which were deliberately not created. Skipped checks are not passes.",
+        "The Days-column behaviour is not covered by any existing regression test and was therefore not exercised or reported.",
+        "One transient `GET /health` fetch failure occurred on the first remote run (19/20). curl returned 200 five times out of five and a re-run with a warmed connection returned 20/20, 0 failed — a sandbox networking warm-up artifact, not an application fault."
+      ]
+    }
   },
   "qa_findings": {
     "source": "Mina Ramzy, sanitized review and re-test",
@@ -163,5 +188,17 @@
     ],
     "note": "DNC-007 and DNC-008 were server-correct and browser-broken, as both earlier follow-ups were: every request in the failing sequence was answered properly while the screen was wrong. Verification that stops at the API cannot see this class of defect, and neither can a test that calls a client helper in isolation, because the defect is in state carried across a sign-in. The suite now drives the served page end to end.",
     "role_clarification": "Tom confirmed that Download is a VIEW capability: it changes no stored value and returns only rows the account has already been served, scoped to its own business units. Viewers therefore keep both Download and Choose Columns. This overrides the earlier assumption that Viewers should not download. The worker already worked this way — /api/export.* asks only for a resolved role and a replaced temporary password — so the fix was to stop the browser hiding a control the server would serve. Recorded in docs/PERMISSIONS.md section 2."
+  },
+  "enhanced_integration": {
+    "source": "DN_Tracker_Enhanced_Source_2026-09-24.zip, revision 17 (base e678538); package CHECKSUMS.sha256 verified clean before import",
+    "history": "4f4a410 imports revision 17 verbatim onto e678538; 0d8b44e merges it into dev (b59c847, descendant of 7b4eb5a); e302b3e adds scripts/import-central-city.mjs",
+    "conflicts": "CHECKSUMS.sha256 and HANDOFF_MANIFEST.json only; dev's versions kept, both are generated at package time",
+    "backup_before_changes": "~/dn-tracker-backups/20260926T095659Z (full D1 export, schema, 8 R2 profile photos, CHECKSUMS.sha256); kept off-repository",
+    "migrations_applied_to_production": [
+      "drizzle/0006_enhanced_media_and_revisions.sql",
+      "drizzle/0007_photo_details.sql"
+    ],
+    "migration_effect": "Additive only: project_photos, activity_revisions, photo_number_sequences. No existing table altered. Projects 76 and project_updates 164 unchanged.",
+    "central_city_import": "scripts/import-central-city.mjs --target prod: dry run showed project 37 (New Construction Complex / CENTRAL CITY); applied 1 cover (GGGR-concept.png) and 4 progress photos PTL26060214, 15, 16, 24 with audit entries. R2 objects verified byte-identical to assets/central-city. Repeat dry run reports all 5 already present."
   }
 }

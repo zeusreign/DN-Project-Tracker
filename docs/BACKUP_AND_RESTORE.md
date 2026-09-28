@@ -401,3 +401,8 @@ The dump uses `PRAGMA defer_foreign_keys=TRUE` and dependency ordering for exact
 - **Application-level restore** — the restored database was verified by direct query, not by
   pointing a deployed Worker at it and exercising the UI.
 - Temporary resources were deleted after verification, so the restored copy no longer exists.
+
+
+## Enhanced revision 10 additions
+
+The additive migration adds project_photos and activity_revisions. The D1 dump includes both tables. The R2 inventory and key list include project reference/progress photos as well as profile photos; retain every listed object, including replaced covers. R2 object bytes must still be downloaded separately. Restore the D1 dump and listed R2 objects together into an isolated environment before validating photo access and revision history.

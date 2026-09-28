@@ -148,9 +148,10 @@ class Element {
     this.attributeMap.delete(String(name).toLowerCase());
     this.ownerDocument.touch();
   }
-  get attributes() { return this.attributeMap; }
+  get attributes() { return [...this.attributeMap].map(([name, value]) => ({ name, value })); }
 
   get id() { return this.getAttribute("id") || ""; }
+  set id(value) { this.setAttribute("id", value); }
   get className() { return this.getAttribute("class") || ""; }
   set className(value) { this.setAttribute("class", value); }
   get classList() {
@@ -195,6 +196,30 @@ class Element {
     return node;
   }
   append(...nodes) { nodes.forEach((node) => this.appendChild(node)); }
+  // Enhanced mounts its widgets with these; strings become text nodes as in the DOM.
+  insertAt(index, nodes) {
+    const incoming = nodes
+      .map((node) => (typeof node === "string" ? new TextNode(node, this.ownerDocument) : node))
+      .flatMap((node) => (node.nodeType === 11 ? node.childNodes.splice(0) : [node]));
+    incoming.forEach((node) => node.remove?.());
+    this.childNodes.splice(Math.min(index, this.childNodes.length), 0, ...incoming);
+    incoming.forEach((node) => { node.parentElement = this; });
+    this.ownerDocument.touch();
+  }
+  prepend(...nodes) { this.insertAt(0, nodes); }
+  replaceChildren(...nodes) {
+    this.childNodes.forEach((node) => { node.parentElement = null; });
+    this.childNodes = [];
+    this.insertAt(0, nodes);
+  }
+  before(...nodes) {
+    const parent = this.parentElement;
+    if (parent) parent.insertAt(parent.childNodes.indexOf(this), nodes);
+  }
+  after(...nodes) {
+    const parent = this.parentElement;
+    if (parent) parent.insertAt(parent.childNodes.indexOf(this) + 1, nodes);
+  }
   remove() { if (this.parentElement) this.parentElement.removeChild(this); }
   replaceWith(...nodes) { TextNode.prototype.replaceWith.call(this, ...nodes); }
 
@@ -502,6 +527,7 @@ export function createBrowser({ page, handler, origin = "https://tracker.example
   const window = {
     addEventListener() {}, removeEventListener() {}, scrollTo() {},
     innerWidth: 1440, innerHeight: 900, document,
+    matchMedia: (query) => ({ matches: false, media: String(query), addEventListener() {}, removeEventListener() {} }),
   };
   const location = {
     hash: "", pathname: "/", href: origin + "/", origin,
@@ -612,6 +638,8 @@ export function createBrowser({ page, handler, origin = "https://tracker.example
     "window", "document", "location", "history", "localStorage", "fetch",
     "setTimeout", "clearTimeout", "setInterval", "clearInterval",
     "BroadcastChannel", "CSS", "getComputedStyle", "URL", "Image", "NodeFilter", "console",
+    // Bare globals the Enhanced layer reads for layout; the harness window is fixed-size.
+    "innerWidth", "innerHeight", "matchMedia",
     script,
   );
 
@@ -635,6 +663,7 @@ export function createBrowser({ page, handler, origin = "https://tracker.example
         { escape: (value) => String(value).replace(/[^\w-]/g, (c) => "\\" + c) },
         () => ({ fontFamily: "sans-serif", fontSize: "13px", fontWeight: "400", letterSpacing: "normal" }),
         HarnessURL, HarnessImage, { SHOW_TEXT: 4 }, console,
+        window.innerWidth, window.innerHeight, window.matchMedia,
       );
       await settle();
       return this;
