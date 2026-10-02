@@ -71,6 +71,7 @@ Operational guides live in `docs/`. Each topic is documented in one place.
 
 | Guide | Use it to |
 |---|---|
+| [docs/VERSIONS.md](docs/VERSIONS.md) | See which commit production and the test environment each serve, and verify it |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Deploy a code change, or roll a release back |
 | [docs/BACKUP_AND_RESTORE.md](docs/BACKUP_AND_RESTORE.md) | Back up and restore the database and files, and verify a restore |
 | [docs/DATABASE.md](docs/DATABASE.md) | Understand the schema, migrations, seed data and known data behaviours |

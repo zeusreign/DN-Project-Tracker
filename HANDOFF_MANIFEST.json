@@ -27,7 +27,11 @@
     "commit_uploaded_at": "e302b3e",
     "live_bundle_sha256": "c08e92003f41a15876c06db54229157fda7ed44b6809867b1daab5153dcb47e1",
     "runtime_equivalent_to_this_commit": true,
-    "traceability_note": "Production serves the integrated Classic/Enhanced build: Enhanced revision 17 merged onto corrected Classic 7b4eb5a (DNC-001 to 008). The deployment was uploaded from e302b3e; the packaged commit differs from it only in this manifest, which is not part of the worker bundle, so pages-dist/_worker.js built from either commit has the sha256 above. Rollback target: 1585d667-100e-4ca1-bbd1-d34c920ab899 (7b4eb5a, Classic only). A preview of the same build, 1a74169c, was checked before promotion."
+    "traceability_note": "Production serves the integrated Classic/Enhanced build: Enhanced revision 17 merged onto corrected Classic 7b4eb5a (DNC-001 to 008). The deployment was uploaded from e302b3e; the packaged commit differs from it only in this manifest, which is not part of the worker bundle, so pages-dist/_worker.js built from either commit has the sha256 above. Rollback target: 1585d667-100e-4ca1-bbd1-d34c920ab899 (7b4eb5a, Classic only). A preview of the same build, 1a74169c, was checked before promotion.",
+    "is_current_production": true,
+    "contains_days_fix": false,
+    "behind_test_by": "3 commits (06edf0d, 3ef87a7, 2334e91). See version_record.",
+    "note": "This block describes the PRODUCTION deployment only. It was accurate when written and is still the live deployment, but the packaged source commit is newer than it — see version_record for the live-versus-test reconciliation."
   },
   "isolated_test_environment": {
     "purpose": "Technical review copy. Separate Cloudflare resources throughout; it never reaches production data.",
@@ -37,26 +41,44 @@
     "d1_database_id": "34dca57e-bd32-46cd-b154-8c362efaeb4c",
     "r2_bucket": "dnc-tracker-assets-dev",
     "config_file": "test-env/wrangler.toml",
-    "contents": "5 synthetic projects and 5 demonstration accounts. No live record is present.",
+    "contents": "17 projects, 74 activity updates and 7 accounts — all synthetic. No live record and no photographs are present (project_photos is empty), and D1 and R2 are separate resources from production throughout.",
     "safety_note": "scripts/check-deploy-target.sh is the single definition of what each environment looks like. It asserts the project name, D1 name and id, R2 bucket, both binding names and ALLOW_PLATFORM_AUTH=\"false\", and explicitly forbids the other environment's database id and bucket. Both deploy scripts run it before building or uploading. Note that the production resource names are strict PREFIXES of the test ones, so every assertion anchors on the whole key = \"value\" line; a substring match would pass against either environment.",
     "latest_deployment": {
-      "deployment_id": "37c13e13-dfdd-4459-980d-673964ba7bb0",
-      "url": "https://37c13e13.dnc-tracker-pilot-dev.pages.dev",
+      "deployment_id": "590b03be-c309-4416-834b-f366d2efc3a0",
+      "url": "https://590b03be.dnc-tracker-pilot-dev.pages.dev",
       "stable_url": "https://dev.dnc.lagospm.com",
       "branch": "test",
       "cloudflare_project": "dnc-tracker-pilot-dev",
-      "cloudflare_commit_label": "06edf0d",
-      "actual_source_commit": "06edf0d36a86494686fad37b7bc20a8dacd39e1d",
+      "cloudflare_commit_label": "2334e91",
+      "actual_source_commit": "2334e914b2782410ff06f42d826c0cca2d9637ae",
       "git_branch": "enhanced-integration",
-      "release": "Enhanced integration release — Classic/Enhanced integrated build",
-      "deployed_utc": "2026-09-26T00:00:00Z",
-      "bundle_sha256": "c08e92003f41a15876c06db54229157fda7ed44b6809867b1daab5153dcb47e1",
+      "release": "Days column correction (duration_change_days recomputed from the turnover dates)",
+      "deployed_utc": "2026-09-28",
+      "bundle_sha256": "70ea527cc917bb2779231f20b1539722d5a408ec13b90a8c19e3968123f99347",
       "served_page_sha256": "838e1f3c5416d45415ec22337d8d132f8e2ff89fa641de3b7b018e9d1ecf5e90",
       "served_page_bytes": 1048646,
-      "bundle_identical_to_production": true,
-      "verified_how": "Listed with `wrangler pages deployment list --project-name dnc-tracker-pilot-dev`, which reports this id on branch test with source label 06edf0d. The page served at https://dev.dnc.lagospm.com was downloaded and hashes to the served_page_sha256 above at 1,048,646 bytes, carrying 27 Enhanced, 19 Rolodex and 18 en-rolodex markers — so the deployed client is provably the integrated Classic/Enhanced build. bundle_sha256 is identical to deployment.live_bundle_sha256, because worker/ is byte-identical between e302b3e and 06edf0d.",
-      "schema_state": "drizzle/0006_enhanced_media_and_revisions.sql and drizzle/0007_photo_details.sql were applied to the TEST D1 (dnc-tracker-pilot-dev, 34dca57e-bd32-46cd-b154-8c362efaeb4c) on 2026-09-26. Additive only: 0 destructive statements, existing rows unchanged (projects 17, project_updates 74, user_directory 7 before and after).",
-      "previous_deployment": "13389a84-783d-4e30-8e93-6024c606b126 (label 56fd45a) carried the Classic DNC-001 to 008 build and is the deployment the earlier 32/32 figure belongs to."
+      "bundle_identical_to_production": false,
+      "verified_how": "Listed with `wrangler pages deployment list --project-name dnc-tracker-pilot-dev`, which reports this id on branch test with source label 2334e91. The page served at https://dev.dnc.lagospm.com downloads at 1,048,646 bytes with the sha256 above — identical to production's page, because the Days fix is server-side and changes no markup. The build is distinguished from production by its bundle hash and by `git show 2334e91:worker/index.js | grep -c DURATION_CHANGE_DAYS_SQL` returning 3 where e302b3e returns 0.",
+      "previous_deployment": "37c13e13-dfdd-4459-980d-673964ba7bb0 (label 06edf0d) carried the Enhanced integration build and is the deployment the earlier manifest described.",
+      "superseded_record_kept_for_audit": {
+        "deployment_id": "37c13e13-dfdd-4459-980d-673964ba7bb0",
+        "url": "https://37c13e13.dnc-tracker-pilot-dev.pages.dev",
+        "stable_url": "https://dev.dnc.lagospm.com",
+        "branch": "test",
+        "cloudflare_project": "dnc-tracker-pilot-dev",
+        "cloudflare_commit_label": "06edf0d",
+        "actual_source_commit": "06edf0d36a86494686fad37b7bc20a8dacd39e1d",
+        "git_branch": "enhanced-integration",
+        "release": "Enhanced integration release — Classic/Enhanced integrated build",
+        "deployed_utc": "2026-09-26T00:00:00Z",
+        "bundle_sha256": "c08e92003f41a15876c06db54229157fda7ed44b6809867b1daab5153dcb47e1",
+        "served_page_sha256": "838e1f3c5416d45415ec22337d8d132f8e2ff89fa641de3b7b018e9d1ecf5e90",
+        "served_page_bytes": 1048646,
+        "bundle_identical_to_production": true,
+        "verified_how": "Listed with `wrangler pages deployment list --project-name dnc-tracker-pilot-dev`, which reports this id on branch test with source label 06edf0d. The page served at https://dev.dnc.lagospm.com was downloaded and hashes to the served_page_sha256 above at 1,048,646 bytes, carrying 27 Enhanced, 19 Rolodex and 18 en-rolodex markers — so the deployed client is provably the integrated Classic/Enhanced build. bundle_sha256 is identical to deployment.live_bundle_sha256, because worker/ is byte-identical between e302b3e and 06edf0d.",
+        "schema_state": "drizzle/0006_enhanced_media_and_revisions.sql and drizzle/0007_photo_details.sql were applied to the TEST D1 (dnc-tracker-pilot-dev, 34dca57e-bd32-46cd-b154-8c362efaeb4c) on 2026-09-26. Additive only: 0 destructive statements, existing rows unchanged (projects 17, project_updates 74, user_directory 7 before and after).",
+        "previous_deployment": "13389a84-783d-4e30-8e93-6024c606b126 (label 56fd45a) carried the Classic DNC-001 to 008 build and is the deployment the earlier 32/32 figure belongs to."
+      }
     }
   },
   "workbook_import": {
@@ -73,11 +95,15 @@
     "documentation": "docs/WORKBOOK_IMPORT.md — the fortnightly runbook, including the pipeline in execution order, the mandatory backup and how to verify it, how to read the reconciliation report, and the rules that must not be relaxed."
   },
   "production_data_state": {
-    "as_of_utc": "2026-09-26T10:32:00Z",
+    "as_of_utc": "2026-09-29T07:30:00Z",
     "projects": 76,
     "project_updates": 164,
-    "project_photos": 5,
-    "note": "Accounts, password hashes, roles and history untouched; no seed, restore or workbook reimport was run."
+    "user_directory": 79,
+    "project_photos_active": 87,
+    "project_photos_total": 88,
+    "business_units": 5,
+    "audit_log": 185,
+    "note": "project_photos grew from 5 to 88 with the Central City photo migration on 2026-09-28 (see central_city_photo_migration). One progress photo was soft-deleted by the client through the UI afterwards, which is why active is 87 of 88. Accounts, password hashes, roles and activity history were untouched; no seed, restore or workbook reimport was run."
   },
   "backup_before_import": {
     "location": "~/dn-tracker-backups/pre-workbook-import-2026-09-17/d1-full.sql",
@@ -200,5 +226,84 @@
     ],
     "migration_effect": "Additive only: project_photos, activity_revisions, photo_number_sequences. No existing table altered. Projects 76 and project_updates 164 unchanged.",
     "central_city_import": "scripts/import-central-city.mjs --target prod: dry run showed project 37 (New Construction Complex / CENTRAL CITY); applied 1 cover (GGGR-concept.png) and 4 progress photos PTL26060214, 15, 16, 24 with audit entries. R2 objects verified byte-identical to assets/central-city. Repeat dry run reports all 5 already present."
+  },
+  "version_record": {
+    "observed_utc": "2026-09-29T07:30:00Z",
+    "summary": "Production and the isolated test environment are NOT on the same build. Test is three commits ahead and is the only environment carrying the Days (duration_change_days) correction.",
+    "documentation": "docs/VERSIONS.md is the full record, including how to verify it without trusting the document.",
+    "live": {
+      "role": "production",
+      "url": "https://dnc.lagospm.com",
+      "pages_project": "dnc-tracker-pilot",
+      "deployment_id": "d172266b-9548-4b84-9381-bfab0a35428a",
+      "pages_branch": "handoff",
+      "source_commit": "e302b3e",
+      "deployed_utc": "2026-09-26T10:32:00Z",
+      "bundle_sha256": "c08e92003f41a15876c06db54229157fda7ed44b6809867b1daab5153dcb47e1",
+      "contains_days_fix": false
+    },
+    "test": {
+      "role": "isolated technical review",
+      "url": "https://dev.dnc.lagospm.com",
+      "pages_project": "dnc-tracker-pilot-dev",
+      "deployment_id": "590b03be-c309-4416-834b-f366d2efc3a0",
+      "pages_branch": "test",
+      "source_commit": "2334e91",
+      "deployed_utc": "2026-09-28",
+      "bundle_sha256": "70ea527cc917bb2779231f20b1539722d5a408ec13b90a8c19e3968123f99347",
+      "contains_days_fix": true
+    },
+    "commits_live_is_behind": [
+      "06edf0d  Record Enhanced integration deployment d172266b in handoff manifest",
+      "3ef87a7  Record Enhanced integration release metadata and refresh checksums",
+      "2334e91  Recalculate the Days column when a turnover date changes"
+    ],
+    "runtime_difference": "worker/index.js only (+27 lines: DURATION_CHANGE_DAYS_SQL at :289, applied at :1474 on create and :1708 on field edit). scripts/smoke-test.mjs (+36) carries its regression block but is not in the deployed bundle. HANDOFF_MANIFEST.json and CHECKSUMS.sha256 are generated metadata with no runtime effect.",
+    "served_page_cannot_distinguish": "Both environments return a byte-identical page: 1048646 bytes, sha256 838e1f3c5416d45415ec22337d8d132f8e2ff89fa641de3b7b018e9d1ecf5e90. The Days fix is server-side SQL and changes no client markup, so comparing the rendered page, its size or its hash will NOT tell the two builds apart. Use the deployment source commit.",
+    "verify": [
+      "npx wrangler pages deployment list --project-name dnc-tracker-pilot",
+      "npx wrangler pages deployment list --project-name dnc-tracker-pilot-dev",
+      "git show <commit>:worker/index.js | grep -c DURATION_CHANGE_DAYS_SQL   # 0 = absent, 3 = present"
+    ],
+    "bringing_live_up_to_test": "Not performed. It is a production change requiring an explicit decision; docs/DEPLOY.md section 2 is the procedure, and the deploy must be made from the `handoff` branch or Pages publishes it as a preview and the live URL does not move. Deploying changes no data: Days is recomputed on subsequent writes only, with no backfill.",
+    "packaged_commit_is_deployed_nowhere": "The commit this package is built from is NEWER than both deployments and is deployed to neither. It changes only documentation, this manifest, .gitignore and two import scripts under scripts/ — none of which enter the worker bundle. Building pages-dist/_worker.js from it yields sha256 70ea527cc917bb2779231f20b1539722d5a408ec13b90a8c19e3968123f99347, byte-identical to the bundle the TEST environment serves, so there is no runtime difference between this commit and 2334e91. There are two deployed builds, not three. Verify with: bash scripts/build-pages.sh && sha256sum pages-dist/_worker.js",
+    "days_fix_in_production": "Not deployed, and not requested. The reviewer asked for the live-versus-test record to be reconciled and for subsequent source changes to be supplied — not for production to be updated. Promoting the fix to live is a separate decision for the client; see bringing_live_up_to_test."
+  },
+  "central_city_photo_migration": {
+    "applied_utc": "2026-09-28T14:24:47Z to 2026-09-28T14:50:21Z",
+    "target": "production project 37, CENTRAL CITY / New Construction Complex",
+    "source": "CentralCity_Transfer export from DN.LagosPM.com: 87 JPEG files (192.5 MiB) and CentralCity_Photos_Metadata.csv (87 rows, 1:1 by photo number)",
+    "result": "83 inserted, 4 updated in place, 0 failed",
+    "stages": [
+      "scripts/central-city-manifest.mjs   CSV -> normalised manifest; no database contact",
+      "scripts/migrate-central-city-photos.mjs   classify and apply; writes only with --execute and an explicit --target"
+    ],
+    "why_update_not_replace": "The four already-imported photos (PTL26060214/215/216/224) had to be REPLACED with full-resolution versions. scripts/import-central-city.mjs cannot do it: it dedupes on `id OR photo_number` and reports them as already present. They also cannot be deleted and re-inserted, because idx_photo_number is UNIQUE over `photo_number WHERE photo_number IS NOT NULL` and ignores deleted_at, so a soft-deleted row keeps its number reserved and the re-insert fails. They are updated in place instead, keeping the row id, the object key and the 227-character notes narrative the export has no column for.",
+    "quality": "Full resolution preserved: 81 of 87 at 12.19 MP, against 0.79 MP for the four previously in the tracker. The export was re-encoded at JPEG quality 75 with EXIF stripped, so these are full-resolution but not byte-original camera files. GPS survives in the CSV and is recorded in audit_log.details.",
+    "not_migrated": "Drawing_Link is empty on all 87 rows and the package contains no report documents, so no annotation or report functionality was added. Latitude/longitude, source photoID and fileName have no column on project_photos and are recorded in audit_log.details.",
+    "idempotence": "Each photo's bytes are digested onto its audit row, so a re-run skips unchanged content. Exercised in practice: the first pass stopped at 21 of 87 and the second skipped 19 by digest.",
+    "verification": "87 progress rows plus the untouched GGGR cover (same id, revision still 0); no duplicate photo numbers; metadata matching the CSV; 12 sampled R2 objects byte-identical to the export files.",
+    "schema_migration_required": false
+  },
+  "backup_before_central_city_migration": {
+    "location": "~/dn-tracker-backups/pre-central-city-migration-2026-09-28/",
+    "contents": "Full D1 export (401,240 bytes, 796 lines) at projects=76, project_updates=164, project_photos=5, user_directory=79, audit_log=92, plus the 5 R2 objects of project 37 (the GGGR cover and the four original progress photos)",
+    "verified": "D1 export restored into a scratch SQLite database and all table counts matched production; the four R2 progress objects are byte-identical to assets/central-city/*.jpeg; all 6 files checksummed in CHECKSUMS.sha256 and re-verified clean",
+    "in_package": false,
+    "note": "Held outside the repository. The D1 export contains password hashes, session records and every staff email address, and must never be committed. See handover_and_access for how it reaches the client."
+  },
+  "handover_and_access": {
+    "source_repository": "git@github.com:zeusreign/DN-Project-Tracker.git",
+    "repository_owner": "zeusreign (the contractor's GitHub account) — NOT the client's. Transferring ownership, or adding the client as an owner/admin, is an account action outside this package.",
+    "branches": {
+      "enhanced-integration": "2334e91 — current work, pushed, what the test environment serves",
+      "handoff": "b59c847 — the Pages PRODUCTION branch; behind enhanced-integration",
+      "main": "7804537 locally, origin/main 6c42ac8 — 10 commits behind; not used for deployment",
+      "dev": "b59c847",
+      "sanitized-review-pilot": "c00fefa"
+    },
+    "setup_instructions": "README.md 'Running it locally' plus docs/DEPLOY.md, docs/TESTING.md, docs/DATABASE.md, docs/BACKUP_AND_RESTORE.md, docs/STORAGE.md, docs/PERMISSIONS.md, docs/USER_ADMINISTRATION.md, docs/COST_AND_LIMITS.md, docs/WORKBOOK_IMPORT.md and docs/VERSIONS.md. All are in this package; nothing needs recreating.",
+    "backups_accessible_to_client": false,
+    "backups_note": "Database and photo backups currently exist only on the contractor's machine under ~/dn-tracker-backups/. They are deliberately not in the repository or this package because the D1 export contains password hashes, session records and staff email addresses. Delivering them to the client requires an agreed private destination (for example a client-owned R2 bucket, Google Drive or SharePoint folder) and is pending that decision. docs/BACKUP_AND_RESTORE.md documents how the client can take their own backup at any time, including from the Admin screen."
   }
 }

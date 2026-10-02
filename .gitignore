@@ -36,6 +36,9 @@ r2-keys.txt
 /FW Design  Construction BiWeekly Report.pdf
 /*.xlsx
 /*.pdf
+# Handoff packages built by scripts/package-handoff.sh, and client drops that arrive
+# as archives. Generated output, reproducible from a commit, never committed.
+/*.zip
 
 # Workbook import working directory. Holds the parsed workbook, the tracker
 # snapshot, the reconciliation report and the generated SQL — every one of which
@@ -52,3 +55,10 @@ r2-keys.txt
 # repository root; no HTML is tracked anywhere in the tree, and the Pages build is
 # worker-based, so this cannot mask a build entry point.
 /DN_Tracker_*.html
+
+# Central City photo migration. The export drop from DN.LagosPM.com is 193 MB of
+# client photographs, and the generated manifest reproduces every caption and
+# photographer name out of the source system. Neither belongs in git history —
+# the drop is client material and the manifest is reproducible from it.
+/CentralCity_Transfer/
+.central-city-import/
