@@ -2244,6 +2244,27 @@ for (const [parent, child] of [
   assert.match(browser.sessionStorage.key(0), /^dn-dc-ask:/);
   assert.match(browser.sessionStorage.getItem(browser.sessionStorage.key(0)), /slipped more than 30 days/);
 
+
+  // A result opens the project it names. It reuses the data-details handler the
+  // tables already use rather than a second path, so a Development record still
+  // routes to its own dialog and the two cannot drift apart.
+  const firstResult = thread.querySelector(".ask-result-name");
+  assert.ok(firstResult, "an answer lists results");
+  assert.ok(firstResult.getAttribute("data-details"),
+    "a result carries the id the existing open-project handler reads");
+  const openedId = firstResult.getAttribute("data-details");
+  await browser.fire(firstResult, "click").results;
+  await browser.settle();
+  assert.equal(browser.byId("detailsId").value, openedId,
+    "clicking a result opens that project, not another");
+  assert.ok(browser.byId("detailsTitle").textContent.trim().length > 0,
+    "and the dialog is populated rather than blank");
+
+  // The evidence panel names the question its records belong to, so a panel
+  // left over from an earlier answer can never be read as this one's.
+  assert.match(browser.text("askEvidenceTitle"), /slipped more than 30 days/,
+    "the evidence panel says which question it is showing");
+
   // Signing out must leave nothing behind: not the rendered transcript, and not
   // the stored one. A site office shares a browser.
   await browser.fire("logoutBtn", "click").results;
@@ -2253,6 +2274,7 @@ for (const [parent, child] of [
     "the rendered transcript is cleared on sign-out");
   assert.equal(browser.sessionStorage.length, 0,
     "and the stored transcript is removed, not left for the next person");
+
 
   console.log("Ask the Tracker UI: pane, question, filters, scoped rows and sign-out clearing covered.");
 }

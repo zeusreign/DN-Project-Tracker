@@ -185,7 +185,10 @@ ${ENHANCED_STYLES}
 .ask-record{background:#fff;border:1px solid #dce6eb;border-radius:7px;padding:14px;margin-bottom:12px}
 .ask-record-top{display:flex;gap:8px;justify-content:space-between;font-size:10px;
   letter-spacing:.7px;color:#6e8290;text-transform:uppercase}
-.ask-record-name{display:block;font-size:14px;font-weight:600;color:var(--ask-ink);margin:6px 0 2px}
+.ask-record-name{display:block;border:0;background:none;padding:0;text-align:left;cursor:pointer;
+  font-size:14px;font-weight:600;color:var(--ask-ink);margin:6px 0 2px;font-family:inherit}
+.ask-record-name:hover{color:#00767e;text-decoration:underline}
+.ask-evidence-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:26ch}
 .ask-metric-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
 .ask-metric{padding:0 6px 0 0}
 .ask-metric span{display:block;font-size:10px;letter-spacing:.7px;color:#6e8290;text-transform:uppercase}

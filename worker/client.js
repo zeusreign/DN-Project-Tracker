@@ -817,7 +817,7 @@ function renderEvidence(answer){
   if(!body)return;
   var rows=(answer&&answer.rows)||[];
   if(count)count.textContent=answer&&answer.total!==undefined?String(answer.total):"—";
-  if(title)title.textContent=rows.length?"Matching records":"Matching records";
+  if(title)title.textContent=(answer&&answer.question)?answer.question:"Matching records";
   if(!rows.length){
     body.innerHTML='<div class="ask-empty">'+(answer&&answer.total===0
       ?'No records matched those filters. The filters applied are listed with the answer, so you can see what was searched for.'
@@ -830,7 +830,8 @@ function renderEvidence(answer){
     return '<article class="ask-record">'
       +'<div class="ask-record-top"><span>'+esc(p.business_unit||"")+'</span>'
       +'<span>'+esc(p.project_type||"")+'</span></div>'
-      +'<strong class="ask-record-name">'+esc(p.name)+'</strong>'
+      +'<button type="button" class="ask-record-name project-link" data-details="'+esc(String(p.id))+'">'
+        +esc(p.name)+'</button>'
       +'<div class="ask-chips">'
         +'<span class="ask-risk '+askRiskClass(p.budget_risk)+'">Budget '+esc(p.budget_risk||"Not Rated")+'</span>'
         +'<span class="ask-risk '+askRiskClass(p.schedule_risk)+'">Schedule '+esc(p.schedule_risk||"Not Rated")+'</span>'
@@ -869,7 +870,7 @@ function askResultListHtml(answer){
     var who=p.project_manager||p.development_lead||"";
     var meta=[p.business_unit,p.status,who].filter(Boolean).map(esc).join(" · ");
     return '<div class="ask-result">'
-      +'<button type="button" class="ask-result-name" data-ask-project="'+esc(String(p.id))+'">'
+      +'<button type="button" class="ask-result-name project-link" data-details="'+esc(String(p.id))+'">'
       +(lead?esc(lead)+' · ':"")+esc(p.name)+'</button>'
       +'<div class="ask-result-meta">'+meta+'</div>'
       +'</div>';
@@ -937,8 +938,17 @@ function renderAsk(){
   }
   var scope=byId("askScope");
   if(scope)scope.textContent=state.me?"Answers cover only what "+(state.me.name||state.me.email)+" can see":"";
+  // The evidence follows the most recent answer that actually returned records,
+  // carrying its question so the panel is never ambiguous about which answer it
+  // belongs to.
   var last=null;
-  for(var i=askTurns.length-1;i>=0;i--){if(askTurns[i].state==="done"){last=askTurns[i].answer;break}}
+  for(var i=askTurns.length-1;i>=0;i--){
+    var turn=askTurns[i];
+    if(turn.state==="done"&&turn.answer&&turn.answer.rows&&turn.answer.rows.length){
+      last=Object.assign({},turn.answer,{question:turn.question});
+      break;
+    }
+  }
   renderEvidence(last);
 }
 
