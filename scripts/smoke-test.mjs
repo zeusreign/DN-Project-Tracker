@@ -2250,15 +2250,33 @@ for (const [parent, child] of [
   // routes to its own dialog and the two cannot drift apart.
   const firstResult = thread.querySelector(".ask-result-name");
   assert.ok(firstResult, "an answer lists results");
-  assert.ok(firstResult.getAttribute("data-details"),
-    "a result carries the id the existing open-project handler reads");
-  const openedId = firstResult.getAttribute("data-details");
+  const openedId = Number(firstResult.getAttribute("data-ask-record"));
+  assert.ok(openedId > 0, "a result carries the project it names");
+  const openedName = database.prepare("SELECT name FROM projects WHERE id = ?").get(openedId).name;
+
   await browser.fire(firstResult, "click").results;
   await browser.settle();
-  assert.equal(browser.byId("detailsId").value, openedId,
-    "clicking a result opens that project, not another");
-  assert.ok(browser.byId("detailsTitle").textContent.trim().length > 0,
-    "and the dialog is populated rather than blank");
+
+  // It opens a read-only view, not the edit form. The assistant does not write,
+  // and a Save button on a pane that cannot save is a promise it does not keep.
+  assert.equal(browser.byId("askRecordDialog").open, true,
+    "clicking a result opens the record view");
+  assert.equal(browser.byId("detailsDialog").open, false,
+    "and never the edit form");
+  assert.equal(browser.text("askRecordTitle"), openedName,
+    "it shows the project that was clicked, not another");
+  assert.ok(browser.byId("askRecordGrid").querySelectorAll(".ask-record-field").length > 5,
+    "the record view is populated rather than blank");
+
+  // Nothing in it can be typed into or saved.
+  const dialog = browser.byId("askRecordDialog");
+  assert.equal(dialog.querySelectorAll("input").length, 0, "no inputs");
+  assert.equal(dialog.querySelectorAll("textarea").length, 0, "no editable text");
+  assert.equal(dialog.querySelectorAll("select").length, 0, "no pickers");
+  assert.equal(dialog.querySelectorAll("form").length, 0, "nothing to submit");
+  assert.match(dialog.textContent, /Read only/,
+    "and it says so, rather than leaving the reader to infer it");
+  browser.byId("askRecordDialog").close();
 
   // The evidence panel names the question its records belong to, so a panel
   // left over from an earlier answer can never be read as this one's.

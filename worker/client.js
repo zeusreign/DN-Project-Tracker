@@ -129,6 +129,7 @@ function clearAccountData(){
   // budgets, this runs on shared machines, and sessionStorage outlives a sign-out
   // unless something removes it.
   askForget();
+  var askRecord=byId("askRecordDialog");if(askRecord&&askRecord.open)askRecord.close();
   ACCOUNT_HTML.forEach(function(id){var el=byId(id);if(el)el.innerHTML=""});
   ACCOUNT_TEXT.forEach(function(id){var el=byId(id);if(el)el.textContent=""});
   ACCOUNT_FORMS.forEach(function(id){var form=byId(id);if(form)form.reset()});
@@ -830,7 +831,7 @@ function renderEvidence(answer){
     return '<article class="ask-record">'
       +'<div class="ask-record-top"><span>'+esc(p.business_unit||"")+'</span>'
       +'<span>'+esc(p.project_type||"")+'</span></div>'
-      +'<button type="button" class="ask-record-name project-link" data-details="'+esc(String(p.id))+'">'
+      +'<button type="button" class="ask-record-name project-link" data-ask-record="'+esc(String(p.id))+'">'
         +esc(p.name)+'</button>'
       +'<div class="ask-chips">'
         +'<span class="ask-risk '+askRiskClass(p.budget_risk)+'">Budget '+esc(p.budget_risk||"Not Rated")+'</span>'
@@ -870,7 +871,7 @@ function askResultListHtml(answer){
     var who=p.project_manager||p.development_lead||"";
     var meta=[p.business_unit,p.status,who].filter(Boolean).map(esc).join(" · ");
     return '<div class="ask-result">'
-      +'<button type="button" class="ask-result-name project-link" data-details="'+esc(String(p.id))+'">'
+      +'<button type="button" class="ask-result-name project-link" data-ask-record="'+esc(String(p.id))+'">'
       +(lead?esc(lead)+' · ':"")+esc(p.name)+'</button>'
       +'<div class="ask-result-meta">'+meta+'</div>'
       +'</div>';
@@ -916,6 +917,66 @@ function askTurnHtml(turn){
     +'<div class="ask-user"><div class="ask-bubble">'+esc(turn.question)+'</div></div>'
     +askAiLabel()+body
     +'</div>';
+}
+
+// A read-only view of one project. The assistant reads and does not write, so
+// a result opens this rather than the edit form behind data-details: a Save
+// button on a pane that cannot save is a promise the feature does not keep.
+function askRecordField(label,value,cls){
+  return '<div class="ask-record-field"><span>'+esc(label)+'</span>'
+    +'<strong'+(cls?' class="'+cls+'"':"")+'>'+esc(value===null||value===undefined||value===""?"—":String(value))+'</strong></div>';
+}
+
+// Looks the record up in the answer it was listed in, before falling back to the
+// loaded projects. The answer carries the row it was built from, so the view
+// shows exactly the figures the assistant used - if the two ever disagreed, the
+// one on screen would be the one the reader could not check.
+function askRecordById(id){
+  var wanted=Number(id);
+  for(var i=askTurns.length-1;i>=0;i--){
+    var answer=askTurns[i].answer;
+    if(!answer||!answer.rows)continue;
+    for(var j=0;j<answer.rows.length;j++){
+      if(answer.rows[j].id===wanted)return answer.rows[j];
+    }
+  }
+  return state.projects.find(function(x){return x.id===wanted})||null;
+}
+
+function openAskRecord(id){
+  var p=askRecordById(id);
+  if(!p)return toast("That project is no longer in view. Refresh and try again.");
+  byId("askRecordTitle").textContent=p.name;
+  // Venue and section are often the same word on these records, so show it once.
+  var meta=[];
+  [p.business_unit,p.venue,p.section_name].forEach(function(part){
+    if(part&&meta.indexOf(part)<0)meta.push(part);
+  });
+  byId("askRecordMeta").textContent=meta.join(" · ");
+  var days=p.duration_change_days,variance=p.forecast_variance;
+  var fields=[
+    askRecordField("Type",p.project_type),
+    askRecordField("Status",p.status),
+    askRecordField("Phase",p.phase),
+    askRecordField(p.project_type==="Development"?"Development lead":"Project manager",
+      p.project_manager||p.development_lead),
+    askRecordField(p.project_type==="Development"?"Initiative number":"CAPP number",
+      p.project_type==="Development"?p.initiative_number:p.capp_number),
+    askRecordField("Budget risk",p.budget_risk),
+    askRecordField("Schedule risk",p.schedule_risk),
+    askRecordField("Approved budget",moneyText(p.approved_budget)),
+    askRecordField("Anticipated final cost",moneyText(p.anticipated_final_cost)),
+    askRecordField("Variance",moneyText(variance),Number(variance)>0?"over":""),
+    askRecordField("Original turnover",dateText(p.original_turnover_date)),
+    askRecordField("Current turnover",dateText(p.current_turnover_date)),
+    askRecordField("Days",days===null||days===undefined?"—":String(days),Number(days)>0?"late":""),
+    askRecordField("Reporting period",dateText(p.reporting_period))
+  ];
+  byId("askRecordGrid").innerHTML=fields.join("");
+  byId("askRecordUpdate").innerHTML=p.current_update
+    ? '<h4>Latest activity update</h4><p>'+esc(p.current_update)+'</p>'
+    : '<h4>Latest activity update</h4><p>No update recorded.</p>';
+  byId("askRecordDialog").showModal();
 }
 
 function renderAsk(){
@@ -1007,6 +1068,8 @@ document.addEventListener("keydown",function(event){
   }
 });
 document.addEventListener("click",function(event){
+  var record=event.target.closest?event.target.closest("[data-ask-record]"):null;
+  if(record){openAskRecord(record.dataset.askRecord);return}
   var chip=event.target.closest?event.target.closest(".ask-suggestion"):null;
   if(chip){submitAsk(chip.textContent);return}
   if(event.target&&event.target.id==="askClear"){askTurns=[];askSave();renderAsk()}

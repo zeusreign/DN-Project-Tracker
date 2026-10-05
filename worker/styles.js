@@ -124,6 +124,17 @@ ${ENHANCED_STYLES}
 .ask-ai-mark{width:22px;height:22px;border-radius:6px;background:#e3f3f4;color:#00767e;
   display:inline-flex;align-items:center;justify-content:center;flex:none}
 .ask-ai-mark .ai-spark{width:13px;height:13px}
+/* The assistant's record view. Deliberately not the edit form: this pane only
+   reads, and handing someone a form with a Save button contradicts that. */
+.ask-record-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px 20px}
+.ask-record-field span{display:block;font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:#6e8290}
+.ask-record-field strong{display:block;font-size:14px;color:#163548;margin-top:3px;font-weight:600}
+.ask-record-field strong.over{color:#9a3e2b}
+.ask-record-field strong.late{color:#83601b}
+.ask-record-update{margin-top:18px;padding-top:14px;border-top:1px solid #dce5ea}
+.ask-record-update h4{margin:0 0 6px;font-size:12px;letter-spacing:.6px;color:#586f7e;text-transform:uppercase}
+.ask-record-update p{margin:0;font-size:14px;line-height:1.6;color:#243b49;white-space:pre-wrap}
+.ask-record-note{font-size:12px;color:#6e8290;margin-right:auto}
 /* --- Ask the Tracker ------------------------------------------------------ */
 /* Follows the Ask the Tracker pilot: a conversation on the left and an evidence
    panel on the right, so every figure in an answer can be traced to the record
