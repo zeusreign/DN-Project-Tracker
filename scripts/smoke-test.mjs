@@ -2445,6 +2445,11 @@ for (const [parent, child] of [
   // The orb says what is happening without being read.
   assert.equal(browser.byId("askOrb").getAttribute("data-state"), "idle");
 
+  // Stop is offered only while there is something to stop. The assistant is no
+  // longer cut off by the listener speaking, so this is how an answer is ended
+  // early, and offering it when nothing is being said would be a dead control.
+  assert.equal(browser.byId("askStopBtn").hidden, true, "nothing to stop while resting");
+
   // The harness has no WebRTC and no microphone, which is also what a
   // locked-down browser looks like: it must say so and stay usable.
   await browser.fire("askVoiceBtn", "click").results;

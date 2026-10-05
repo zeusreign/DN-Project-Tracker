@@ -226,6 +226,9 @@ ${ENHANCED_STYLES}
 .ask-orb-call.is-live{background:#9a3e2b}
 .ask-orb-call.is-live svg{transform:rotate(135deg)}
 .ask-orb-call[disabled]{opacity:.6;cursor:default}
+.ask-stop{display:block;margin:14px auto 0;border:1px solid #cbd9e1;background:#fff;
+  color:#9a3e2b;font-size:12.5px;font-weight:600;padding:7px 16px;border-radius:999px;cursor:pointer}
+.ask-stop:hover{border-color:#9a3e2b}
 .ask-voice-status{margin:14px auto 0;max-width:40ch;font-size:12.5px;color:#586c7a;line-height:1.5}
 #askVoiceAudio{display:none}
 .ask-suggestions{display:flex;gap:7px;flex-wrap:wrap;padding:10px 20px 12px;border-top:1px solid #f0f3f5}

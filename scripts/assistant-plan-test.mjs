@@ -227,6 +227,25 @@ await check("a search made only of question words is recognised", () => {
   }
 });
 
+await check("a voice session asks for the reply not to be interrupted", async () => {
+  // The listener speaking must not cancel an answer in progress: a figure read
+  // out half way is worse than waiting. Checked on the body that is actually
+  // sent, since this is a property of the session rather than of the browser.
+  const { mintVoiceSession } = await import("../worker/assistant-model.js");
+  let sent = null;
+  await mintVoiceSession({ OPENAI_API_KEY: "sk-test" }, {
+    instructions: "test",
+    fetchImpl: async (url, init) => {
+      sent = JSON.parse(init.body);
+      return { ok: true, status: 200, json: async () => ({ value: "ek_test", session: {} }) };
+    },
+  });
+  const detection = sent.session.audio.input.turn_detection;
+  assert.equal(detection.interrupt_response, false, "speech does not cancel the reply");
+  assert.equal(detection.create_response, true, "but it still starts the next turn");
+  assert.ok(sent.session.audio.input.transcription, "and the listener's words are transcribed");
+});
+
 await check("the developer's SQL is laid out so it can be read", () => {
   const { rows } = planQueries({ minVariance: 50000, unit: "Gaming", limit: 20 }, ["Gaming"]);
   const pretty = formatSql(rows.sql);

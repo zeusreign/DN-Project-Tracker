@@ -1035,6 +1035,11 @@ function setVoiceState(next,detail){
     button.setAttribute("aria-label",live?"End voice conversation":"Start voice conversation");
     button.disabled=next==="connecting";
   }
+  // Stop is offered only while there is something to stop. The assistant is no
+  // longer interrupted by the listener speaking, so this is the way to cut an
+  // answer short.
+  var stop=byId("askStopBtn");
+  if(stop)stop.hidden=next!=="speaking";
   var orb=byId("askOrb");
   // The orb carries the state: resting, reaching, listening, speaking. It is the
   // only thing on screen during a call, so it has to say which of those it is
@@ -1059,6 +1064,19 @@ function setAskMode(mode){
   if(suggestions)suggestions.hidden=voiceMode;
   // Leaving voice ends the call rather than leaving it running out of sight.
   if(!voiceMode&&voice.state!=="off")stopVoice("");
+}
+
+// Ends the reply being spoken without ending the call: the response is
+// cancelled and whatever is already buffered for playback is dropped, so it
+// stops when asked rather than finishing the sentence it had queued.
+function stopSpeaking(){
+  if(!voice.channel||voice.state!=="speaking")return;
+  try{
+    voice.channel.send(JSON.stringify({type:"response.cancel"}));
+    voice.channel.send(JSON.stringify({type:"output_audio_buffer.clear"}));
+  }catch(e){}
+  voice.responding=false;
+  setVoiceState("listening","Stopped. Ask something else when you are ready.");
 }
 
 function stopVoice(detail){
@@ -1159,7 +1177,10 @@ function wireVoiceChannel(channel,session){
       voice.heard=String(message.transcript);
     }
     if(message.type==="response.created")voice.responding=true;
-    if(/^response\.(done|completed|cancelled|incomplete)$/.test(message.type||""))voice.responding=false;
+    if(/^response\.(done|completed|cancelled|incomplete)$/.test(message.type||"")){
+      voice.responding=false;
+      if(voice.state==="speaking")setVoiceState("listening");
+    }
 
     if(message.type==="error"){
       // Say what actually went wrong. The first version swallowed the payload
@@ -1353,6 +1374,7 @@ document.addEventListener("click",function(event){
   if(event.target&&event.target.id==="askClear"){askTurns=[];askSave();renderAsk()}
   var orbCall=event.target.closest?event.target.closest("#askVoiceBtn"):null;
   if(orbCall){startVoice();return}
+  if(event.target&&event.target.id==="askStopBtn"){stopSpeaking();return}
   if(event.target&&event.target.id==="askQuietMode"){setAskMode("quiet");return}
   if(event.target&&event.target.id==="askVoiceMode"){setAskMode("voice");return}
 });

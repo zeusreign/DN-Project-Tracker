@@ -132,9 +132,16 @@ export async function mintVoiceSession(env, { instructions, tools, model, fetchI
       audio: {
         // Transcribing what the listener said is what lets the transcript show
         // their words rather than the model's rewriting of them.
-        ...(withTranscription
-          ? { input: { transcription: { model: env.ASSISTANT_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe" } } }
-          : {}),
+        input: {
+          ...(withTranscription
+            ? { transcription: { model: env.ASSISTANT_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe" } }
+            : {}),
+          // The assistant finishes what it is saying. Speech from the listener
+          // no longer cancels a reply in progress - a figure read out half way
+          // is worse than waiting - so stopping it is a deliberate act, served
+          // by the Stop button rather than by a cough.
+          turn_detection: { type: "server_vad", create_response: true, interrupt_response: false },
+        },
         output: { voice: "alloy" },
       },
       // Declared here rather than by the browser sending session.update after
