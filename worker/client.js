@@ -1087,6 +1087,14 @@ document.addEventListener("keydown",function(event){
   }
 });
 document.addEventListener("click",function(event){
+  // Clicking outside the record view closes it. dialog has padding:0, so a click
+  // whose target is the dialog element itself landed on the backdrop rather than
+  // on anything in it. Deliberately only this one: it shows a record and holds
+  // nothing, whereas the same gesture on an edit dialog would throw away typing.
+  if(event.target&&event.target.id==="askRecordDialog"){
+    event.target.close();
+    return;
+  }
   var record=event.target.closest?event.target.closest("[data-ask-record]"):null;
   if(record){openAskRecord(record.dataset.askRecord);return}
   var chip=event.target.closest?event.target.closest(".ask-suggestion"):null;

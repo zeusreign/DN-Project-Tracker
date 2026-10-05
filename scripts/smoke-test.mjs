@@ -2297,7 +2297,18 @@ for (const [parent, child] of [
   assert.equal(dialog.querySelectorAll("form").length, 0, "nothing to submit");
   assert.match(dialog.textContent, /Read only/,
     "and it says so, rather than leaving the reader to infer it");
-  browser.byId("askRecordDialog").close();
+  // Clicking outside closes it; clicking inside does not. The record view holds
+  // nothing, so the gesture costs nothing here, which is why it is not wired to
+  // the edit dialogs.
+  await browser.fire(browser.byId("askRecordGrid"), "click").results;
+  await browser.settle();
+  assert.equal(browser.byId("askRecordDialog").open, true,
+    "a click inside the record view leaves it open");
+
+  await browser.fire(browser.byId("askRecordDialog"), "click").results;
+  await browser.settle();
+  assert.equal(browser.byId("askRecordDialog").open, false,
+    "a click on the backdrop closes it");
 
   // The evidence panel names the question its records belong to, so a panel
   // left over from an earlier answer can never be read as this one's.
