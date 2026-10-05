@@ -2100,7 +2100,7 @@ for (const [parent, child] of [
   assert.match(browser.text("pageTitle"), /Ask the Tracker/);
 
   // Suggestion chips are offered rather than leaving an empty box.
-  assert.ok(browser.byId("askSuggestions").querySelectorAll(".ask-chip").length > 0,
+  assert.ok(browser.byId("askSuggestions").querySelectorAll(".ask-suggestion").length > 0,
     "suggestions are offered rather than an empty box");
 
   // Ask a question the way a person would.
@@ -2116,19 +2116,22 @@ for (const [parent, child] of [
   assert.match(thread.textContent, /projects? matched/);
   assert.equal(browser.byId("askInput").value, "", "the box is cleared ready for the next question");
 
-  // Rows are rendered, and only ones this viewer may see.
+  // The evidence panel carries the records behind the answer, and only ones this
+  // viewer may see. Elements are found by class rather than by a descendant
+  // selector: the harness's selector engine has no descendant combinator, so
+  // "tbody tr" matches nothing at all rather than failing loudly.
   const gamingNames = database.prepare(`
     SELECT p.name FROM projects p JOIN business_units b ON b.id = p.business_unit_id
     WHERE b.name = 'Gaming' AND p.archived_at IS NULL`).all().map((row) => row.name);
-  // Rows carry a class rather than being found by "tbody tr": the harness's
-  // selector engine has no descendant combinator, so a two-part selector matches
-  // nothing at all rather than failing loudly.
-  const shown = [...thread.querySelectorAll(".ask-row")];
-  assert.ok(shown.length > 0, "the answer renders a table of matching projects");
-  for (const row of shown) {
-    const name = row.querySelector("td").textContent;
+  const evidence = browser.byId("askEvidence");
+  const shown = [...evidence.querySelectorAll(".ask-record")];
+  assert.ok(shown.length > 0, "the evidence panel lists the records behind the answer");
+  for (const record of shown) {
+    const name = record.querySelector(".ask-record-name").textContent;
     assert.ok(gamingNames.includes(name), `${name} is outside this viewer's scope`);
   }
+  assert.ok(browser.text("askEvidenceCount").trim().length > 0,
+    "the evidence panel shows how many records matched");
 
   // The transcript is stored for this user, so a refresh keeps it.
   assert.equal(browser.sessionStorage.length, 1, "the transcript is kept in sessionStorage");

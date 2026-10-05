@@ -67,7 +67,7 @@ var expired=new Error("");expired.sessionExpired=true;throw expired}
 throw new Error(data.error||fallback)}return data}
 function passwordScore(value){var p=String(value||""),score=0;if(p.length>=10)score++;if(p.length>=14)score++;if(/[A-Z]/.test(p)&&/[a-z]/.test(p))score++;if(/[0-9]/.test(p))score++;if(/[^A-Za-z0-9]/.test(p))score++;return score}
 function renderStrength(inputId,barId,textId){var value=byId(inputId).value,score=passwordScore(value),bar=byId(barId),label=byId(textId),width=Math.min(100,score*20),colors=["#c9384b","#c9384b","#df6a2e","#f2b134","#008f78","#008f78"];bar.style.width=width+"%";bar.style.background=colors[score];label.textContent=!value?"Enter at least 10 characters":score<=2?"Weak":score===3?"Fair":score===4?"Strong":"Very strong";label.style.color=score>=4?"#008f78":score===3?"#955700":"#c9384b"}
-function setView(view,keepPosition){if(!titles[view])view="projects";if(view==="admin"&&state.me&&state.me.role!=="admin")view="projects";document.querySelectorAll("[data-pane]").forEach(function(p){p.hidden=p.dataset.pane!==view});document.querySelectorAll("[data-view]").forEach(function(b){b.classList.toggle("active",b.dataset.view===view)});byId("pageTitle").textContent=titles[view][0];byId("pageSub").textContent=titles[view][1];history.replaceState(null,"","#"+view);byId("projectsControls").hidden=!["projects","cost","risk"].includes(view);byId("developmentControls").hidden=view!=="development";byId("columnsBtn").parentElement.hidden=view!=="projects";byId("search").placeholder=view==="risk"?"Search risk register":view==="cost"?"Search cost register":"Search projects";if(view==="admin")loadAdmin();if(view==="ask")renderAsk();if(!keepPosition)window.scrollTo({top:0,behavior:"smooth"})}
+function setView(view,keepPosition){if(!titles[view])view="projects";if(view==="admin"&&state.me&&state.me.role!=="admin")view="projects";document.querySelectorAll("[data-pane]").forEach(function(p){p.hidden=p.dataset.pane!==view});document.querySelectorAll("[data-view]").forEach(function(b){b.classList.toggle("active",b.dataset.view===view)});byId("pageTitle").textContent=titles[view][0];byId("pageSub").textContent=titles[view][1];history.replaceState(null,"","#"+view);byId("projectsControls").hidden=!["projects","cost","risk"].includes(view);byId("developmentControls").hidden=view!=="development";byId("columnsBtn").parentElement.hidden=view!=="projects";byId("search").placeholder=view==="risk"?"Search risk register":view==="cost"?"Search cost register":"Search projects";var unitSwitcher=byId("unitSwitcher");if(unitSwitcher)unitSwitcher.hidden=view==="ask"||view==="admin"||view==="help";if(view==="admin")loadAdmin();if(view==="ask")renderAsk();if(!keepPosition)window.scrollTo({top:0,behavior:"smooth"})}
 function visibleProjects(){return state.unitScope==="All"?state.projects:state.projects.filter(function(p){return p.business_unit===state.unitScope})}
 function capitalProjects(){return visibleProjects().filter(function(p){return p.project_type==="Capital"})}
 function developmentProjects(){return visibleProjects().filter(function(p){return p.project_type==="Development"})}
@@ -805,56 +805,97 @@ function askMoney(value){
   return (n<0?"-$":"$")+Math.abs(Math.round(n)).toLocaleString("en-US");
 }
 
-function askRowsHtml(rows){
-  if(!rows||!rows.length)return '<div class="ask-empty">No projects matched those filters.</div>';
-  return '<table class="ask-table"><thead><tr><th>Project</th><th>Business unit</th>'
-    +'<th>Status</th><th class="num">Variance</th><th class="num">Days</th></tr></thead><tbody>'
-    +rows.map(function(p){
-      var variance=p.forecast_variance,days=p.duration_change_days;
-      return '<tr class="ask-row"><td>'+esc(p.name)+'</td><td>'+esc(p.business_unit)+'</td>'
-        +'<td>'+esc(p.status||"—")+'</td>'
-        +'<td class="num'+(Number(variance)>0?" over":"")+'">'+esc(askMoney(variance))+'</td>'
-        +'<td class="num'+(Number(days)>0?" late":"")+'">'
-        +(days===null||days===undefined?"—":esc(String(days)))+'</td></tr>';
-    }).join("")+'</tbody></table>';
+function askRiskClass(level){
+  return level==="High"?"ask-risk-high":level==="Medium"?"ask-risk-medium"
+    :level==="Low"?"ask-risk-low":"ask-risk-other";
+}
+
+// The evidence panel: the records behind the most recent answer, so a figure can
+// be traced to the project it came from instead of being taken on trust.
+function renderEvidence(answer){
+  var body=byId("askEvidence"),count=byId("askEvidenceCount"),title=byId("askEvidenceTitle");
+  if(!body)return;
+  var rows=(answer&&answer.rows)||[];
+  if(count)count.textContent=answer&&answer.total!==undefined?String(answer.total):"—";
+  if(title)title.textContent=rows.length?"Matching records":"Matching records";
+  if(!rows.length){
+    body.innerHTML='<div class="ask-empty">'+(answer&&answer.total===0
+      ?'No records matched those filters. The filters applied are listed with the answer, so you can see what was searched for.'
+      :'Ask a question and the records behind the answer appear here, so every figure can be traced to the project it came from.')
+      +'</div>';
+    return;
+  }
+  body.innerHTML=rows.map(function(p){
+    var variance=p.forecast_variance,days=p.duration_change_days;
+    return '<article class="ask-record">'
+      +'<div class="ask-record-top"><span>'+esc(p.business_unit||"")+'</span>'
+      +'<span>'+esc(p.project_type||"")+'</span></div>'
+      +'<strong class="ask-record-name">'+esc(p.name)+'</strong>'
+      +'<div class="ask-chips">'
+        +'<span class="ask-risk '+askRiskClass(p.budget_risk)+'">Budget '+esc(p.budget_risk||"Not Rated")+'</span>'
+        +'<span class="ask-risk '+askRiskClass(p.schedule_risk)+'">Schedule '+esc(p.schedule_risk||"Not Rated")+'</span>'
+        +'<span class="ask-chip">'+esc(p.status||"—")+'</span>'
+      +'</div>'
+      +'<div class="ask-metric-pair">'
+        +'<div class="ask-metric"><span>Variance</span><strong class="'+(Number(variance)>0?"over":"")+'">'
+          +esc(askMoney(variance))+'</strong></div>'
+        +'<div class="ask-metric"><span>Days</span><strong class="'+(Number(days)>0?"late":"")+'">'
+          +(days===null||days===undefined?"—":esc(String(days)))+'</strong></div>'
+      +'</div>'
+      +'<div class="ask-source-line">'+esc(p.venue||p.section_name||"")
+        +(p.reporting_period?' · reported '+esc(dateText(p.reporting_period)):"")+'</div>'
+      +'</article>';
+  }).join("");
+  body.scrollTop=0;
 }
 
 function askTurnHtml(turn){
   var answer=turn.answer||{};
-  var cls=turn.state==="error"?" is-error":(answer.intent&&["refuse","off_topic"].indexOf(answer.intent)>=0?" is-refusal":"");
+  var cls=turn.state==="error"?" is-error"
+    :(answer.intent&&["refuse","off_topic"].indexOf(answer.intent)>=0?" is-refusal":"");
   var body="";
   if(turn.state==="pending"){
     body='<div class="ask-pending">Working on it…</div>';
   }else if(turn.state==="error"){
-    body='<div class="ask-message">'+esc(turn.message||"That question could not be answered.")+'</div>';
+    body='<div class="ask-reply is-error">'+esc(turn.message||"That question could not be answered.")+'</div>';
   }else{
-    if(answer.message)body+='<div class="ask-message">'+esc(answer.message)+'</div>';
+    if(answer.message)body+='<div class="ask-reply'+cls+'">'+esc(answer.message)+'</div>';
     if(answer.description&&answer.description.length){
-      body+='<div class="ask-filters">'+answer.description.map(function(part){
-        return '<span class="ask-filter">'+esc(part)+'</span>';
+      body+='<div class="ask-chips">'+answer.description.map(function(part){
+        return '<span class="ask-chip">'+esc(part)+'</span>';
       }).join("")+'</div>';
     }
     if(answer.total!==undefined&&answer.rows){
-      body+='<div class="ask-count">'+esc(String(answer.total))+' project'+(answer.total===1?"":"s")
-        +' matched'+(answer.truncated?', showing '+esc(String(answer.returned)):"")+'</div>';
+      body+='<div class="ask-answer-count">'+esc(String(answer.total))+' project'
+        +(answer.total===1?"":"s")+' matched'
+        +(answer.truncated?', showing the first '+esc(String(answer.returned)):"")+'</div>';
     }
   }
-  var table=(turn.state==="done"&&answer.rows&&answer.rows.length)?askRowsHtml(answer.rows):"";
-  return '<div class="ask-turn"><div class="ask-question">'+esc(turn.question)+'</div>'
-    +'<div class="ask-answer'+cls+'"><div class="ask-answer-body">'+body+'</div>'+table+'</div></div>';
+  return '<div class="ask-turn">'
+    +'<div class="ask-user"><div class="ask-label">You</div>'
+    +'<div class="ask-bubble">'+esc(turn.question)+'</div></div>'
+    +'<div class="ask-label">Ask the Tracker</div>'+body
+    +'</div>';
 }
 
 function renderAsk(){
   var thread=byId("askThread");
   if(!thread)return;
-  thread.innerHTML=askTurns.map(askTurnHtml).join("");
+  thread.innerHTML=askTurns.length?askTurns.map(askTurnHtml).join("")
+    :'<div class="ask-empty">Ask about the projects you can see — their budgets, schedules, '
+     +'risk ratings and turnover dates. This assistant reads; it never changes a record.</div>';
   thread.scrollTop=thread.scrollHeight;
   var chips=byId("askSuggestions");
   if(chips){
     chips.innerHTML=ASK_SUGGESTIONS.map(function(text){
-      return '<button type="button" class="ask-chip">'+esc(text)+'</button>';
+      return '<button type="button" class="ask-suggestion">'+esc(text)+'</button>';
     }).join("");
   }
+  var scope=byId("askScope");
+  if(scope)scope.textContent=state.me?"Answers cover only what "+(state.me.name||state.me.email)+" can see":"";
+  var last=null;
+  for(var i=askTurns.length-1;i>=0;i--){if(askTurns[i].state==="done"){last=askTurns[i].answer;break}}
+  renderEvidence(last);
 }
 
 async function submitAsk(question){
@@ -886,8 +927,16 @@ document.addEventListener("submit",function(event){
     submitAsk(question);
   }
 });
+document.addEventListener("keydown",function(event){
+  if(event.target&&event.target.id==="askInput"&&event.key==="Enter"&&!event.shiftKey){
+    event.preventDefault();
+    var value=event.target.value;
+    event.target.value="";
+    submitAsk(value);
+  }
+});
 document.addEventListener("click",function(event){
-  var chip=event.target.closest?event.target.closest(".ask-chip"):null;
+  var chip=event.target.closest?event.target.closest(".ask-suggestion"):null;
   if(chip){submitAsk(chip.textContent);return}
   if(event.target&&event.target.id==="askClear"){askTurns=[];askSave();renderAsk()}
 });
