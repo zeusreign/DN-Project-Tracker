@@ -376,6 +376,83 @@ await check("the thresholds are range-checked and type-checked", () => {
   assert.equal(validatePlan({ minVariance: 50000 }).plan.minVariance, 50000);
 });
 
+// --- The other tables --------------------------------------------------------
+// Activity updates, photographs and the development pipeline's own columns. The
+// children are fetched by the ids an already-scoped query returned, so they can
+// only belong to a project the reader may see, and object_key is never selected
+// because R2 access is authorised by the application.
+
+database.exec(`
+  INSERT INTO project_updates (id, source_key, project_id, reporting_period, current_summary, author_name)
+  VALUES (1, 'u1', 1, '2026-09-11', 'Latest on the restrooms.', 'Alice Stone'),
+         (2, 'u2', 1, '2026-08-28', 'Earlier note.', 'Alice Stone'),
+         (3, 'u3', 1, '2026-08-14', 'Older still.', 'Alice Stone'),
+         (4, 'u4', 1, '2026-07-31', 'Oldest of four.', 'Alice Stone'),
+         (5, 'u5', 3, '2026-09-11', 'Patina note.', 'Cara Lin');
+  INSERT INTO project_photos (id, project_id, kind, caption, object_key, mime, actor_email, reporting_period, deleted_at)
+  VALUES ('p1', 1, 'progress', 'North elevation', 'projects/1/secret-key', 'image/jpeg', 'a@b.c', '2026-09-11', NULL),
+         ('p2', 1, 'progress', 'Removed photo', 'projects/1/gone', 'image/jpeg', 'a@b.c', '2026-09-11', '2026-09-20'),
+         ('p3', 3, 'cover', 'Patina cover', 'projects/3/cover', 'image/jpeg', 'a@b.c', '2026-09-11', NULL);
+  INSERT INTO development_details (project_id, requestor, deliverable_due_date, current_estimate)
+  VALUES (4, 'Mina QA', '2026-12-01', 42000);
+`);
+
+await check("updates are attached only when the question asked for them", async () => {
+  const without = await runPlan(db, { ids: [1] }, ALL);
+  assert.equal(without.rows[0].updates, undefined, "nothing is attached unasked");
+
+  const withUpdates = await runPlan(db, { ids: [1], includeUpdates: true }, ALL);
+  assert.equal(withUpdates.rows[0].updates.length, 3, "capped at three, newest first");
+  assert.equal(withUpdates.rows[0].updates[0].current_summary, "Latest on the restrooms.");
+  assert.ok(!withUpdates.rows[0].updates.some((u) => u.current_summary === "Oldest of four."));
+});
+
+await check("a project's updates are its own", async () => {
+  const result = await runPlan(db, { includeUpdates: true }, ALL);
+  const patina = result.rows.find((row) => row.name === "Patina Delayed");
+  assert.deepEqual(patina.updates.map((u) => u.current_summary), ["Patina note."]);
+  const onTime = result.rows.find((row) => row.name === "Gaming On Time");
+  assert.deepEqual(onTime.updates, [], "a project with none gets an empty list, not another's");
+});
+
+await check("photographs never carry the R2 key, and a deleted one is gone", async () => {
+  const result = await runPlan(db, { ids: [1], includePhotos: true }, ALL);
+  assert.equal(result.rows[0].photos.length, 1, "the soft-deleted photograph is excluded");
+  assert.equal(result.rows[0].photos[0].caption, "North elevation");
+  for (const photo of result.rows[0].photos) {
+    assert.ok(!("object_key" in photo), "object_key must never reach the assistant");
+    assert.ok(!JSON.stringify(photo).includes("secret-key"));
+  }
+});
+
+await check("children stay inside the reader's scope", async () => {
+  // The Patina project is invisible to a Gaming viewer, so its updates and
+  // photographs are unreachable too - there is no row to hang them on.
+  const scoped = await runPlan(db, { includeUpdates: true, includePhotos: true }, GAMING);
+  assert.ok(!scoped.rows.some((row) => row.name === "Patina Delayed"));
+  const text = JSON.stringify(scoped.rows);
+  assert.ok(!text.includes("Patina note."));
+  assert.ok(!text.includes("Patina cover"));
+});
+
+await check("the development pipeline's own columns are available and filterable", async () => {
+  const result = await runPlan(db, { ids: [4] }, ALL);
+  assert.equal(result.rows[0].development_requestor, "Mina QA");
+  assert.equal(result.rows[0].development_due_date, "2026-12-01");
+  assert.equal(result.rows[0].development_current_estimate, 42000);
+  assert.deepEqual(names(await runPlan(db, { requestor: "Mina" }, ALL)), ["Gaming Complete"]);
+  assert.deepEqual(names(await runPlan(db, { requestor: "Nobody" }, ALL)), []);
+});
+
+await check("the sentence says what was attached", () => {
+  assert.match(summarisePlan(validatePlan({ includeUpdates: true }).plan, 3), /with their recent updates/);
+  assert.match(summarisePlan(validatePlan({ includePhotos: true }).plan, 3), /with their photographs/);
+  assert.match(summarisePlan(validatePlan({ includeUpdates: true, includePhotos: true }).plan, 3),
+    /recent updates and their photographs/);
+  // One project owns its updates, not their updates.
+  assert.match(summarisePlan(validatePlan({ includeUpdates: true }).plan, 1), /with its recent updates/);
+});
+
 // --- Result shape ------------------------------------------------------------
 
 await check("total counts the whole match, rows are capped, truncation is reported", async () => {  const result = await runPlan(db, { limit: 1 }, GAMING);

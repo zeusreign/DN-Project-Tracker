@@ -144,6 +144,18 @@ export const PLAN_FIELDS = {
     type: "enum", values: ["approved_budget", "anticipated_final_cost"],
     describe: "Which amount minAmount applies to. Defaults to anticipated_final_cost.",
   },
+  requestor: {
+    type: "string", max: 120,
+    describe: "Development pipeline only: who requested the work.",
+  },
+  includeUpdates: {
+    type: "boolean",
+    describe: "Attach each project's recent activity updates. Set this whenever the question asks what has happened, the latest news, or what was last said.",
+  },
+  includePhotos: {
+    type: "boolean",
+    describe: "Attach each project's photographs. Set this whenever the question asks about photos or images.",
+  },
   sort: {
     type: "enum", values: ["delay", "variance"],
     describe: "Order by largest schedule slip, or largest budget overrun. Defaults to the Tracker's own report order.",
@@ -169,7 +181,13 @@ const SELECT_COLUMNS = `
   p.original_turnover_date, p.current_turnover_date,
   p.reporting_period, p.updated_at,
   ${FORECAST_VARIANCE_SQL} AS forecast_variance,
-  ${DAY_VARIANCE_SQL} AS duration_change_days`;
+  ${DAY_VARIANCE_SQL} AS duration_change_days,
+  d.requestor AS development_requestor,
+  d.deliverable_due_date AS development_due_date,
+  d.consultants AS development_consultants,
+  d.original_estimate AS development_original_estimate,
+  d.current_estimate AS development_current_estimate,
+  d.request_date AS development_request_date`;
 
 export const PLAN_LIMIT_DEFAULT = 20;
 export const PLAN_LIMIT_MAX = PLAN_FIELDS.limit.max;
@@ -364,11 +382,17 @@ export function summarisePlan(plan = {}, total = 0) {
     clauses.push(`with ${which} of ${MONEY(plan.minAmount)} or more`);
   }
 
+  const extras = [];
+  const belonging = total === 1 ? "its" : "their";
+  if (plan.includeUpdates) extras.push(`${belonging} recent updates`);
+  if (plan.includePhotos) extras.push(`${belonging} photographs`);
+  const withExtras = extras.length ? `, with ${extras.join(" and ")}` : "";
+
   if (!clauses.length) {
-    return total ? `I found ${head}${scopedToPrevious}.` : `I found no ${noun}${scopedToPrevious}.`;
+    return total ? `I found ${head}${scopedToPrevious}${withExtras}.` : `I found no ${noun}${scopedToPrevious}.`;
   }
   if (!total) return `I found no ${noun}${scopedToPrevious} ${clauses.join(" and ")}.`;
-  return `I found ${head}${scopedToPrevious} ${clauses.join(" and ")}.`;
+  return `I found ${head}${scopedToPrevious} ${clauses.join(" and ")}${withExtras}.`;
 }
 
 // --- Schema text for the system prompt ---------------------------------------
@@ -436,6 +460,7 @@ function planWhere(plan, scope) {
     clauses.push("(p.project_manager LIKE ? OR p.development_lead LIKE ?)");
     bindings.push(`%${plan.manager}%`, `%${plan.manager}%`);
   }
+  if (plan.requestor) { clauses.push("d.requestor LIKE ?"); bindings.push(`%${plan.requestor}%`); }
   if (plan.status) { clauses.push("p.status = ?"); bindings.push(plan.status); }
   if (plan.excludeComplete) clauses.push("p.status <> 'Complete'");
   if (plan.type) { clauses.push("p.project_type = ?"); bindings.push(plan.type); }
@@ -485,7 +510,8 @@ function planWhere(plan, scope) {
 
 const FROM_SQL = `
   FROM projects p
-  JOIN business_units b ON b.id = p.business_unit_id`;
+  JOIN business_units b ON b.id = p.business_unit_id
+  LEFT JOIN development_details d ON d.project_id = p.id`;
 
 function orderSql(plan) {
   // NULLs last in both derived orderings: a project with no dates is not the
@@ -514,13 +540,66 @@ export function planQueries(plan, scope) {
 // Runs the plan and shapes the result. The model receives a count plus a capped
 // page of rows, never the whole table: "137 projects match, showing 20" is read
 // from COUNT(*) over the same scoped query rather than inferred from the page.
+// Activity updates and photographs for the projects an answer already found.
+// They are fetched by project id, and those ids came from a query the scope was
+// applied to, so a child row can only ever belong to a project the reader may
+// see. Fetched only when the question asked for them: attaching them to every
+// answer would send the model text nobody asked about and cost tokens for it.
+//
+// project_photos.object_key is not selected. R2 access is authorised by the
+// application, so the key must not reach the model or the browser; a photograph
+// is identified here and served by the route that checks who is asking.
+async function attachChildren(db, rows, plan) {
+  if (!rows.length || (!plan.includeUpdates && !plan.includePhotos)) return rows;
+  const ids = rows.map((row) => row.id);
+  const holes = ids.map(() => "?").join(", ");
+
+  if (plan.includeUpdates) {
+    const updates = await db.prepare(`
+      SELECT project_id, reporting_period, current_summary, previous_summary,
+             author_name, created_at
+      FROM project_updates
+      WHERE project_id IN (${holes})
+      ORDER BY reporting_period DESC, created_at DESC, id DESC
+    `).bind(...ids).all();
+    const byProject = new Map();
+    for (const update of updates.results || []) {
+      const list = byProject.get(update.project_id) || [];
+      // Three is enough to answer "what has been happening" without turning one
+      // answer into a wall of text.
+      if (list.length < 3) list.push(update);
+      byProject.set(update.project_id, list);
+    }
+    for (const row of rows) row.updates = byProject.get(row.id) || [];
+  }
+
+  if (plan.includePhotos) {
+    const photos = await db.prepare(`
+      SELECT id, project_id, caption, kind, reporting_period, date_taken,
+             taken_by, area, category, photo_number
+      FROM project_photos
+      WHERE project_id IN (${holes}) AND deleted_at IS NULL
+      ORDER BY date_taken DESC, created_at DESC
+    `).bind(...ids).all();
+    const byProject = new Map();
+    for (const photo of photos.results || []) {
+      const list = byProject.get(photo.project_id) || [];
+      if (list.length < 6) list.push(photo);
+      byProject.set(photo.project_id, list);
+    }
+    for (const row of rows) row.photos = byProject.get(row.id) || [];
+  }
+
+  return rows;
+}
+
 export async function runPlan(db, plan, scope) {
   const { rows, count, limit } = planQueries(plan, scope);
   const [page, totals] = await Promise.all([
     db.prepare(rows.sql).bind(...rows.bindings).all(),
     db.prepare(count.sql).bind(...count.bindings).first(),
   ]);
-  const results = page.results || [];
+  const results = await attachChildren(db, page.results || [], plan);
   const total = totals?.total ?? results.length;
   return {
     total,
