@@ -119,7 +119,7 @@ export function openAiPlanner({ apiKey, model = DEFAULT_PLANNER_MODEL, fetchImpl
 // WebRTC is for - but it never holds the account key, and every tool call the
 // model makes comes back through this worker, where the session cookie and the
 // business-unit scope still decide what it can see.
-export async function mintVoiceSession(env, { instructions, model, fetchImpl } = {}) {
+export async function mintVoiceSession(env, { instructions, tools, model, fetchImpl } = {}) {
   if (!env.OPENAI_API_KEY) throw new PlannerError("The assistant is not configured on this environment.", 503);
   const call = fetchImpl || fetch;
   const response = await call(CLIENT_SECRETS, {
@@ -131,6 +131,11 @@ export async function mintVoiceSession(env, { instructions, model, fetchImpl } =
         model: model || env.ASSISTANT_VOICE_MODEL || DEFAULT_VOICE_MODEL,
         instructions,
         audio: { output: { voice: "alloy" } },
+        // Declared here rather than by the browser sending session.update after
+        // the channel opens. The session accepts them at mint time, and that
+        // round trip was a failure the user saw as "the voice session ended
+        // unexpectedly" with nothing to act on.
+        ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
       },
     }),
   });

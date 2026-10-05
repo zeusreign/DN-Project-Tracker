@@ -1079,9 +1079,20 @@ function voiceToolResult(answer){
   };
 }
 
+function channelClosedGuard(pc){
+  // If the data channel closes the model can no longer ask for data, so the call
+  // is over whatever the audio is doing.
+  if(!voice.channel)return;
+  voice.channel.addEventListener("close",function(){
+    if(voice.pc===pc&&voice.state!=="off")stopVoice("The voice session closed. Start it again to carry on.");
+  });
+}
+
 function wireVoiceChannel(channel,session){
   channel.addEventListener("open",function(){
-    channel.send(JSON.stringify({type:"session.update",session:{tools:session.tools,tool_choice:"auto"}}));
+    // Nothing to configure here: the instructions and the ask_tracker tool are
+    // set on the session when the worker mints it, so there is no session.update
+    // round trip to get wrong.
     setVoiceState("listening");
   });
   channel.addEventListener("message",async function(event){
@@ -1107,7 +1118,12 @@ function wireVoiceChannel(channel,session){
       if(voice.state==="speaking")setVoiceState("listening");
     }
     if(message.type==="error"){
-      stopVoice("The voice session ended unexpectedly. Start it again to carry on.");
+      // Say what actually went wrong. The first version swallowed the payload
+      // and reported "ended unexpectedly", which told the user nothing and left
+      // nothing to diagnose from.
+      var reason=(message.error&&(message.error.message||message.error.code))||"";
+      console.log("assistant voice error:",JSON.stringify(message));
+      stopVoice(reason?"Voice stopped: "+reason:"The voice session stopped. Start it again to carry on.");
     }
   });
 }
@@ -1135,6 +1151,14 @@ async function startVoice(){
     var audio=byId("askVoiceAudio");
     voice.audio=audio;
     pc.ontrack=function(event){if(audio)audio.srcObject=event.streams[0]};
+    // A dropped connection has to show, or the orb keeps breathing at someone
+    // who is talking to nothing.
+    pc.onconnectionstatechange=function(){
+      if(voice.pc!==pc)return;
+      if(pc.connectionState==="failed")stopVoice("The connection dropped. Start the call again to carry on.");
+      if(pc.connectionState==="disconnected"&&voice.state!=="off")setVoiceState(voice.state,"Reconnecting…");
+    };
+    channelClosedGuard(pc);
     voice.mic.getTracks().forEach(function(track){pc.addTrack(track,voice.mic)});
     var channel=pc.createDataChannel("oai-events");
     voice.channel=channel;

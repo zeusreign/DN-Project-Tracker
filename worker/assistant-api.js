@@ -97,6 +97,7 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     try {
       const session = await mintVoiceSession(env, {
         instructions: voiceInstructions({ units, name: user.name || user.email }),
+        tools: VOICE_TOOLS,
       });
       return json({ ...session, tools: VOICE_TOOLS, units });
     } catch (problem) {
