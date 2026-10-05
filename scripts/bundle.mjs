@@ -32,6 +32,8 @@ const [enhanced, enhancedStyles, projectImages] = await Promise.all(["enhanced.j
 const workflows = await readFile(resolve(workerRoot, "enhanced-workflows.js"), "utf8");
 const enhancedApi = await readFile(resolve(workerRoot, "enhanced-api.js"), "utf8");
 const assistantPlan = await readFile(resolve(workerRoot, "assistant-plan.js"), "utf8");
+const assistantPrompt = await readFile(resolve(workerRoot, "assistant-prompt.js"), "utf8");
+const assistantModel = await readFile(resolve(workerRoot, "assistant-model.js"), "utf8");
 const assistantApi = await readFile(resolve(workerRoot, "assistant-api.js"), "utf8");
 const photoModule = await readFile(resolve(workerRoot, "enhanced-photos.js"), "utf8");
 const photoDrop = await readFile(resolve(workerRoot, "enhanced-drop.js"), "utf8");
@@ -41,6 +43,8 @@ const bundled = [
   workflows.replace("export const ENHANCED_WORKFLOWS", "const ENHANCED_WORKFLOWS"),
   enhancedApi.replace(/^export /gm, ""),
   assistantPlan.replace(/^export /gm, ""),
+  assistantPrompt.replace(/^import .*;\n/gm, "").replace(/^export \{[^}]*\};\n/gm, "").replace(/^export /gm, ""),
+  assistantModel.replace(/^import .*;\n/gm, "").replace(/^export \{[^}]*\};\n/gm, "").replace(/^export /gm, ""),
   assistantApi.replace(/^import .*;\n/gm, "").replace(/^export .*from.*;\n/gm, "").replace(/^export /gm, ""),
   projectImages.replace("export const PROJECT_IMAGES", "const PROJECT_IMAGES"),
   enhanced.replace(/^import .*;\n/gm, "").replace("export const ENHANCED_CLIENT", "const ENHANCED_CLIENT"),

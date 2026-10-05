@@ -1845,4 +1845,137 @@ for (const [parent, child] of [
   console.log("Assistant endpoint: auth, CSRF, scope, clamping and audit covered.");
 }
 
+// --- Assistant: question in, answer out --------------------------------------
+// The planner is resolved from env, so this whole path runs against a stub:
+// refusal, clarification, a plan the validator rejects, and a plan that
+// executes, all with no API key and no network. A model returning something
+// unexpected is the normal case to design for, not an edge case.
+{
+  const gamingCount = database.prepare(`
+    SELECT COUNT(*) AS n FROM projects p JOIN business_units b ON b.id = p.business_unit_id
+    WHERE p.archived_at IS NULL AND b.name = 'Gaming'`).get().n;
+
+  const askerPassword = "Ll3!" + crypto.randomUUID();
+  const askerId = (await (await call("/api/admin/users", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      first_name: "Assistant", last_name: "Asker",
+      username: "assistant-asker@example.invalid", user_email: "assistant-asker@example.invalid",
+      role: "viewer", business_unit_scope: "Gaming", account_status: "active",
+      site_access_status: "authorized",
+      temporary_password: askerPassword, confirm_password: askerPassword,
+    }),
+  })).json()).id;
+  database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE id = ?").run(askerId);
+  const askerCookie = await loginAs("assistant-asker@example.invalid", askerPassword);
+  const askerCsrf = await csrfFor(askerCookie);
+
+  const plannerCalls = [];
+  const stubPlanner = (outcome) => ({
+    async plan(question, options) {
+      plannerCalls.push({ question, units: options.units });
+      return typeof outcome === "function" ? outcome(question, options) : outcome;
+    },
+  });
+  const askQuestion = (question, planner, cookie) => worker.fetch(new Request(
+    "https://tracker.example/api/assistant/ask", {
+      method: "POST",
+      headers: cookie
+        ? { "content-type": "application/json", cookie, "x-csrf-token": askerCsrf }
+        : { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ question }),
+    }), { ...env, ASSISTANT_PLANNER: planner }, {});
+
+  // With no key and no stub the route says so plainly; nothing else breaks.
+  const unconfigured = await worker.fetch(new Request(
+    "https://tracker.example/api/assistant/ask", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ question: "anything" }),
+    }), env, {});
+  assert.equal(unconfigured.status, 503, "an unconfigured assistant is not a server error");
+
+  // A plan that executes.
+  const searched = await (await askQuestion("which projects are over budget?", stubPlanner({
+    intent: "search", language: "English", message: null,
+    plan: { overBudget: true, sort: "variance", limit: 5 },
+    usage: { model: "stub", inputTokens: 120, outputTokens: 40 },
+  }))).json();
+  assert.equal(searched.ok, true);
+  assert.equal(searched.intent, "search");
+  assert.ok(searched.total > 0, "the fixture has over-budget projects");
+  assert.ok(searched.rows.every((row) => row.forecast_variance > 0));
+  assert.match(searched.description.join(" "), /Forecast above approved budget/);
+  assert.ok(plannerCalls.at(-1).units.length > 0, "the planner is handed the unit vocabulary");
+
+  // A write request is refused, and a refusal is a successful answer rather than
+  // an error: the user asked for something this assistant will not do.
+  const refusedAsk = await askQuestion("delete the Gate City project", stubPlanner({
+    intent: "refuse", language: "English",
+    message: "This assistant only reads project information.", plan: {},
+  }));
+  assert.equal(refusedAsk.status, 200);
+  const refusedAskBody = await refusedAsk.json();
+  assert.equal(refusedAskBody.intent, "refuse");
+  assert.match(refusedAskBody.message, /only reads/);
+  assert.deepEqual(refusedAskBody.rows, [], "a refusal reaches no data");
+
+  // Message-only intents never touch the database, even carrying a plan.
+  for (const intent of ["off_topic", "clarify", "definition", "help"]) {
+    const body = await (await askQuestion("something", stubPlanner({
+      intent, language: "English", message: "A sentence.", plan: { unit: "Gaming" },
+    }))).json();
+    assert.equal(body.ok, true);
+    assert.equal(body.intent, intent);
+    assert.equal(body.total, 0, `${intent} must not query the database`);
+  }
+
+  // A model that hallucinates a field or a unit meets the same validator a
+  // hand-written plan does. The plan is not trusted for having come from a model.
+  const hallucinated = await askQuestion("anything", stubPlanner({
+    intent: "search", language: "English", message: null,
+    plan: { unit: "Gamming", table: "user_directory" },
+  }));
+  assert.equal(hallucinated.status, 400);
+  const hallucinatedBody = await hallucinated.json();
+  assert.equal(hallucinatedBody.ok, false);
+  assert.match(hallucinatedBody.problems.join(" "), /Unknown plan field "table"/);
+  assert.match(hallucinatedBody.problems.join(" "), /No business unit named/);
+
+  // An over-long question is rejected before any model call is paid for.
+  const callsBefore = plannerCalls.length;
+  const tooLong = await askQuestion("x".repeat(501), stubPlanner({
+    intent: "help", language: "English", message: "x", plan: {},
+  }));
+  assert.equal(tooLong.status, 400);
+  assert.equal(plannerCalls.length, callsBefore, "an over-long question costs nothing");
+
+  // A question obeys the same scope a plan does, and the planner is told only
+  // about the units this viewer has.
+  const scopedAsk = await (await askQuestion("show me everything", stubPlanner({
+    intent: "search", language: "English", message: null, plan: { limit: 50 },
+  }), askerCookie)).json();
+  assert.equal(scopedAsk.total, gamingCount, "a question is scoped like a plan");
+  assert.deepEqual(plannerCalls.at(-1).units, ["Gaming"]);
+
+  // Each answered question is audited with its intent, plan and token usage,
+  // and without the question text or the rows: transcripts live in the browser
+  // by decision, and storing the question here would reintroduce the retention
+  // that decision avoided.
+  const askRows = database.prepare(
+    "SELECT details FROM audit_log WHERE action = 'assistant_ask' ORDER BY id").all();
+  assert.ok(askRows.length >= 8, "every answered question writes one audit row");
+  const withUsage = askRows.map((row) => JSON.parse(row.details))
+    .find((entry) => entry.intent === "search" && entry.usage);
+  assert.ok(withUsage, "the token usage is recorded");
+  assert.equal(withUsage.usage.inputTokens, 120);
+  assert.equal(withUsage.usage.outputTokens, 40);
+  for (const row of askRows) {
+    const entry = JSON.parse(row.details);
+    assert.ok(!("question" in entry), "the question text is not stored server-side");
+    assert.ok(!("rows" in entry) && !("message" in entry), "no content is stored");
+  }
+
+  console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
+}
+
 console.log("Smoke test passed: source data, KPIs, development workflow, history, formulas, export, secure roles, directory, and PDF guide.");

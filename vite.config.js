@@ -77,6 +77,11 @@ async function bootstrapPreviewAdmin(db, admin) {
   ).run();
 }
 
+// The assistant's key, read from the gitignored .env like the preview
+// administrator above. Absent is fine: /api/assistant/ask answers 503 and every
+// other route is unaffected.
+let previewOpenAiKey;
+
 function trackerPreview(previewAdmin) {
   let worker;
   const DB = createPreviewDatabase();
@@ -113,7 +118,7 @@ function trackerPreview(previewAdmin) {
             method,
             headers,
             body: chunks.length ? Buffer.concat(chunks) : undefined,
-          }), { DB, ADMIN_EMAILS: "preview@example.com" }, {});
+          }), { DB, ADMIN_EMAILS: "preview@example.com", OPENAI_API_KEY: previewOpenAiKey }, {});
           response.statusCode = result.status;
           result.headers.forEach((value, name) => response.setHeader(name, value));
           response.end(Buffer.from(await result.arrayBuffer()));
@@ -130,6 +135,7 @@ export default defineConfig(({ mode }) => {
   // lifts the usual VITE_ prefix restriction so the preview can read these
   // server-side-only values. They never reach the browser bundle.
   const env = loadEnv(mode, process.cwd(), "");
+  previewOpenAiKey = env.OPENAI_API_KEY || undefined;
   return {
     server: {
       host: "0.0.0.0",
