@@ -890,28 +890,26 @@ function askTurnHtml(turn){
     :(answer.intent&&["refuse","off_topic"].indexOf(answer.intent)>=0?" is-refusal":"");
   var body="";
   if(turn.state==="pending"){
-    body='<div class="ask-pending">Working on it…</div>';
+    body='<div class="ask-pending">Looking…</div>';
   }else if(turn.state==="error"){
     body='<div class="ask-reply is-error">'+esc(turn.message||"That question could not be answered.")+'</div>';
   }else{
-    // The filter list is internal detail and is not shown. A correction is:
-    // it explains a result that would otherwise look wrong.
-    if(answer.notices&&answer.notices.length){
-      body+='<div class="ask-notices">'+answer.notices.map(function(note){
-        return '<div class="ask-notice">'+esc(note)+'</div>';
-      }).join("")+'</div>';
-    }
+
     if(answer.message)body+='<div class="ask-reply'+cls+'">'+esc(answer.message)+'</div>';
     if(answer.rows){
       if(answer.total){
-        body+='<div class="ask-reply">I found <strong>'+esc(String(answer.total))+' project'
-          +(answer.total===1?"":"s")+'</strong> matching your question.</div>';
+        // The worker writes this from the plan it ran, so it says what was
+        // searched for rather than only how many turned up.
+        body+='<div class="ask-reply">'+esc(answer.summary
+          ||("I found "+answer.total+" project"+(answer.total===1?"":"s")+"."))+'</div>';
         body+=askResultListHtml(answer);
       }else if(!answer.message){
         // The wording matters: an empty result has to read as "nothing matched
         // these filters", which are listed above it, rather than as a failure.
-        body+='<div class="ask-reply">No matching records. Try a project name, venue, '
-          +'CAPP number, or a wider business unit.</div>';
+        // The same sentence, so an empty answer says what was looked for
+        // instead of only that nothing turned up.
+        body+='<div class="ask-reply">'+esc(answer.summary||"I found no projects.")
+          +' Try a project name, venue, CAPP number, or a wider business unit.</div>';
       }
     }
   }
@@ -947,7 +945,7 @@ function askRecordById(id){
 
 function openAskRecord(id){
   var p=askRecordById(id);
-  if(!p)return toast("That project is no longer in view. Refresh and try again.");
+  if(!p)return toast("That project is no longer loaded. Refresh and try again.");
   byId("askRecordTitle").textContent=p.name;
   // Venue and section are often the same word on these records, so show it once.
   var meta=[];
@@ -985,8 +983,8 @@ function renderAsk(){
   var thread=byId("askThread");
   if(!thread)return;
   thread.innerHTML=askTurns.length?askTurns.map(askTurnHtml).join("")
-    :'<div class="ask-empty">Ask about the projects you can see — their budgets, schedules, '
-     +'risk ratings and turnover dates. This assistant reads; it never changes a record.</div>';
+    :'<div class="ask-empty">Ask about budgets, schedules, risk ratings and turnover dates for the '
+     +'projects you can see. This assistant reads records, it does not change them.</div>';
   var toBottom=function(){
     if(typeof thread.scrollTo==="function")thread.scrollTo({top:thread.scrollHeight,behavior:"auto"});
     else thread.scrollTop=thread.scrollHeight;
@@ -1000,7 +998,7 @@ function renderAsk(){
     }).join("");
   }
   var scope=byId("askScope");
-  if(scope)scope.textContent=state.me?"Answers cover only what "+(state.me.name||state.me.email)+" can see":"";
+  if(scope)scope.textContent=state.me?"Covers the projects "+(state.me.name||state.me.email)+" can see":"";
   // The evidence follows the most recent answer that actually returned records,
   // carrying its question so the panel is never ambiguous about which answer it
   // belongs to.

@@ -1986,7 +1986,7 @@ for (const [parent, child] of [
   }))).json();
   assert.ok(silentRefusal.message, "a refusal must never come back empty");
   assert.match(silentRefusal.message, /only read/i);
-  assert.match(silentRefusal.message, /Tracker's own screens/);
+  assert.match(silentRefusal.message, /use the Projects screen/);
 
   // An out-of-scope question says what IS in scope, and names this viewer's own
   // units rather than every unit in the database.
@@ -1994,7 +1994,7 @@ for (const [parent, child] of [
     intent: "off_topic", language: "English", message: null, plan: {},
   }), askerCookie)).json();
   assert.ok(offTopic.message);
-  assert.match(offTopic.message, /outside what I hold/);
+  assert.match(offTopic.message, /only answer questions about this tracker/);
   assert.match(offTopic.message, /Gaming/, "it names what the viewer can ask about");
   const otherUnitName = database.prepare(
     "SELECT name FROM business_units WHERE name <> 'Gaming' LIMIT 1").get().name;
@@ -2134,8 +2134,8 @@ for (const [parent, child] of [
     recordingPlanner({ search: "budget over 1", minAmount: 1, amountField: "approved_budget", limit: 50 }))).json();
   assert.equal(withJunkSearch.total, realTotal.total,
     "the restated search is dropped rather than emptying the result");
-  assert.deepEqual(withJunkSearch.notices, [],
-    "and silently, because the condition it restated is still applied");
+  assert.match(withJunkSearch.summary, /approved budget of \$1 or more/,
+    "and the sentence describes the filter that remains, not the text dropped");
   assert.ok(!("search" in withJunkSearch.plan), "the plan reported back no longer claims it");
 
   // A real term that matches nothing is NOT dropped. Widening here would return
@@ -2144,7 +2144,8 @@ for (const [parent, child] of [
     recordingPlanner({ search: "asbestos", unit: "Gaming", status: "Active", limit: 50 }))).json();
   assert.equal(genuineTerm.total, 0,
     "an unmatched search term that is not a restatement leaves the answer empty");
-  assert.deepEqual(genuineTerm.notices, [], "and nothing is widened behind the reader's back");
+  assert.match(genuineTerm.summary, /mentioning .asbestos./,
+    "and the sentence still names the term, so an empty answer explains itself");
 
   // A search that genuinely matches is left alone.
   // Must be Active, or the search and the status filter legitimately match
@@ -2153,14 +2154,17 @@ for (const [parent, child] of [
     "SELECT name FROM projects WHERE archived_at IS NULL AND status = 'Active' LIMIT 1").get().name;
   const goodSearch = await (await askWithContext(`tell me about ${realName}`,
     recordingPlanner({ search: realName, status: "Active", limit: 50 }))).json();
-  assert.deepEqual(goodSearch.notices, [], "a search that matches is never dropped");
+  assert.ok(goodSearch.summary.includes(realName),
+    "a search that matches is never dropped, and the sentence still names it");
+  assert.ok(goodSearch.total > 0);
 
   // A question that is only a search is never widened: dropping it would answer
   // a different question rather than the one asked.
   const onlySearch = await (await askWithContext("find Nonexistent Project Name",
     recordingPlanner({ search: "Nonexistent Project Name Zzz", limit: 50 }))).json();
   assert.equal(onlySearch.total, 0, "a search-only question that matches nothing stays empty");
-  assert.deepEqual(onlySearch.notices, []);
+  assert.match(onlySearch.summary, /I found no projects mentioning/,
+    "a search-only question that matches nothing says what it looked for");
 
   console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
 }
@@ -2229,8 +2233,10 @@ for (const [parent, child] of [
   // What must still be visible is the answer itself and what it was drawn from.
   assert.ok(!thread.textContent.includes("Slipped 30 days or more"),
     "the internal filter list is not shown to the reader");
-  assert.match(thread.textContent, /I found \d+ projects? matching your question/,
-    "the answer states what it found in words, not only as a count");
+  // The sentence describes what was searched for, not just how many turned up,
+  // so a question read wrongly is visible in the answer itself.
+  assert.match(thread.textContent, /I found \d+ projects? that slipped 30 days or more/,
+    "the answer says what it searched for, not only how many it found");
   assert.match(thread.textContent, /AI Tracker/, "replies are attributed to the assistant");
   assert.match(thread.textContent, /source records?/, "and say how many records stand behind them");
   assert.ok(thread.querySelectorAll(".ask-result").length > 0,

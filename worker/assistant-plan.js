@@ -288,6 +288,70 @@ export function describePlan(plan = {}) {
   return parts.length ? parts : ["All available projects"];
 }
 
+// --- The answer, in words ----------------------------------------------------
+// Built from the plan that actually ran rather than written by the model, so the
+// sentence cannot describe a search that did not happen. It also carries the
+// disclosure the filter chips used to: a question read wrongly produces a
+// sentence that does not match what was asked, which is visible at a glance.
+
+const MONEY = (value) => "$" + Number(value).toLocaleString("en-US", { maximumFractionDigits: 0 });
+const RATING = (level) => (level === "Not Rated" ? "not rated" : String(level).toLowerCase());
+
+export function summarisePlan(plan = {}, total = 0) {
+  const count = `${total} project${total === 1 ? "" : "s"}`;
+
+  // Words that attach to the noun itself read better in front of it.
+  const lead = [];
+  if (plan.unit && plan.unit !== "All") lead.push(plan.unit);
+  if (plan.type === "Capital") lead.push("capital");
+  if (plan.type === "Development") lead.push("development");
+  const noun = lead.length ? `${lead.join(" ")} ${count.replace(/^\d+ /, "")}` : count.replace(/^\d+ /, "");
+  const head = `${total} ${noun}`;
+
+  // "From the previous answer" qualifies the noun rather than being a condition
+  // of its own, so it sits before the conditions and takes no "and".
+  const scopedToPrevious = plan.ids ? " from the previous answer" : "";
+
+  const clauses = [];
+  if (plan.status) clauses.push(`with the status ${plan.status}`);
+  if (plan.excludeComplete) clauses.push("that are not complete");
+  if (plan.manager) clauses.push(`led by ${plan.manager}`);
+  if (plan.search) clauses.push(`mentioning “${plan.search}”`);
+
+  if (plan.risk) {
+    const level = RATING(plan.riskLevel || "High");
+    clauses.push(plan.risk === "either"
+      ? `rated ${level} for budget or schedule risk`
+      : `whose ${plan.risk} risk is ${level}`);
+  }
+  if (plan.budgetRisk) clauses.push(`whose budget risk is ${RATING(plan.budgetRisk)}`);
+  if (plan.scheduleRisk) clauses.push(`whose schedule risk is ${RATING(plan.scheduleRisk)}`);
+  if (plan.excludeBudgetRisk) clauses.push(`whose budget risk is not ${RATING(plan.excludeBudgetRisk)}`);
+  if (plan.excludeScheduleRisk) clauses.push(`whose schedule risk is not ${RATING(plan.excludeScheduleRisk)}`);
+
+  if (plan.minDelayDays !== undefined) {
+    clauses.push(plan.minDelayDays >= 0
+      ? `that slipped ${plan.minDelayDays} day${plan.minDelayDays === 1 ? "" : "s"} or more`
+      : `whose turnover moved at least ${Math.abs(plan.minDelayDays)} days earlier`);
+  } else if (plan.delayed) {
+    clauses.push("whose turnover date has moved later");
+  }
+
+  if (plan.minVariance !== undefined) clauses.push(`over budget by ${MONEY(plan.minVariance)} or more`);
+  else if (plan.overBudget) clauses.push("forecast to finish over budget");
+
+  if (plan.minAmount !== undefined) {
+    const which = plan.amountField === "approved_budget" ? "an approved budget" : "a forecast cost";
+    clauses.push(`with ${which} of ${MONEY(plan.minAmount)} or more`);
+  }
+
+  if (!clauses.length) {
+    return total ? `I found ${head}${scopedToPrevious}.` : `I found no ${noun}${scopedToPrevious}.`;
+  }
+  if (!total) return `I found no ${noun}${scopedToPrevious} ${clauses.join(" and ")}.`;
+  return `I found ${head}${scopedToPrevious} ${clauses.join(" and ")}.`;
+}
+
 // --- Schema text for the system prompt ---------------------------------------
 // Generated from PLAN_FIELDS so the model is never told about a field that does
 // not exist, and never left unaware of one that does.

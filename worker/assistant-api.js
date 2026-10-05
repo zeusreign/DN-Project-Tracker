@@ -5,7 +5,7 @@
 // data, and the release scope is deliberately search/report only — creating or
 // editing records through conversation is not part of it.
 
-import { validatePlan, runPlan, describePlan, planSchemaPrompt, availableUnits, PLAN_LIMIT_MAX } from "./assistant-plan.js";
+import { validatePlan, runPlan, describePlan, planSchemaPrompt, availableUnits, summarisePlan, PLAN_LIMIT_MAX } from "./assistant-plan.js";
 import { plannerFor, PlannerError } from "./assistant-model.js";
 import { messageFor, scopeNote } from "./assistant-prompt.js";
 
@@ -215,7 +215,6 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     // When it does not, ids carried in from the context are the previous answer
     // leaking into a new question - "give projects with high budget risks" is
     // not a question about the one project just shown - so they are dropped.
-    const notices = [];
 
     // ids may only ever name records the previous answer returned. Left to the
     // prompt the model invents them - a question with no context at all came
@@ -228,7 +227,6 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       if (kept.length !== plan.ids.length) {
         if (kept.length) plan.ids = kept;
         else delete plan.ids;
-        notices.push("Answered across every project: this question did not follow on from the previous answer.");
       }
     }
 
@@ -242,7 +240,6 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       // question.
       if (fromContext && !outcome.followUp) {
         delete plan.ids;
-        notices.push("Searched every project, not only the previous answer.");
       }
     }
 
@@ -256,7 +253,6 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       const negative = `exclude${rating[0].toUpperCase()}${rating.slice(1)}Risk`;
       if (plan[positive] && plan[negative] && plan[positive] !== plan[negative]) {
         delete plan[positive];
-        notices.push(`Read “not ${plan[negative]}” as any other ${rating} rating, not only ${rating === "budget" ? "one" : "one"} in particular.`);
       }
     }
 
@@ -305,10 +301,11 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       rows: result.rows,
       sources: result.sources,
       description: result.description,
-      // Only corrections are meant for the reader: they explain a result that
-      // would otherwise look wrong. The filter list stays in the payload for the
-      // audit row and the tests, but is no longer shown.
-      notices,
+      // Built from the plan that ran, so it states what was actually searched
+      // for rather than that something was found. It also carries what the
+      // notices used to: a question read wrongly produces a sentence that does
+      // not match what was asked.
+      summary: summarisePlan(plan, result.total),
       plan,
     });
   }

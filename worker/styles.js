@@ -160,9 +160,6 @@ ${ENHANCED_STYLES}
 .ask-chips{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}
 .ask-chip{padding:4px 8px;border-radius:4px;background:#eef4f6;color:#486577;font-size:11px;line-height:1.5}
 .ask-label-ai{letter-spacing:.8px;text-transform:uppercase;font-size:11px;color:#1f5a6b}
-.ask-notices{margin:2px 0 8px}
-.ask-notice{font-size:12px;color:#83601b;background:#fff8ec;border-left:2px solid #e0b060;
-  padding:6px 10px;border-radius:0 4px 4px 0;margin-bottom:6px}
 .ask-results{margin:12px 0 0}
 .ask-result{padding:10px 0;border-bottom:1px solid #eef2f4}
 .ask-result:last-child{border-bottom:0}

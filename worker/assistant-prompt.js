@@ -110,12 +110,12 @@ How to answer:
 // something. Each explains why, and what the user can do instead — a dead end
 // with no explanation reads as a broken screen.
 export const INTENT_FALLBACK = {
-  unsupported: "I cannot express that as a filter over the records I hold. I can filter by business unit, status, type, either risk rating, schedule slip in days, budget size and budget overrun — ask it that way and I can answer.",
-  refuse: "I can only read project information, not change it. Use the Tracker's own screens to add, edit or delete a record.",
-  off_topic: "I can only answer questions about this tracker: projects, budgets, schedules, risk ratings, turnover dates, photographs and activity updates. That question is outside what I hold.",
-  clarify: "I need a little more detail before I can answer that. Which project or business unit do you mean?",
-  definition: "I can explain the Tracker's own columns — Days, variance, risk ratings, phases and turnover dates. Ask about one of those.",
-  help: "Ask me about projects by business unit, status, risk, budget overrun or schedule slip. For example: “which Gaming projects slipped more than 30 days?”",
+  unsupported: "I can't filter on that. I can use business unit, status, type, budget risk, schedule risk, days slipped, budget size and budget overrun.",
+  refuse: "I can only read project information. To add, edit or delete a record, use the Projects screen.",
+  off_topic: "I can only answer questions about this tracker: projects, budgets, schedules, risk ratings, turnover dates, photographs and activity updates.",
+  clarify: "I need a bit more to go on. Which project or business unit do you mean?",
+  definition: "I can explain the Tracker's columns: Days, variance, risk ratings, phases and turnover dates. Ask about one of those.",
+  help: "Ask about projects by business unit, status, risk, budget overrun or schedule slip. For example: which Gaming projects slipped more than 30 days?",
 };
 
 // What a user is allowed to ask about, named explicitly so an out-of-scope
@@ -123,7 +123,7 @@ export const INTENT_FALLBACK = {
 // it doubles as a statement of what they can see.
 export function scopeNote(units) {
   if (!Array.isArray(units) || !units.length) return "";
-  return ` You can ask about ${units.length === 1 ? "the " : ""}${units.join(", ")} ${units.length === 1 ? "business unit" : "business units"}.`;
+  return ` You can ask about ${units.join(", ")}.`;
 }
 
 export function messageFor(intent, modelMessage, units) {
