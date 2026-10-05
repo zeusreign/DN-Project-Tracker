@@ -86,13 +86,29 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     if (!question) return error("A question is required.");
     if (question.length > 500) return error("That question is too long. Keep it under 500 characters.");
 
+    // What the previous answer returned, so "which of these" narrows it rather
+    // than silently searching the whole portfolio again. It arrives from the
+    // browser and is therefore untrusted, but it can only ever narrow: runPlan
+    // applies the user's scope regardless of what ids are named, so a forged
+    // list reaches nothing the caller could not already see.
+    const raw = body.context && typeof body.context === "object" ? body.context : null;
+    const context = raw && Array.isArray(raw.ids)
+      ? {
+        ids: raw.ids.filter((id) => Number.isInteger(id) && id > 0).slice(0, 50),
+        total: Number.isInteger(raw.total) ? raw.total : undefined,
+        description: Array.isArray(raw.description)
+          ? raw.description.filter((part) => typeof part === "string").slice(0, 12)
+          : undefined,
+      }
+      : null;
+
     const planner = plannerFor(env);
     if (!planner) return error("The assistant is not configured on this environment.", 503);
 
     const units = await availableUnits(env.DB, scope);
     let outcome;
     try {
-      outcome = await planner.plan(question, { units });
+      outcome = await planner.plan(question, { units, context });
     } catch (problem) {
       if (problem instanceof PlannerError) return error(problem.message, problem.status);
       throw problem;
@@ -123,7 +139,34 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       }, 400);
     }
 
-    const result = await runPlan(env.DB, plan, scope);
+    let result = await runPlan(env.DB, plan, scope);
+
+    // A free-text search that matches nothing empties the whole result, even
+    // when every other filter was right. The model keeps restating the question
+    // in it - "budget over 50000" is not a project name - and a prompt rule did
+    // not stop that, so the server handles it: retry once without the search and
+    // say so. The alternative is answering "none" to a question with ten
+    // answers, which is the failure this assistant exists to avoid.
+    //
+    // Only when something else was actually asked for. Dropping the search from
+    // a plan that is nothing but a search would answer a different question.
+    const otherFilters = Object.keys(plan).filter((key) => key !== "search" && key !== "limit"
+      && key !== "sort" && key !== "unit");
+    if (result.total === 0 && plan.search && otherFilters.length) {
+      const widened = { ...plan };
+      delete widened.search;
+      const retry = await runPlan(env.DB, widened, scope);
+      if (retry.total > 0) {
+        retry.description = [
+          ...retry.description,
+          `ignored “${plan.search}”, which matched no project`,
+        ];
+        result = retry;
+        plan.search = undefined;
+        delete plan.search;
+      }
+    }
+
     await recordAsk(env, user, outcome, result, scope);
     return json({
       ok: true,

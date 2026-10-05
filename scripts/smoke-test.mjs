@@ -2048,6 +2048,107 @@ for (const [parent, child] of [
   assert.match(thresholded.description.join(" "), /Slipped 31 days or more/,
     "and the applied threshold is shown back to the user");
 
+
+  // --- A follow-up narrows the previous answer -------------------------------
+  // The defect this covers: "which of these have high schedule risk?" was
+  // planned in isolation, so it searched the whole portfolio and returned
+  // projects that were never in the previous answer - a different question,
+  // answered confidently.
+  const seenByPlanner = [];
+  const recordingPlanner = (plan) => ({
+    async plan(question, options) {
+      seenByPlanner.push(options.context || null);
+      return { intent: "search", language: "English", message: null, plan };
+    },
+  });
+  const askWithContext = (question, planner, context) => worker.fetch(new Request(
+    "https://tracker.example/api/assistant/ask", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(context ? { question, context } : { question }),
+    }), { ...env, ASSISTANT_PLANNER: planner }, {});
+
+  // A first answer, whose ids become the context for the next question.
+  const firstAnswer = await (await askWithContext("which projects slipped more than 30 days?",
+    recordingPlanner({ minDelayDays: 30, limit: 50 }))).json();
+  assert.ok(firstAnswer.total > 2, "the fixture needs several slipped projects");
+  assert.equal(seenByPlanner.at(-1), null, "a first question carries no context");
+  const firstIds = firstAnswer.rows.map((row) => row.id);
+
+  // The follow-up is handed those ids, and the model is expected to use them.
+  const narrowed = await (await askWithContext(
+    "which of these have high schedule risk?",
+    recordingPlanner({ ids: firstIds, risk: "schedule", riskLevel: "High", limit: 50 }),
+    { ids: firstIds, total: firstAnswer.total, description: firstAnswer.description },
+  )).json();
+  assert.deepEqual(seenByPlanner.at(-1).ids, firstIds,
+    "the planner is told what the previous answer returned");
+
+  // Every row of the narrowed answer must have been in the previous one. This is
+  // the assertion that fails when a follow-up silently starts again.
+  for (const row of narrowed.rows) {
+    assert.ok(firstIds.includes(row.id),
+      `${row.name} was not in the previous answer, so "these" was ignored`);
+  }
+  assert.ok(narrowed.total <= firstAnswer.total, "a narrowed answer cannot grow");
+
+  // Context is untrusted input and can only ever narrow: ids outside the
+  // caller's scope reach nothing, because runPlan applies the scope regardless.
+  const outsideId = database.prepare(`
+    SELECT p.id FROM projects p JOIN business_units b ON b.id = p.business_unit_id
+    WHERE b.name <> 'Gaming' AND p.archived_at IS NULL LIMIT 1`).get().id;
+  const forged = await worker.fetch(new Request("https://tracker.example/api/assistant/ask", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: askerCookie, "x-csrf-token": askerCsrf },
+    body: JSON.stringify({
+      question: "and these?",
+      context: { ids: [outsideId], total: 1, description: ["forged"] },
+    }),
+  }), { ...env, ASSISTANT_PLANNER: recordingPlanner({ ids: [outsideId], limit: 50 }) }, {});
+  const forgedBody = await forged.json();
+  assert.equal(forgedBody.total, 0,
+    "a forged context cannot reach a project outside the caller's scope");
+
+  // Malformed context is dropped rather than failing the question.
+  const junk = await (await askWithContext("anything", recordingPlanner({ limit: 5 }),
+    { ids: ["1; DROP TABLE projects", -4, 2.5], total: "many" })).json();
+  assert.equal(junk.ok, true, "a malformed context does not break the question");
+  assert.deepEqual(seenByPlanner.at(-1).ids, [], "and contributes no ids");
+
+
+  // --- A search that matches nothing must not empty a good answer ------------
+  // The model restates the question in search - "budget over 50000" is not a
+  // project name - and a prompt rule did not stop it. Answering "none" to a
+  // question with ten answers is the failure this assistant exists to avoid, so
+  // the server retries without it and says so.
+  const realTotal = await (await askWithContext("anything",
+    recordingPlanner({ minAmount: 1, amountField: "approved_budget", limit: 50 }))).json();
+  assert.ok(realTotal.total > 0, "the fixture has projects with a budget");
+
+  const withJunkSearch = await (await askWithContext("which have a budget over 1?",
+    recordingPlanner({ search: "budget over 1", minAmount: 1, amountField: "approved_budget", limit: 50 }))).json();
+  assert.equal(withJunkSearch.total, realTotal.total,
+    "the unmatched search is dropped rather than emptying the result");
+  assert.match(withJunkSearch.description.join(" · "), /ignored .budget over 1./,
+    "and the user is told it was dropped, rather than it happening silently");
+  assert.ok(!("search" in withJunkSearch.plan), "the plan reported back no longer claims it");
+
+  // A search that genuinely matches is left alone.
+  // Must be Active, or the search and the status filter legitimately match
+  // nothing together and the retry fires for the right reason.
+  const realName = database.prepare(
+    "SELECT name FROM projects WHERE archived_at IS NULL AND status = 'Active' LIMIT 1").get().name;
+  const goodSearch = await (await askWithContext(`tell me about ${realName}`,
+    recordingPlanner({ search: realName, status: "Active", limit: 50 }))).json();
+  assert.ok(!goodSearch.description.join(" ").includes("ignored"),
+    "a search that matches is never dropped");
+
+  // A question that is only a search is never widened: dropping it would answer
+  // a different question rather than the one asked.
+  const onlySearch = await (await askWithContext("find Nonexistent Project Name",
+    recordingPlanner({ search: "Nonexistent Project Name Zzz", limit: 50 }))).json();
+  assert.equal(onlySearch.total, 0, "a search-only question that matches nothing stays empty");
+  assert.ok(!onlySearch.description.join(" ").includes("ignored"));
+
   console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
 }
 

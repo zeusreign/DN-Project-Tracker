@@ -950,7 +950,24 @@ async function submitAsk(question){
   renderAsk();
   byId("askSubmit").disabled=true;
   try{
-    var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify({question:text})});
+    // The ids the previous answer returned, so "which of these" narrows that
+    // result instead of starting again. Only a search that actually returned
+    // rows becomes context; a refusal or a definition leaves the previous one
+    // standing, which is what a person would expect.
+    var context=null;
+    for(var i=askTurns.length-2;i>=0;i--){
+      var prior=askTurns[i];
+      if(prior.state==="done"&&prior.answer&&prior.answer.rows&&prior.answer.rows.length){
+        context={
+          ids:prior.answer.rows.map(function(row){return row.id}),
+          total:prior.answer.total,
+          description:prior.answer.description||[]
+        };
+        break;
+      }
+    }
+    var answer=await api("/api/assistant/ask",{method:"POST",
+      body:JSON.stringify(context?{question:text,context:context}:{question:text})});
     turn.state="done";turn.answer=answer;
   }catch(error){
     // api() throws with the worker's own message, which already explains a

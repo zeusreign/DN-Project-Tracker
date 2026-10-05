@@ -29,6 +29,9 @@ Domain rules for this tracker:
 - Risk is rated separately for budget and for schedule. "High risk" with no
   further qualification means either of them is High.
 - Amounts are in dollars with no currency symbol.
+- "A budget over $50k" is the size of the approved budget: minAmount 50000 with
+  amountField "approved_budget". "Over budget by $50k" is the overrun:
+  minVariance 50000. They are different questions and must not be swapped.
 - If the question names a number, that number must land in a field. "Slipped
   more than 30 days" is minDelayDays: 30, not delayed: true. "More than $50k
   over budget" is minVariance: 50000, not overBudget: true. Dropping the number
@@ -40,6 +43,14 @@ How to answer:
   columns that are not plan fields.
 - Set only the fields the question actually constrains. An absent field means no
   filter, which is almost always what a broad question wants.
+- search is for words that appear in a project's own name, venue, section or
+  CAPP/initiative number - "Mardi Gras", "CAPP-1042". Never restate the question
+  in it. "Which have a budget over 50k" is not a search for "budget over 50000":
+  that matches no project name and silently empties the result.
+- Choose one reading of a condition, not both. A budget threshold is minAmount,
+  an overrun threshold is minVariance; setting overBudget as well as minAmount
+  asks for projects that are both over budget and large, which is a narrower
+  question than the one asked.
 - If the question asks to create, change, delete or approve anything, use intent
   "refuse": this assistant only reads.
 - If the question is not about construction projects, budgets, schedules, risk,
@@ -50,7 +61,15 @@ How to answer:
 - Never invent a figure, a project name or a business unit. If a question names a
   business unit you were not given, use intent "clarify" and say so.
 - Reply in the same language the question was asked in. The language of the
-  question decides this, not any other setting.`;
+  question decides this, not any other setting.
+- When the question refers back to the previous answer - "these", "those",
+  "them", "their", "of these", "and now", "narrow that" - you are given the ids
+  the previous answer returned. Put exactly those ids in the plan's ids field and
+  add the new condition. Do not re-search the whole portfolio: that answers a
+  different question from the one asked, while looking like an answer to this
+  one.
+- A question that names a new business unit, or says "all projects", "everything"
+  or "start again", drops the previous result instead of narrowing it.`;
 
 // Written here rather than left to the model, so a refusal always says
 // something. Each explains why, and what the user can do instead — a dead end
@@ -81,6 +100,25 @@ export function messageFor(intent, modelMessage, units) {
   return ["off_topic", "clarify"].includes(intent) && !modelMessage
     ? text + scopeNote(units)
     : text;
+}
+
+// What the previous answer returned, handed to the model so a follow-up can
+// narrow it. Capped at the same 50 the ids field accepts.
+export function contextNote(context) {
+  if (!context || !Array.isArray(context.ids) || !context.ids.length) return "";
+  const ids = context.ids.slice(0, 50);
+  const lines = [
+    `The previous answer returned ${context.total ?? ids.length} project(s).`,
+    `Their ids are: ${ids.join(", ")}.`,
+  ];
+  if (context.description && context.description.length) {
+    lines.push(`It was filtered by: ${context.description.join(" · ")}.`);
+  }
+  if (context.total && context.total > ids.length) {
+    lines.push(`Only the first ${ids.length} are listed, so a follow-up about "these" covers those.`);
+  }
+  lines.push('If this question refers back to them, set ids to exactly that list.');
+  return lines.join("\n");
 }
 
 export function systemPrompt({ units } = {}) {
