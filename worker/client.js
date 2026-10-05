@@ -1,7 +1,7 @@
 import { ENHANCED_CLIENT } from "./enhanced.js";
 export const CLIENT = `
 var state={projects:[],summary:{},updates:[],me:null,csrf:null,preset:"progress",sortKey:"source_sort_order",sortDir:"asc",devSortKey:"source_sort_order",devSortDir:"asc",activityId:null,unitScope:"All",adminUsers:[],adminAudit:[],adminPage:1,adminLoginEvents:[],loginPage:1,kpiDragKey:null,kpiDragged:false};
-var titles={portfolio:["Portfolio","Leadership summary by business unit"],projects:["Projects","Project activity, cost and schedule"],development:["Development Pipeline","Design & Development requests, estimates and promotion workflow"],cost:["Cost Control","Budgets, forecasts and variances"],risk:["Risk Register","All projects and all recorded risk levels"],admin:["Admin","User directory, roles and audit history"],help:["Help & User Guide","Quick reference and complete PDF instructions"]};
+var titles={portfolio:["Portfolio","Leadership summary by business unit"],projects:["Projects","Project activity, cost and schedule"],development:["Development Pipeline","Design & Development requests, estimates and promotion workflow"],cost:["Cost Control","Budgets, forecasts and variances"],risk:["Risk Register","All projects and all recorded risk levels"],admin:["Admin","User directory, roles and audit history"],help:["Help & User Guide","Quick reference and complete PDF instructions"],ask:["Ask the Tracker","Ask a question about the projects you can see"]};
 var money=new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 var colors=["#087db5","#13a6c8","#008f78","#7ac143","#f2b134","#7357a6"];
 function esc(v){return String(v==null?"":v).replace(/[&<>\"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[c]})}
@@ -67,7 +67,7 @@ var expired=new Error("");expired.sessionExpired=true;throw expired}
 throw new Error(data.error||fallback)}return data}
 function passwordScore(value){var p=String(value||""),score=0;if(p.length>=10)score++;if(p.length>=14)score++;if(/[A-Z]/.test(p)&&/[a-z]/.test(p))score++;if(/[0-9]/.test(p))score++;if(/[^A-Za-z0-9]/.test(p))score++;return score}
 function renderStrength(inputId,barId,textId){var value=byId(inputId).value,score=passwordScore(value),bar=byId(barId),label=byId(textId),width=Math.min(100,score*20),colors=["#c9384b","#c9384b","#df6a2e","#f2b134","#008f78","#008f78"];bar.style.width=width+"%";bar.style.background=colors[score];label.textContent=!value?"Enter at least 10 characters":score<=2?"Weak":score===3?"Fair":score===4?"Strong":"Very strong";label.style.color=score>=4?"#008f78":score===3?"#955700":"#c9384b"}
-function setView(view,keepPosition){if(!titles[view])view="projects";if(view==="admin"&&state.me&&state.me.role!=="admin")view="projects";document.querySelectorAll("[data-pane]").forEach(function(p){p.hidden=p.dataset.pane!==view});document.querySelectorAll("[data-view]").forEach(function(b){b.classList.toggle("active",b.dataset.view===view)});byId("pageTitle").textContent=titles[view][0];byId("pageSub").textContent=titles[view][1];history.replaceState(null,"","#"+view);byId("projectsControls").hidden=!["projects","cost","risk"].includes(view);byId("developmentControls").hidden=view!=="development";byId("columnsBtn").parentElement.hidden=view!=="projects";byId("search").placeholder=view==="risk"?"Search risk register":view==="cost"?"Search cost register":"Search projects";if(view==="admin")loadAdmin();if(!keepPosition)window.scrollTo({top:0,behavior:"smooth"})}
+function setView(view,keepPosition){if(!titles[view])view="projects";if(view==="admin"&&state.me&&state.me.role!=="admin")view="projects";document.querySelectorAll("[data-pane]").forEach(function(p){p.hidden=p.dataset.pane!==view});document.querySelectorAll("[data-view]").forEach(function(b){b.classList.toggle("active",b.dataset.view===view)});byId("pageTitle").textContent=titles[view][0];byId("pageSub").textContent=titles[view][1];history.replaceState(null,"","#"+view);byId("projectsControls").hidden=!["projects","cost","risk"].includes(view);byId("developmentControls").hidden=view!=="development";byId("columnsBtn").parentElement.hidden=view!=="projects";byId("search").placeholder=view==="risk"?"Search risk register":view==="cost"?"Search cost register":"Search projects";if(view==="admin")loadAdmin();if(view==="ask")renderAsk();if(!keepPosition)window.scrollTo({top:0,behavior:"smooth"})}
 function visibleProjects(){return state.unitScope==="All"?state.projects:state.projects.filter(function(p){return p.business_unit===state.unitScope})}
 function capitalProjects(){return visibleProjects().filter(function(p){return p.project_type==="Capital"})}
 function developmentProjects(){return visibleProjects().filter(function(p){return p.project_type==="Development"})}
@@ -118,13 +118,17 @@ function renderAll(){renderUnitBar();renderProjects();renderPortfolio();renderDe
 // admin views write account data into. They are deliberately written out rather
 // than derived from a selector: a container that stops being cleared should break
 // a named assertion, not silently drop out of a query.
-var ACCOUNT_HTML=["projectsHead","projectsBody","costHead","costBody","riskHead","riskBody","developmentHead","developmentBody","businessUnitBar","unitSummary","attentionList","highRiskCards","portfolioDonut","portfolioLegend","needsStatusCallout","historyList","roleList","auditList","adminPagination","loginEventList","loginPagination","headerAvatar"];
+var ACCOUNT_HTML=["projectsHead","projectsBody","costHead","costBody","riskHead","riskBody","developmentHead","developmentBody","businessUnitBar","unitSummary","attentionList","highRiskCards","portfolioDonut","portfolioLegend","needsStatusCallout","historyList","roleList","auditList","adminPagination","loginEventList","loginPagination","headerAvatar","askThread","askSuggestions"];
 var ACCOUNT_TEXT=["projectCount","developmentCount","unitSelectionText","kpiActive","kpiBudget","kpiHigh","kpiDevelopment","devTotal","devCurrent","devNeeds","devEstimate","sumPrecon","sumConstruction","sumApproved","sumAfc","riskHigh","riskMedium","riskLow","riskUnrated","adminCounts","directoryCount","loginEventCount","userChip","activityTitle","activityMeta","detailsTitle","detailsMeta","developmentTitle","developmentMeta","promoteMeta"];
 var ACCOUNT_FORMS=["detailsForm","developmentForm","promoteForm","userForm","profileForm","addForm","passwordForm"];
 function clearAccountData(){
   state.projects=[];state.summary={};state.updates=[];
   state.adminUsers=[];state.adminAudit=[];state.adminLoginEvents=[];
   state.adminPage=1;state.loginPage=1;state.activityId=null;state.unitScope="All";
+  // Every stored transcript, not only the rendered one. An answer holds project
+  // budgets, this runs on shared machines, and sessionStorage outlives a sign-out
+  // unless something removes it.
+  askForget();
   ACCOUNT_HTML.forEach(function(id){var el=byId(id);if(el)el.innerHTML=""});
   ACCOUNT_TEXT.forEach(function(id){var el=byId(id);if(el)el.textContent=""});
   ACCOUNT_FORMS.forEach(function(id){var form=byId(id);if(form)form.reset()});
@@ -197,7 +201,7 @@ async function load(reset){if(reset){state.preset="progress";state.sortKey="sour
 // the details come from /api/session instead, which sits above that gate. Before
 // this the user was simply told to replace the password with no form to do it in.
 if(r.status===428)return showPasswordChangeOnly();
-var data=await r.json();if(!r.ok)throw new Error(data.error||"Tracker unavailable");state.projects=data.projects;state.summary=data.summary;state.updates=data.updates;state.me=data.me;state.csrf=data.me.csrf_token||null;renderProfileHeader();applyCapabilities();renderAll();byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;setView(location.hash.replace("#","")||"projects",!reset);startIdleWatch();if(state.me.auth_source==="local"&&state.me.must_change_password){byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;setTimeout(function(){if(!byId("passwordDialog").open)byId("passwordDialog").showModal()},80)}return true}
+var data=await r.json();if(!r.ok)throw new Error(data.error||"Tracker unavailable");state.projects=data.projects;state.summary=data.summary;state.updates=data.updates;state.me=data.me;state.csrf=data.me.csrf_token||null;askLoad();renderAsk();renderProfileHeader();applyCapabilities();renderAll();byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;setView(location.hash.replace("#","")||"projects",!reset);startIdleWatch();if(state.me.auth_source==="local"&&state.me.must_change_password){byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;setTimeout(function(){if(!byId("passwordDialog").open)byId("passwordDialog").showModal()},80)}return true}
 async function signIn(event){event.preventDefault();var button=byId("loginBtn"),message=byId("loginError"),username=byId("loginUsername").value.trim(),password=byId("loginPassword").value;message.textContent="";button.disabled=true;button.textContent="Signing in…";try{await api("/api/login",{method:"POST",body:JSON.stringify({username:username,password:password})});byId("loginForm").reset();await load(true);announceSession({type:"signed-in"})}catch(error){message.textContent=error.message+" Confirm that the User ID above is your Delaware North email."}finally{button.disabled=false;button.textContent="Sign in"}}
 // --- Inactivity timeout -------------------------------------------------------
 // The duration lives in the worker (IDLE_SECONDS) and arrives on state.me, so
@@ -739,4 +743,152 @@ window.addEventListener("hashchange",function(){closeExportMenu()});
 document.addEventListener("error",function(event){if(event.target.matches&&event.target.matches(".avatar img"))event.target.hidden=true},true);
 ${ENHANCED_CLIENT}
 load(true).catch(function(e){byId("loading").innerHTML="<strong>Unable to load tracker.</strong><br>"+esc(e.message)});
+
+// --- Ask the Tracker ---------------------------------------------------------
+// A question goes to /api/assistant/ask, which turns it into a query plan and
+// runs it under the same business-unit scope every other screen obeys. The
+// answer carries the filters it applied, so a misread question is visible
+// rather than silently producing a confident wrong answer.
+//
+// The transcript lives in sessionStorage only: it survives a refresh, dies with
+// the tab, and is never written to the database. It is keyed by user id and
+// cleared on sign-out, because this runs on shared machines and an answer holds
+// project budgets the next person may not be entitled to see.
+var ASK_SUGGESTIONS=[
+  "Which projects slipped more than 30 days?",
+  "Anything more than $50k over budget?",
+  "Which projects have high schedule risk?",
+  "What does Days mean?"
+];
+var askTurns=[];
+
+// Keyed on the signed-in email: /api/bootstrap's "me" carries no id, so keying
+// on one silently produced no key at all and nothing was ever stored. The value
+// is the user's own address, in their own browser, already shown in the header.
+function askStorageKey(){return state.me&&state.me.email?"dn-dc-ask:"+state.me.email:null}
+
+function askLoad(){
+  askTurns=[];
+  var key=askStorageKey();
+  if(!key)return;
+  try{
+    var raw=sessionStorage.getItem(key);
+    if(raw){var parsed=JSON.parse(raw);if(Array.isArray(parsed))askTurns=parsed.slice(-50)}
+  }catch(e){/* private window, blocked storage: the feature still works */}
+}
+
+function askSave(){
+  var key=askStorageKey();
+  if(!key)return;
+  try{sessionStorage.setItem(key,JSON.stringify(askTurns.slice(-50)))}catch(e){}
+}
+
+// Every per-user transcript, not only this one's: a shared browser may hold the
+// previous account's answers under its own key.
+function askForget(){
+  askTurns=[];
+  try{
+    var drop=[];
+    for(var i=0;i<sessionStorage.length;i++){
+      var k=sessionStorage.key(i);
+      if(k&&k.indexOf("dn-dc-ask:")===0)drop.push(k);
+    }
+    drop.forEach(function(k){sessionStorage.removeItem(k)});
+  }catch(e){}
+  var thread=byId("askThread");if(thread)thread.innerHTML="";
+}
+
+function askMoney(value){
+  if(value===null||value===undefined||value==="")return "—";
+  var n=Number(value);
+  if(!isFinite(n))return "—";
+  return (n<0?"-$":"$")+Math.abs(Math.round(n)).toLocaleString("en-US");
+}
+
+function askRowsHtml(rows){
+  if(!rows||!rows.length)return '<div class="ask-empty">No projects matched those filters.</div>';
+  return '<table class="ask-table"><thead><tr><th>Project</th><th>Business unit</th>'
+    +'<th>Status</th><th class="num">Variance</th><th class="num">Days</th></tr></thead><tbody>'
+    +rows.map(function(p){
+      var variance=p.forecast_variance,days=p.duration_change_days;
+      return '<tr class="ask-row"><td>'+esc(p.name)+'</td><td>'+esc(p.business_unit)+'</td>'
+        +'<td>'+esc(p.status||"—")+'</td>'
+        +'<td class="num'+(Number(variance)>0?" over":"")+'">'+esc(askMoney(variance))+'</td>'
+        +'<td class="num'+(Number(days)>0?" late":"")+'">'
+        +(days===null||days===undefined?"—":esc(String(days)))+'</td></tr>';
+    }).join("")+'</tbody></table>';
+}
+
+function askTurnHtml(turn){
+  var answer=turn.answer||{};
+  var cls=turn.state==="error"?" is-error":(answer.intent&&["refuse","off_topic"].indexOf(answer.intent)>=0?" is-refusal":"");
+  var body="";
+  if(turn.state==="pending"){
+    body='<div class="ask-pending">Working on it…</div>';
+  }else if(turn.state==="error"){
+    body='<div class="ask-message">'+esc(turn.message||"That question could not be answered.")+'</div>';
+  }else{
+    if(answer.message)body+='<div class="ask-message">'+esc(answer.message)+'</div>';
+    if(answer.description&&answer.description.length){
+      body+='<div class="ask-filters">'+answer.description.map(function(part){
+        return '<span class="ask-filter">'+esc(part)+'</span>';
+      }).join("")+'</div>';
+    }
+    if(answer.total!==undefined&&answer.rows){
+      body+='<div class="ask-count">'+esc(String(answer.total))+' project'+(answer.total===1?"":"s")
+        +' matched'+(answer.truncated?', showing '+esc(String(answer.returned)):"")+'</div>';
+    }
+  }
+  var table=(turn.state==="done"&&answer.rows&&answer.rows.length)?askRowsHtml(answer.rows):"";
+  return '<div class="ask-turn"><div class="ask-question">'+esc(turn.question)+'</div>'
+    +'<div class="ask-answer'+cls+'"><div class="ask-answer-body">'+body+'</div>'+table+'</div></div>';
+}
+
+function renderAsk(){
+  var thread=byId("askThread");
+  if(!thread)return;
+  thread.innerHTML=askTurns.map(askTurnHtml).join("");
+  thread.scrollTop=thread.scrollHeight;
+  var chips=byId("askSuggestions");
+  if(chips){
+    chips.innerHTML=ASK_SUGGESTIONS.map(function(text){
+      return '<button type="button" class="ask-chip">'+esc(text)+'</button>';
+    }).join("");
+  }
+}
+
+async function submitAsk(question){
+  var text=String(question||"").trim();
+  if(!text)return;
+  var turn={question:text,state:"pending",answer:null};
+  askTurns.push(turn);
+  renderAsk();
+  byId("askSubmit").disabled=true;
+  try{
+    var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify({question:text})});
+    turn.state="done";turn.answer=answer;
+  }catch(error){
+    // api() throws with the worker's own message, which already explains a
+    // refusal, a missing key or a rate limit in words a user can act on.
+    turn.state="error";turn.message=error&&error.message?error.message:"That question could not be answered.";
+  }
+  byId("askSubmit").disabled=false;
+  askSave();
+  renderAsk();
+}
+
+document.addEventListener("submit",function(event){
+  if(event.target&&event.target.id==="askForm"){
+    event.preventDefault();
+    var input=byId("askInput");
+    var question=input.value;
+    input.value="";
+    submitAsk(question);
+  }
+});
+document.addEventListener("click",function(event){
+  var chip=event.target.closest?event.target.closest(".ask-chip"):null;
+  if(chip){submitAsk(chip.textContent);return}
+  if(event.target&&event.target.id==="askClear"){askTurns=[];askSave();renderAsk()}
+});
 `;

@@ -117,4 +117,42 @@ button:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
 }
 
 ${ENHANCED_STYLES}
+
+/* --- Ask the Tracker ------------------------------------------------------ */
+.ask-composer{display:flex;gap:10px;align-items:center;padding:14px;margin-bottom:14px}
+.ask-composer input{flex:1;min-width:0;padding:11px 13px;border:1px solid var(--line,#d8dce2);
+  border-radius:8px;font:inherit;background:#fff}
+.ask-composer input:focus{outline:2px solid #2f6fd0;outline-offset:1px}
+.ask-suggestions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.ask-chip{border:1px solid var(--line,#d8dce2);background:#fff;border-radius:999px;
+  padding:6px 12px;font-size:12px;color:#44506a;cursor:pointer}
+.ask-chip:hover{border-color:#2f6fd0;color:#1d3f6b}
+.ask-thread{display:flex;flex-direction:column;gap:14px}
+.ask-turn{display:flex;flex-direction:column;gap:8px}
+.ask-question{align-self:flex-start;background:#eef2f8;border-radius:10px 10px 10px 2px;
+  padding:9px 13px;font-weight:600;color:#1d2433;max-width:70ch}
+.ask-answer{border:1px solid var(--line,#d8dce2);border-radius:10px;background:#fff;overflow:hidden}
+.ask-answer.is-refusal{border-color:#d3a373;background:#fffaf4}
+.ask-answer.is-error{border-color:#cf8181;background:#fff6f6}
+.ask-answer-body{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.ask-message{color:#2b3545;line-height:1.5}
+.ask-filters{display:flex;flex-wrap:wrap;gap:6px}
+.ask-filter{background:#eef4ff;color:#1d3f6b;border-radius:5px;padding:3px 8px;font-size:11px;font-weight:600}
+.ask-count{font-size:12px;color:#6b7280}
+.ask-pending{font-size:12px;color:#6b7280;font-style:italic}
+.ask-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.ask-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+  color:#6b7280;padding:7px 14px;border-top:1px solid var(--line,#d8dce2);background:#fafbfc}
+.ask-table td{padding:7px 14px;border-top:1px solid #eef0f3;vertical-align:top}
+.ask-table td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ask-table .over{color:#a4423a;font-weight:600}
+.ask-table .late{color:#8a5a12;font-weight:600}
+.ask-empty{padding:12px 14px;color:#6b7280;font-size:12.5px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media (max-width:720px){
+  .ask-composer{flex-wrap:wrap}
+  .ask-composer input{flex:1 1 100%}
+}
+
 `;

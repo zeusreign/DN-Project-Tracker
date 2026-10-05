@@ -544,6 +544,18 @@ export function createBrowser({ page, handler, origin = "https://tracker.example
     removeItem: (key) => storage.delete(String(key)),
     clear: () => storage.clear(),
   };
+  // sessionStorage, with the length/key(i) pair the real API has: the assistant
+  // transcript enumerates keys to clear every user's, so a shim without them
+  // would make that path untestable rather than merely unverified.
+  const sessionStore = new Map();
+  const sessionStorage = {
+    getItem: (key) => (sessionStore.has(String(key)) ? sessionStore.get(String(key)) : null),
+    setItem: (key, value) => sessionStore.set(String(key), String(value)),
+    removeItem: (key) => sessionStore.delete(String(key)),
+    clear: () => sessionStore.clear(),
+    key: (index) => [...sessionStore.keys()][index] ?? null,
+    get length() { return sessionStore.size; },
+  };
   const broadcasts = [];
   class HarnessBroadcastChannel {
     constructor(name) { this.name = name; this.onmessage = null; }
@@ -635,7 +647,7 @@ export function createBrowser({ page, handler, origin = "https://tracker.example
   }
 
   const run = new Function(
-    "window", "document", "location", "history", "localStorage", "fetch",
+    "window", "document", "location", "history", "localStorage", "sessionStorage", "fetch",
     "setTimeout", "clearTimeout", "setInterval", "clearInterval",
     "BroadcastChannel", "CSS", "getComputedStyle", "URL", "Image", "NodeFilter", "console",
     // Bare globals the Enhanced layer reads for layout; the harness window is fixed-size.
@@ -653,10 +665,11 @@ export function createBrowser({ page, handler, origin = "https://tracker.example
       field.value = value;
       return field;
     },
+    sessionStorage,
     get cookie() { return cookie; },
     async start() {
       run(
-        window, document, location, history, localStorage, harnessFetch,
+        window, document, location, history, localStorage, sessionStorage, harnessFetch,
         (fn, delay) => addTimer(fn, delay, false), (id) => timers.delete(id),
         (fn, delay) => addTimer(fn, delay, true), (id) => timers.delete(id),
         HarnessBroadcastChannel,

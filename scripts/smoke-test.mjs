@@ -2051,4 +2051,101 @@ for (const [parent, child] of [
   console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
 }
 
+// --- Ask the Tracker, through the served page --------------------------------
+// The client code is a string compiled into the worker, so the only way to know
+// the pane actually works is to run it. This drives the real script in the
+// harness: sign in, open the pane, ask, and check what is rendered — including
+// that the transcript is cleared on sign-out, which is the whole reason it lives
+// in sessionStorage rather than the database.
+{
+  const uiPassword = "Mm4!" + crypto.randomUUID();
+  const uiId = (await (await call("/api/admin/users", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      first_name: "Ask", last_name: "Interface",
+      username: "ask-ui@example.invalid", user_email: "ask-ui@example.invalid",
+      role: "viewer", business_unit_scope: "Gaming", account_status: "active",
+      site_access_status: "authorized",
+      temporary_password: uiPassword, confirm_password: uiPassword,
+    }),
+  })).json()).id;
+  database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE id = ?").run(uiId);
+
+  const uiPage = await (await call("/")).text();
+  const askPlanner = {
+    async plan() {
+      return {
+        intent: "search", language: "English", message: null,
+        plan: { minDelayDays: 30, limit: 5 },
+        usage: { model: "stub", inputTokens: 10, outputTokens: 5 },
+      };
+    },
+  };
+  const browser = await createBrowser({
+    page: uiPage,
+    handler: (request) => worker.fetch(request, { ...env, ASSISTANT_PLANNER: askPlanner }, {}),
+  }).start();
+
+  browser.type("loginUsername", "ask-ui@example.invalid");
+  browser.type("loginPassword", uiPassword);
+  await browser.fire("loginForm", "submit").results;
+  await browser.settle();
+  assert.equal(browser.byId("workspace").hidden, false, "the UI test account signs in");
+
+  // The pane is reachable from the navigation, and the heading follows.
+  await browser.fire("askNav", "click").results;
+  await browser.settle();
+  assert.equal(browser.byId("askInput").closest("[data-pane]").hidden, false,
+    "the Ask pane is shown when its nav button is used");
+  assert.match(browser.text("pageTitle"), /Ask the Tracker/);
+
+  // Suggestion chips are offered rather than leaving an empty box.
+  assert.ok(browser.byId("askSuggestions").querySelectorAll(".ask-chip").length > 0,
+    "suggestions are offered rather than an empty box");
+
+  // Ask a question the way a person would.
+  browser.type("askInput", "which projects slipped more than 30 days?");
+  await browser.fire("askForm", "submit").results;
+  await browser.settle();
+
+  const thread = browser.byId("askThread");
+  assert.match(thread.textContent, /which projects slipped more than 30 days\?/,
+    "the question is echoed in the transcript");
+  assert.match(thread.textContent, /Slipped 30 days or more/,
+    "the filters that were applied are shown, so a misread question is visible");
+  assert.match(thread.textContent, /projects? matched/);
+  assert.equal(browser.byId("askInput").value, "", "the box is cleared ready for the next question");
+
+  // Rows are rendered, and only ones this viewer may see.
+  const gamingNames = database.prepare(`
+    SELECT p.name FROM projects p JOIN business_units b ON b.id = p.business_unit_id
+    WHERE b.name = 'Gaming' AND p.archived_at IS NULL`).all().map((row) => row.name);
+  // Rows carry a class rather than being found by "tbody tr": the harness's
+  // selector engine has no descendant combinator, so a two-part selector matches
+  // nothing at all rather than failing loudly.
+  const shown = [...thread.querySelectorAll(".ask-row")];
+  assert.ok(shown.length > 0, "the answer renders a table of matching projects");
+  for (const row of shown) {
+    const name = row.querySelector("td").textContent;
+    assert.ok(gamingNames.includes(name), `${name} is outside this viewer's scope`);
+  }
+
+  // The transcript is stored for this user, so a refresh keeps it.
+  assert.equal(browser.sessionStorage.length, 1, "the transcript is kept in sessionStorage");
+  assert.match(browser.sessionStorage.key(0), /^dn-dc-ask:/);
+  assert.match(browser.sessionStorage.getItem(browser.sessionStorage.key(0)), /slipped more than 30 days/);
+
+  // Signing out must leave nothing behind: not the rendered transcript, and not
+  // the stored one. A site office shares a browser.
+  await browser.fire("logoutBtn", "click").results;
+  await browser.settle();
+  assert.equal(browser.byId("workspace").hidden, true, "the workspace is hidden after sign-out");
+  assert.equal(browser.byId("askThread").textContent, "",
+    "the rendered transcript is cleared on sign-out");
+  assert.equal(browser.sessionStorage.length, 0,
+    "and the stored transcript is removed, not left for the next person");
+
+  console.log("Ask the Tracker UI: pane, question, filters, scoped rows and sign-out clearing covered.");
+}
+
 console.log("Smoke test passed: source data, KPIs, development workflow, history, formulas, export, secure roles, directory, and PDF guide.");
