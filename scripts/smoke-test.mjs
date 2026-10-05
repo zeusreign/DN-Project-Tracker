@@ -2127,15 +2127,24 @@ for (const [parent, child] of [
     recordingPlanner({ minAmount: 1, amountField: "approved_budget", limit: 50 }))).json();
   assert.ok(realTotal.total > 0, "the fixture has projects with a budget");
 
+  // A search that merely restates a filter the plan already carries is dropped
+  // silently: nothing was lost, so announcing it reads as a degraded answer when
+  // the answer is complete.
   const withJunkSearch = await (await askWithContext("which have a budget over 1?",
     recordingPlanner({ search: "budget over 1", minAmount: 1, amountField: "approved_budget", limit: 50 }))).json();
   assert.equal(withJunkSearch.total, realTotal.total,
-    "the unmatched search is dropped rather than emptying the result");
-  // The correction is shown to the reader; the filter list is not displayed at
-  // all any more, so the notice is where this has to appear.
-  assert.match((withJunkSearch.notices || []).join(" "), /No project matched .budget over 1./,
-    "and the user is told it was dropped, rather than it happening silently");
+    "the restated search is dropped rather than emptying the result");
+  assert.deepEqual(withJunkSearch.notices, [],
+    "and silently, because the condition it restated is still applied");
   assert.ok(!("search" in withJunkSearch.plan), "the plan reported back no longer claims it");
+
+  // A real term that matches nothing is NOT dropped. Widening here would return
+  // every project in the unit as though each one mentioned it.
+  const genuineTerm = await (await askWithContext("Gaming projects mentioning asbestos",
+    recordingPlanner({ search: "asbestos", unit: "Gaming", status: "Active", limit: 50 }))).json();
+  assert.equal(genuineTerm.total, 0,
+    "an unmatched search term that is not a restatement leaves the answer empty");
+  assert.deepEqual(genuineTerm.notices, [], "and nothing is widened behind the reader's back");
 
   // A search that genuinely matches is left alone.
   // Must be Active, or the search and the status filter legitimately match

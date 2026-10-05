@@ -22,6 +22,41 @@ function refusalMessage(problems, units) {
   return `I could not run that query.\n${joined}`;
 }
 
+// Is this search term the question restated, rather than something to look for?
+//
+// It matters because dropping the two is not equally safe. "Over 100K budget"
+// alongside minAmount 100000 says nothing the plan has not already said, so
+// dropping it loses nothing. "Asbestos" alongside unit Gaming is a real
+// condition: dropping that and returning every Gaming project would answer a
+// question nobody asked, so the search stays and the answer is honestly empty.
+//
+// The signal is correspondence: a number in the text that a numeric field
+// already carries, or text made only of words naming the plan's own concepts.
+const PLAN_WORDS = new Set([
+  "project", "projects", "budget", "budgets", "risk", "risks", "high", "medium",
+  "low", "rated", "schedule", "cost", "costs", "over", "under", "above", "below",
+  "more", "less", "than", "at", "least", "most", "day", "days", "week", "weeks",
+  "month", "months", "slipped", "slip", "delayed", "late", "variance", "overrun",
+  "approved", "forecast", "anticipated", "final", "and", "or", "the", "with",
+  "of", "in", "is", "are", "k", "m", "usd", "dollars",
+]);
+
+function restatesThePlan(plan) {
+  const text = String(plan.search).toLowerCase();
+  const numbers = [plan.minAmount, plan.minVariance, plan.minDelayDays]
+    .filter((value) => typeof value === "number");
+  for (const value of numbers) {
+    const written = [
+      String(value),
+      value >= 1000 ? `${value / 1000}k` : null,
+      value >= 1000000 ? `${value / 1000000}m` : null,
+    ].filter(Boolean);
+    if (written.some((form) => text.includes(form))) return true;
+  }
+  const words = text.split(/[^a-z0-9]+/).filter(Boolean);
+  return words.length > 0 && words.every((word) => PLAN_WORDS.has(word) || /^\d+$/.test(word));
+}
+
 export async function assistantApi(request, env, user, role, scope, helpers) {
   const { json, error } = helpers, url = new URL(request.url);
   if (!url.pathname.startsWith("/api/assistant/")) return null;
@@ -226,12 +261,14 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     // though it answered this question. That is worse than finding nothing.
     const otherFilters = Object.keys(plan).filter((key) => key !== "search" && key !== "limit"
       && key !== "sort" && key !== "unit" && key !== "ids");
-    if (result.total === 0 && plan.search && otherFilters.length) {
+    if (result.total === 0 && plan.search && otherFilters.length && restatesThePlan(plan)) {
       const widened = { ...plan };
       delete widened.search;
       const retry = await runPlan(env.DB, widened, scope);
       if (retry.total > 0) {
-        notices.push(`No project matched “${plan.search}”, so that part was ignored.`);
+        // No notice: nothing was lost. The dropped text restated a filter that
+        // is still applied, so saying it was ignored reads as a degraded answer
+        // when the answer is complete.
         result = retry;
         plan.search = undefined;
         delete plan.search;
