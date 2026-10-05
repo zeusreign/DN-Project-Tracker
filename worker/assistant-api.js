@@ -221,6 +221,15 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     // back with ids [1, 2], which are real projects and the wrong ones. Scope
     // still applied, so nothing leaked, but the answer would have been a
     // confident list of two unrelated projects.
+    // A follow-up is narrowed by the server, not by the model copying ids back.
+    // Asked "which of these have a budget over 2M", the model declared the
+    // follow-up but left the ids out, so the question was answered across the
+    // whole portfolio: 14 projects where 8 of the previous 11 qualified. The ids
+    // are ours already; the model only has to say that the question follows on.
+    if (outcome.followUp && context && context.ids && context.ids.length && !plan.ids) {
+      plan.ids = context.ids;
+    }
+
     if (plan.ids) {
       const allowed = new Set((context && context.ids) || []);
       const kept = plan.ids.filter((id) => allowed.has(id));

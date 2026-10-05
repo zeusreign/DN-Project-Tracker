@@ -2094,6 +2094,23 @@ for (const [parent, child] of [
   }
   assert.ok(narrowed.total <= firstAnswer.total, "a narrowed answer cannot grow");
 
+  // A follow-up the model declares but does not copy ids into is still narrowed.
+  // This is how "which of these have a budget over 2M" came back answering the
+  // whole portfolio: the declaration was right, the transcription was missing,
+  // and nothing put the ids back.
+  const declaredOnly = await (await askWithContext(
+    "which of these have a budget over 2M?",
+    recordingPlanner({ minAmount: 2000000, amountField: "approved_budget", limit: 50 }, true),
+    { ids: firstIds, total: firstAnswer.total, description: firstAnswer.description },
+  )).json();
+  for (const row of declaredOnly.rows) {
+    assert.ok(firstIds.includes(row.id),
+      `${row.name} was not in the previous answer, so the follow-up was not narrowed`);
+  }
+  assert.ok(declaredOnly.total <= firstAnswer.total);
+  assert.match(declaredOnly.summary, /from the previous answer/,
+    "and the sentence says the previous answer was used");
+
   // Context is untrusted input and can only ever narrow: ids outside the
   // caller's scope reach nothing, because runPlan applies the scope regardless.
   const outsideId = database.prepare(`

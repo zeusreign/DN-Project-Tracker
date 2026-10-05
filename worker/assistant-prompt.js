@@ -181,7 +181,7 @@ export function contextNote(context) {
   if (context.total && context.total > ids.length) {
     lines.push(`Only the first ${ids.length} are listed, so a follow-up about "these" covers those.`);
   }
-  lines.push('If this question refers back to them, set ids to exactly that list.');
+  lines.push('If this question refers back to them, set followUp true. You do not need to copy the ids: they are applied for you. Copy them only if the question narrows to some of them rather than all.');
   return lines.join("\n");
 }
 
