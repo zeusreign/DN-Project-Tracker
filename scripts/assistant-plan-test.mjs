@@ -17,7 +17,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   validatePlan, describePlan, planSchemaPrompt, planQueries, runPlan, availableUnits,
-  PLAN_FIELDS, PLAN_LIMIT_MAX,
+  summarisePlan, PLAN_FIELDS, PLAN_LIMIT_MAX,
 } from "../worker/assistant-plan.js";
 import { restatesThePlan } from "../worker/assistant-api.js";
 
@@ -327,6 +327,25 @@ await check("minVariance filters by the size of the overrun", async () => {
   assert.deepEqual(names(await runPlan(db, { minVariance: 400 }, ALL)),
     ["Gaming Over Budget", "Patina Delayed"]);
   assert.deepEqual(names(await runPlan(db, { minVariance: 501 }, ALL)), []);
+});
+
+await check("under budget is the other direction, not the absence of over budget", async () => {
+  // Fixture variances: project 1 = +500, project 3 = +400, project 2 = -200.
+  // A project with no budget figures is unknown, not under budget.
+  assert.deepEqual(names(await runPlan(db, { underBudget: true }, ALL)), ["Gaming On Time"]);
+  assert.deepEqual(names(await runPlan(db, { maxVariance: -100 }, ALL)), ["Gaming On Time"]);
+  assert.deepEqual(names(await runPlan(db, { maxVariance: -500 }, ALL)), []);
+  assert.deepEqual(names(await runPlan(db, { maxVariance: 450 }, ALL)),
+    ["Gaming On Time", "Patina Delayed"], "a positive bound means within that much of budget");
+  assert.ok(!names(await runPlan(db, { underBudget: true }, ALL)).includes("Gaming Complete"),
+    "a project with no budget figures is unknown, not under budget");
+});
+
+await check("the sentence says which direction it looked", () => {
+  assert.match(summarisePlan(validatePlan({ underBudget: true }).plan, 7), /under budget/);
+  assert.match(summarisePlan(validatePlan({ maxVariance: -50000 }).plan, 7), /under budget by \$50,000 or more/);
+  assert.match(summarisePlan(validatePlan({ maxVariance: 10000 }).plan, 7), /within \$10,000 of the approved budget/);
+  assert.match(summarisePlan(validatePlan({ overBudget: true }).plan, 7), /over budget/);
 });
 
 await check("minVariance is the overrun, minAmount is the budget's size", async () => {

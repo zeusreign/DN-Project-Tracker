@@ -125,6 +125,17 @@ export const PLAN_FIELDS = {
     type: "number",
     describe: "Only projects at least this many dollars over the approved budget (anticipated final cost minus approved budget). Use this whenever the question names an overrun amount, such as \"more than $50k over budget\" (50000). Not the same as minAmount, which is the size of the budget itself.",
   },
+  // The other direction. Without these, "which projects are under budget" had no
+  // field to land in and was declined, which is honest but unhelpful for a
+  // question the data answers perfectly well.
+  underBudget: {
+    type: "boolean",
+    describe: "Only projects whose anticipated final cost is below the approved budget. Use maxVariance instead when the question names an amount.",
+  },
+  maxVariance: {
+    type: "number",
+    describe: "Only projects whose variance is at most this. Negative numbers mean under budget: \"more than $50k under budget\" is -50000, and \"within $10k of budget\" is 10000.",
+  },
   minAmount: {
     type: "number", min: 0,
     describe: "Lower bound on the amount named by amountField.",
@@ -278,6 +289,8 @@ export function describePlan(plan = {}) {
       : `Turnover moved no more than ${Math.abs(plan.minDelayDays)} days earlier`);
   }
   if (plan.overBudget) parts.push("Forecast above approved budget");
+  if (plan.underBudget) parts.push("Forecast below approved budget");
+  if (plan.maxVariance !== undefined) parts.push(`Variance at most ${plan.maxVariance}`);
   if (plan.minVariance !== undefined) parts.push(`Over budget by ${plan.minVariance} or more`);
   if (plan.minAmount !== undefined) {
     parts.push(`${plan.amountField === "approved_budget" ? "Approved budget" : "Forecast"} above ${plan.minAmount}`);
@@ -339,6 +352,12 @@ export function summarisePlan(plan = {}, total = 0) {
 
   if (plan.minVariance !== undefined) clauses.push(`over budget by ${MONEY(plan.minVariance)} or more`);
   else if (plan.overBudget) clauses.push("forecast to finish over budget");
+
+  if (plan.maxVariance !== undefined) {
+    clauses.push(plan.maxVariance < 0
+      ? `under budget by ${MONEY(Math.abs(plan.maxVariance))} or more`
+      : `within ${MONEY(plan.maxVariance)} of the approved budget`);
+  } else if (plan.underBudget) clauses.push("forecast to finish under budget");
 
   if (plan.minAmount !== undefined) {
     const which = plan.amountField === "approved_budget" ? "an approved budget" : "a forecast cost";
@@ -449,6 +468,11 @@ function planWhere(plan, scope) {
   if (plan.minVariance !== undefined) {
     clauses.push(`(${FORECAST_VARIANCE_SQL}) IS NOT NULL AND (${FORECAST_VARIANCE_SQL}) >= ?`);
     bindings.push(plan.minVariance);
+  }
+  if (plan.underBudget) clauses.push(`(${FORECAST_VARIANCE_SQL}) < 0`);
+  if (plan.maxVariance !== undefined) {
+    clauses.push(`(${FORECAST_VARIANCE_SQL}) IS NOT NULL AND (${FORECAST_VARIANCE_SQL}) <= ?`);
+    bindings.push(plan.maxVariance);
   }
   if (plan.minAmount !== undefined) {
     const column = plan.amountField === "approved_budget" ? "p.approved_budget" : "p.anticipated_final_cost";

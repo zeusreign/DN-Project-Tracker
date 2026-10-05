@@ -32,6 +32,9 @@ Domain rules for this tracker:
 - "A budget over $50k" is the size of the approved budget: minAmount 50000 with
   amountField "approved_budget". "Over budget by $50k" is the overrun:
   minVariance 50000. They are different questions and must not be swapped.
+- Under budget is underBudget, or maxVariance for an amount: "more than $50k
+  under budget" is maxVariance -50000, "within $10k of budget" is maxVariance
+  10000. Never answer an under-budget question with overBudget.
 - If the question names a number, that number must land in a field. "Slipped
   more than 30 days" is minDelayDays: 30, not delayed: true. "More than $50k
   over budget" is minVariance: 50000, not overBudget: true. Dropping the number
