@@ -19,7 +19,7 @@ import {
   validatePlan, describePlan, planSchemaPrompt, planQueries, runPlan, availableUnits,
   summarisePlan, PLAN_FIELDS, PLAN_LIMIT_MAX,
 } from "../worker/assistant-plan.js";
-import { restatesThePlan, refersBack } from "../worker/assistant-api.js";
+import { restatesThePlan, refersBack, formatSql, whereOf } from "../worker/assistant-api.js";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -225,6 +225,33 @@ await check("a search made only of question words is recognised", () => {
   ]) {
     assert.equal(restatesThePlan({ search: text }), true, `${text} names no record`);
   }
+});
+
+await check("the developer's SQL is laid out so it can be read", () => {
+  const { rows } = planQueries({ minVariance: 50000, unit: "Gaming", limit: 20 }, ["Gaming"]);
+  const pretty = formatSql(rows.sql);
+
+  // One clause per line, so the statement is scannable rather than a wall.
+  for (const keyword of ["FROM projects p", "JOIN business_units b", "WHERE ", "ORDER BY ", "LIMIT "]) {
+    assert.ok(pretty.split("\n").some((line) => line.trim().startsWith(keyword.trim())),
+      `${keyword} starts its own line`);
+  }
+
+  // Depth matters: the ANDs inside a CASE belong to that expression and must
+  // not be broken out as if they were conditions of their own.
+  const andLines = pretty.split("\n").filter((line) => line.trim().startsWith("AND "));
+  assert.ok(andLines.length >= 2, "real conditions are broken out");
+  assert.ok(andLines.every((line) => !line.trim().startsWith("AND p.anticipated_final_cost IS NOT NULL")),
+    "an AND inside a CASE stays inside it");
+
+  // Nothing is lost in the formatting: it is the same statement, respaced.
+  assert.equal(pretty.replace(/\s+/g, " ").trim(), rows.sql.replace(/\s+/g, " ").trim());
+
+  const where = whereOf(rows.sql);
+  assert.match(where, /archived_at IS NULL/);
+  assert.match(where, /b\.name IN/, "the scope is visible in the conditions");
+  assert.ok(!/^WHERE/i.test(where), "the keyword is the label, not part of the value");
+  assert.ok(!/ORDER BY/i.test(where), "and the ordering is not dragged in with it");
 });
 
 await check("a follow-up has to be worded as one, not only declared", () => {

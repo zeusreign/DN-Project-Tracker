@@ -895,8 +895,11 @@ function askDebugHtml(debug){
     ["Intent",debug.intent+(debug.followUp?" (follow-up)":"")+(debug.language?" · "+debug.language:"")],
     ["Plan",JSON.stringify(debug.plan)],
     ["Scope",Array.isArray(debug.scope)?debug.scope.join(", "):String(debug.scope)],
-    ["SQL",debug.sql],
+    // The conditions first, since that is the line anyone reads; the whole
+    // statement is underneath for when the rest matters.
+    ["Where",debug.where],
     ["Bindings",JSON.stringify(debug.bindings)],
+    ["SQL",debug.sql],
     ["Result",debug.total+" matched, "+debug.returned+" returned"+(debug.loosened?" · search loosened":"")],
   ];
   if(debug.usage){

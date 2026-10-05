@@ -167,7 +167,9 @@ ${ENHANCED_STYLES}
   grid-template-columns:minmax(74px,auto) 1fr;gap:4px 12px}
 .ask-debug dt{font-size:11px;color:#6e8290;text-transform:uppercase;letter-spacing:.4px}
 .ask-debug dd{margin:0;font-size:11.5px;color:#28404e;font-family:ui-monospace,SFMono-Regular,
-  Menlo,Consolas,monospace;word-break:break-word;white-space:pre-wrap}
+  Menlo,Consolas,monospace;white-space:pre;overflow-x:auto;max-height:260px;overflow-y:auto;
+  line-height:1.5;tab-size:2}
+.ask-debug dd:first-of-type{white-space:pre-wrap}
 .ask-results{margin:12px 0 0}
 .ask-result{padding:10px 0;border-bottom:1px solid #eef2f4}
 .ask-result:last-child{border-bottom:0}
