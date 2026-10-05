@@ -1042,8 +1042,24 @@ async function submitAsk(question){
         break;
       }
     }
-    var answer=await api("/api/assistant/ask",{method:"POST",
-      body:JSON.stringify(context?{question:text,context:context}:{question:text})});
+    // The questions asked so far. The transcript stays in the browser; what
+    // travels is the last few questions and what was done with them, which is
+    // what lets "I meant..." correct the previous question rather than narrow
+    // the answer it produced.
+    var history=askTurns.slice(0,-1).filter(function(prior){
+      return prior.state==="done"&&prior.answer;
+    }).slice(-6).map(function(prior){
+      return {
+        question:prior.question,
+        intent:prior.answer.intent,
+        total:typeof prior.answer.total==="number"?prior.answer.total:undefined,
+        plan:prior.answer.plan||undefined
+      };
+    });
+    var payload={question:text};
+    if(context)payload.context=context;
+    if(history.length)payload.history=history;
+    var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify(payload)});
     turn.state="done";turn.answer=answer;
   }catch(error){
     // api() throws with the worker's own message, which already explains a

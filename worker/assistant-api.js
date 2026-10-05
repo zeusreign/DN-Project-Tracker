@@ -107,13 +107,29 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       }
       : null;
 
+    // The questions asked so far, so a correction can be told from a narrowing.
+    // Untrusted, like the context: capped, string-checked, and every plan
+    // re-validated. None of it widens what the caller may see.
+    const history = Array.isArray(body.history)
+      ? body.history.slice(-6)
+        .filter((turn) => turn && typeof turn.question === "string" && turn.question.trim())
+        .map((turn) => ({
+          question: turn.question.trim().slice(0, 300),
+          intent: typeof turn.intent === "string" ? turn.intent.slice(0, 20) : undefined,
+          total: Number.isInteger(turn.total) ? turn.total : undefined,
+          plan: turn.plan && typeof turn.plan === "object" && !Array.isArray(turn.plan)
+            ? validatePlan(turn.plan).plan || undefined
+            : undefined,
+        }))
+      : [];
+
     const planner = plannerFor(env);
     if (!planner) return error("The assistant is not configured on this environment.", 503);
 
     const units = await availableUnits(env.DB, scope);
     let outcome;
     try {
-      outcome = await planner.plan(question, { units, context });
+      outcome = await planner.plan(question, { units, context, history });
     } catch (problem) {
       if (problem instanceof PlannerError) return error(problem.message, problem.status);
       throw problem;
@@ -122,7 +138,7 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     // Intents that are answered from the message alone never touch the
     // database. A refusal is a successful response, not an error: the user asked
     // something this assistant will not do, and saying so plainly is the answer.
-    if (["definition", "help", "clarify", "refuse", "off_topic"].includes(outcome.intent)) {
+    if (["definition", "help", "clarify", "refuse", "off_topic", "unsupported"].includes(outcome.intent)) {
       await recordAsk(env, user, outcome, null, scope);
       return json({
         ok: true, intent: outcome.intent, language: outcome.language,
@@ -149,11 +165,47 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     // leaking into a new question - "give projects with high budget risks" is
     // not a question about the one project just shown - so they are dropped.
     const notices = [];
+
+    // ids may only ever name records the previous answer returned. Left to the
+    // prompt the model invents them - a question with no context at all came
+    // back with ids [1, 2], which are real projects and the wrong ones. Scope
+    // still applied, so nothing leaked, but the answer would have been a
+    // confident list of two unrelated projects.
+    if (plan.ids) {
+      const allowed = new Set((context && context.ids) || []);
+      const kept = plan.ids.filter((id) => allowed.has(id));
+      if (kept.length !== plan.ids.length) {
+        if (kept.length) plan.ids = kept;
+        else delete plan.ids;
+        notices.push("Answered across every project: this question did not follow on from the previous answer.");
+      }
+    }
+
     if (plan.ids && context && context.ids && context.ids.length) {
       const fromContext = plan.ids.every((id) => context.ids.includes(id));
-      if (fromContext && (!outcome.followUp || plan.search)) {
+      // Only when the model says this is not a follow-up. An earlier version
+      // also dropped the context whenever a search term was present, which threw
+      // away the context of a genuine follow-up - "which of these are above 50k"
+      // carries a restated search the dead-search retry below is there to
+      // handle, and answering it across the whole portfolio is a different
+      // question.
+      if (fromContext && !outcome.followUp) {
         delete plan.ids;
         notices.push("Searched every project, not only the previous answer.");
+      }
+    }
+
+    // "Not high" keeps everything rated Medium, Low or Not Rated. The model
+    // keeps also setting the positive field - scheduleRisk Low beside
+    // excludeScheduleRisk High - which demands exactly Low and drops the rest.
+    // Two prompt rules did not stop it, so the contradiction is resolved here:
+    // the exclusion is what the question said, the positive is invented.
+    for (const rating of ["budget", "schedule"]) {
+      const positive = `${rating}Risk`;
+      const negative = `exclude${rating[0].toUpperCase()}${rating.slice(1)}Risk`;
+      if (plan[positive] && plan[negative] && plan[positive] !== plan[negative]) {
+        delete plan[positive];
+        notices.push(`Read “not ${plan[negative]}” as any other ${rating} rating, not only ${rating === "budget" ? "one" : "one"} in particular.`);
       }
     }
 
@@ -191,6 +243,7 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       ok: true,
       intent: outcome.intent,
       language: outcome.language,
+      followUp: outcome.followUp,
       message: outcome.message,
       total: result.total,
       returned: result.returned,

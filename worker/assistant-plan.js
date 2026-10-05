@@ -90,6 +90,25 @@ export const PLAN_FIELDS = {
     type: "enum", values: ["High", "Medium", "Low", "Not Rated"],
     describe: "Risk level to match. Defaults to High when risk is set without it.",
   },
+  // The pair above cannot say "both ratings are High", nor "this one but not
+  // that one". Asked for either, the model returned the closest thing it could
+  // express and nothing said so. These four name each rating on its own.
+  budgetRisk: {
+    type: "enum", values: ["High", "Medium", "Low", "Not Rated"],
+    describe: "Budget risk must be exactly this. Combine with scheduleRisk for \"both risks are high\".",
+  },
+  scheduleRisk: {
+    type: "enum", values: ["High", "Medium", "Low", "Not Rated"],
+    describe: "Schedule risk must be exactly this.",
+  },
+  excludeBudgetRisk: {
+    type: "enum", values: ["High", "Medium", "Low", "Not Rated"],
+    describe: "Drop projects whose budget risk is this. For \"high schedule risk but not high budget risk\".",
+  },
+  excludeScheduleRisk: {
+    type: "enum", values: ["High", "Medium", "Low", "Not Rated"],
+    describe: "Drop projects whose schedule risk is this.",
+  },
   delayed: {
     type: "boolean",
     describe: "Only projects whose current turnover date is later than the original. Use minDelayDays instead when the question names a number of days.",
@@ -248,6 +267,10 @@ export function describePlan(plan = {}) {
   if (plan.type) parts.push(plan.type);
   if (plan.excludeComplete) parts.push("Excludes complete");
   if (plan.risk) parts.push(`${plan.riskLevel || "High"} ${plan.risk === "either" ? "budget or schedule" : plan.risk} risk`);
+  if (plan.budgetRisk) parts.push(`${plan.budgetRisk} budget risk`);
+  if (plan.scheduleRisk) parts.push(`${plan.scheduleRisk} schedule risk`);
+  if (plan.excludeBudgetRisk) parts.push(`budget risk not ${plan.excludeBudgetRisk}`);
+  if (plan.excludeScheduleRisk) parts.push(`schedule risk not ${plan.excludeScheduleRisk}`);
   if (plan.delayed) parts.push("Current turnover later than original");
   if (plan.minDelayDays !== undefined) {
     parts.push(plan.minDelayDays >= 0
@@ -344,6 +367,11 @@ function planWhere(plan, scope) {
       bindings.push(level);
     }
   }
+
+  if (plan.budgetRisk) { clauses.push("p.budget_risk = ?"); bindings.push(plan.budgetRisk); }
+  if (plan.scheduleRisk) { clauses.push("p.schedule_risk = ?"); bindings.push(plan.scheduleRisk); }
+  if (plan.excludeBudgetRisk) { clauses.push("p.budget_risk <> ?"); bindings.push(plan.excludeBudgetRisk); }
+  if (plan.excludeScheduleRisk) { clauses.push("p.schedule_risk <> ?"); bindings.push(plan.excludeScheduleRisk); }
 
   if (plan.delayed) clauses.push(`(${DAY_VARIANCE_SQL}) > 0`);
   if (plan.overBudget) clauses.push(`(${FORECAST_VARIANCE_SQL}) > 0`);

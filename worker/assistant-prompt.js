@@ -10,7 +10,7 @@ import { PLAN_FIELDS, planSchemaPrompt } from "./assistant-plan.js";
 // Intents, following the Ask the Tracker pilot so its UI needs no translation.
 // Only "search" and "report" reach the database; the rest are answered from the
 // message alone.
-export const INTENTS = ["search", "report", "definition", "help", "clarify", "refuse", "off_topic"];
+export const INTENTS = ["search", "report", "definition", "help", "clarify", "refuse", "off_topic", "unsupported"];
 
 // Domain rules the model cannot infer from column names. Each one exists
 // because getting it wrong produces a confident wrong answer rather than an
@@ -62,6 +62,22 @@ How to answer:
 - If it asks what a column or term means, use intent "definition".
 - If it asks what you can do, what you know, or how to use this, use intent
   "help". That is a question about this tracker, never off_topic.
+- An empty plan is valid and means every project the reader can see. "List every
+  project", "show me everything", "what is in the portfolio" are ordinary
+  searches with no filters set - never "unsupported", which is for a condition
+  that cannot be expressed, not for the absence of one.
+- If a question asks for a condition the plan fields cannot express, use intent
+  "unsupported" and say so. Never answer with the nearest thing you can express:
+  returning a filter the question did not ask for, with no sign that it happened,
+  is worse than saying you cannot do it.
+- "Both risks are high" is budgetRisk High together with scheduleRisk High, not
+  risk "either". "High budget risk but not high schedule risk" is budgetRisk High
+  with excludeScheduleRisk High. Reach for those four fields whenever a question
+  names the two ratings separately.
+- "Not high" is the exclude field on its own. Never pair it with the positive
+  field for the same rating: scheduleRisk Low alongside excludeScheduleRisk High
+  demands the rating be exactly Low, which drops everything rated Medium or Not
+  Rated - projects the question asked to keep.
 - Add no filter the question did not ask for. "Not complete" is excludeComplete
   on its own: adding status "Active" as well drops the projects that are on
   hold, in closeout or awaiting a status, which the question asked to see.
@@ -94,6 +110,7 @@ How to answer:
 // something. Each explains why, and what the user can do instead — a dead end
 // with no explanation reads as a broken screen.
 export const INTENT_FALLBACK = {
+  unsupported: "I cannot express that as a filter over the records I hold. I can filter by business unit, status, type, either risk rating, schedule slip in days, budget size and budget overrun — ask it that way and I can answer.",
   refuse: "I can only read project information, not change it. Use the Tracker's own screens to add, edit or delete a record.",
   off_topic: "I can only answer questions about this tracker: projects, budgets, schedules, risk ratings, turnover dates, photographs and activity updates. That question is outside what I hold.",
   clarify: "I need a little more detail before I can answer that. Which project or business unit do you mean?",
@@ -123,6 +140,27 @@ export function messageFor(intent, modelMessage, units) {
 
 // What the previous answer returned, handed to the model so a follow-up can
 // narrow it. Capped at the same 50 the ids field accepts.
+// The conversation so far. Without it the model sees each question alone and
+// cannot tell a correction from a narrowing: "I meant the ones where both risks
+// are high" is a replacement for the last question, while "and of those, high
+// budget risk" builds on its answer. Both look identical when all you are given
+// is the previous answer's ids.
+export function historyNote(history) {
+  if (!Array.isArray(history) || !history.length) return "";
+  const lines = history.slice(-6).map((turn, index) => {
+    const parts = [`${index + 1}. They asked: "${String(turn.question).slice(0, 200)}"`];
+    if (turn.plan && Object.keys(turn.plan).length) parts.push(`   You planned: ${JSON.stringify(turn.plan)}`);
+    if (typeof turn.total === "number") parts.push(`   That found ${turn.total} project(s).`);
+    else if (turn.intent) parts.push(`   You answered with intent "${turn.intent}".`);
+    return parts.join("\n");
+  });
+  return [
+    "The conversation so far, oldest first:",
+    ...lines,
+    'A question beginning "I meant", "no,", "actually" or "sorry" corrects the last question: build the plan the corrected question describes and do not narrow the answer it got wrong.',
+  ].join("\n");
+}
+
 export function contextNote(context) {
   if (!context || !Array.isArray(context.ids) || !context.ids.length) return "";
   const ids = context.ids.slice(0, 50);

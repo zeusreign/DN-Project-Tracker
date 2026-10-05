@@ -7,7 +7,7 @@
 // the permission and correctness paths, and they should not need a paid call to
 // test.
 
-import { systemPrompt, planResponseSchema, compactPlan, contextNote, INTENTS } from "./assistant-prompt.js";
+import { systemPrompt, planResponseSchema, compactPlan, contextNote, historyNote, INTENTS } from "./assistant-prompt.js";
 
 export const DEFAULT_PLANNER_MODEL = "gpt-4o-mini";
 const ENDPOINT = "https://api.openai.com/v1/responses";
@@ -40,7 +40,7 @@ export function openAiPlanner({ apiKey, model = DEFAULT_PLANNER_MODEL, fetchImpl
   const call = fetchImpl || fetch;
   return {
     model,
-    async plan(question, { units, context } = {}) {
+    async plan(question, { units, context, history } = {}) {
       const response = await call(ENDPOINT, {
         method: "POST",
         headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
@@ -55,6 +55,7 @@ export function openAiPlanner({ apiKey, model = DEFAULT_PLANNER_MODEL, fetchImpl
             // The previous answer, when there was one. Sent as its own system
             // turn rather than folded into the question, so a question that
             // happens to contain id-like numbers cannot be read as context.
+            ...(historyNote(history) ? [{ role: "system", content: historyNote(history) }] : []),
             ...(contextNote(context) ? [{ role: "system", content: contextNote(context) }] : []),
             { role: "user", content: question },
           ],

@@ -165,6 +165,22 @@ const CASES = [
   { name: "what about unit", q: "what about Parks & Resorts?",
     after: "slipped 30+",
     expect: ids(`p.${LIVE} AND b.name = 'Parks & Resorts' AND ${DAYS} >= 30`) },
+
+  // --- the two ratings named separately -------------------------------------
+  // The plan could express neither of these: risk/riskLevel names one rating at
+  // one level, so "both are high" and "not high" came back as the nearest thing
+  // it could say, with nothing to show it had happened.
+  { name: "both risks high", q: "which projects have both risks high?",
+    expect: ids(`p.${LIVE} AND p.budget_risk = 'High' AND p.schedule_risk = 'High'`) },
+  { name: "risk excluding", q: "high budget risk but not high schedule risk",
+    expect: ids(`p.${LIVE} AND p.budget_risk = 'High' AND p.schedule_risk <> 'High'`) },
+
+  // --- a correction, not a narrowing ----------------------------------------
+  // "I meant" replaces the previous question. Without the conversation the model
+  // cannot tell it from "and also", and narrowed the wrong answer instead.
+  { name: "correction", q: "I meant the projects whose both risks are high",
+    after: "high budget risk",
+    expect: ids(`p.${LIVE} AND p.budget_risk = 'High' AND p.schedule_risk = 'High'`) },
 ];
 
 // --- Run ---------------------------------------------------------------------
@@ -177,11 +193,14 @@ const answers = new Map();
 // One dropped connection used to end the whole run, losing every case after it.
 // A transient network failure says nothing about whether the assistant is
 // correct, so it is retried before being reported as its own kind of result.
+const transcript = [];
 const ask = async (question, context, attempt = 1) => {
   try {
+    const payload = { question };
+    if (context) payload.context = context;
+    if (transcript.length) payload.history = transcript.slice(-6);
     const response = await worker.fetch(new Request("https://e2e.local/api/assistant/ask", {
-      method: "POST", headers,
-      body: JSON.stringify(context ? { question, context } : { question }),
+      method: "POST", headers, body: JSON.stringify(payload),
     }), env, {});
     return { status: response.status, body: await response.json().catch(() => null) };
   } catch (problem) {
@@ -208,6 +227,7 @@ for (const item of selected) {
   }
 
   const { status, body, network } = await ask(item.q, context);
+  if (body) transcript.push({ question: item.q, intent: body.intent, total: body.total, plan: body.plan });
   const problems = [];
 
   if (network) problems.push(`network: ${network}`);
