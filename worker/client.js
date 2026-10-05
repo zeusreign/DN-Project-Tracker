@@ -991,7 +991,7 @@ function openAskRecord(id){
 // /api/assistant/ask - the same endpoint typing uses, with the same session
 // cookie, the same planner and the same scope. Speaking therefore reaches
 // exactly what typing reaches, and nothing more.
-var voice={state:"off",pc:null,mic:null,channel:null,audio:null,heard:""};
+var voice={state:"off",pc:null,mic:null,channel:null,audio:null,heard:"",responding:false};
 
 var VOICE_STATUS={
   off:"Tap to start talking. Answers come from the same records as typing.",
@@ -1040,7 +1040,7 @@ function stopVoice(detail){
   if(voice.pc){try{voice.pc.close()}catch(e){}}
   if(voice.mic){voice.mic.getTracks().forEach(function(track){try{track.stop()}catch(e){}})}
   if(voice.audio){try{voice.audio.srcObject=null}catch(e){}}
-  voice.pc=null;voice.mic=null;voice.channel=null;
+  voice.pc=null;voice.mic=null;voice.channel=null;voice.responding=false;voice.heard="";
   setVoiceState("off",detail||"");
 }
 
@@ -1113,7 +1113,11 @@ function wireVoiceChannel(channel,session){
         type:"function_call_output",call_id:message.call_id,
         output:JSON.stringify(voiceToolResult(answer))
       }}));
-      channel.send(JSON.stringify({type:"response.create"}));
+      // Only ask for a response when one is not already running. Sending this
+      // unconditionally produced "Conversation already has an active response
+      // in progress", because the service often starts one itself once the tool
+      // output arrives.
+      if(!voice.responding)channel.send(JSON.stringify({type:"response.create"}));
     }
     // Event names differ between realtime API revisions, so the orb follows the
     // shape of the type rather than an exact string: anything that is audio
@@ -1128,12 +1132,22 @@ function wireVoiceChannel(channel,session){
     if(/input_audio_transcription/.test(message.type||"")&&message.transcript){
       voice.heard=String(message.transcript);
     }
+    if(message.type==="response.created")voice.responding=true;
+    if(/^response\.(done|completed|cancelled|incomplete)$/.test(message.type||""))voice.responding=false;
+
     if(message.type==="error"){
       // Say what actually went wrong. The first version swallowed the payload
       // and reported "ended unexpectedly", which told the user nothing and left
       // nothing to diagnose from.
       var reason=(message.error&&(message.error.message||message.error.code))||"";
       console.log("assistant voice error:",JSON.stringify(message));
+      // Not every error ends a call. A clash over who starts the next response
+      // means the answer is already coming, and tearing the session down for it
+      // lost a working conversation mid-sentence.
+      if(/active response|already has an active/i.test(reason)){
+        voice.responding=true;
+        return;
+      }
       stopVoice(reason?"Voice stopped: "+reason:"The voice session stopped. Start it again to carry on.");
     }
   });

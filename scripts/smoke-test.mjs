@@ -2213,6 +2213,18 @@ for (const [parent, child] of [
 
   console.log("Assistant voice session: configuration, CSRF and anonymous access covered.");
 
+
+  // A planner that fails for any other reason must say the model could not be
+  // reached, not become an unhandled 500 the browser reports as "the tracker
+  // could not complete the request" - which names the wrong thing, since the
+  // tracker is fine and the call to the model is not.
+  const upstreamDown = { async plan() { throw new TypeError("fetch failed"); } };
+  const dropped = await askWithContext("anything", upstreamDown);
+  assert.equal(dropped.status, 502, "an upstream failure is reported as one");
+  const droppedBody = await dropped.json();
+  assert.match(droppedBody.error, /could not be reached/,
+    "and carries a message, so the browser does not fall back to its generic text");
+
   console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
 }
 

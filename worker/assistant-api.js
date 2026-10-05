@@ -232,7 +232,12 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       outcome = await planner.plan(question, { units, context, history });
     } catch (problem) {
       if (problem instanceof PlannerError) return error(problem.message, problem.status);
-      throw problem;
+      // Anything else - a dropped connection to the model most often - became an
+      // unhandled 500 with no body, which the browser showed as "the tracker
+      // could not complete the request". That named the wrong thing: the tracker
+      // was fine, the call to the model was not.
+      console.log(`assistant ask failed: ${problem && problem.message}`);
+      return error("The assistant could not be reached just now. Try that again.", 502);
     }
 
     // Intents that are answered from the message alone never touch the
