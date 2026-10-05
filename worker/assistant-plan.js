@@ -92,11 +92,19 @@ export const PLAN_FIELDS = {
   },
   delayed: {
     type: "boolean",
-    describe: "Only projects whose current turnover date is later than the original.",
+    describe: "Only projects whose current turnover date is later than the original. Use minDelayDays instead when the question names a number of days.",
+  },
+  minDelayDays: {
+    type: "integer", min: -3650, max: 3650,
+    describe: "Only projects that slipped at least this many days (current turnover minus original). Use this whenever the question names a number of days, such as \"slipped more than 30 days\" (30). Negative values select projects pulled earlier.",
   },
   overBudget: {
     type: "boolean",
-    describe: "Only projects whose anticipated final cost exceeds the approved budget.",
+    describe: "Only projects whose anticipated final cost exceeds the approved budget. Use minVariance instead when the question names an amount.",
+  },
+  minVariance: {
+    type: "number",
+    describe: "Only projects at least this many dollars over the approved budget (anticipated final cost minus approved budget). Use this whenever the question names an overrun amount, such as \"more than $50k over budget\" (50000). Not the same as minAmount, which is the size of the budget itself.",
   },
   minAmount: {
     type: "number", min: 0,
@@ -111,7 +119,7 @@ export const PLAN_FIELDS = {
     describe: "Order by largest schedule slip, or largest budget overrun. Defaults to the Tracker's own report order.",
   },
   limit: {
-    type: "integer", min: 1, max: 50,
+    type: "integer", clamp: true, min: 1, max: 50,
     describe: "Maximum rows to return. Defaults to 20 and is capped at 50 regardless of what is asked for.",
   },
 };
@@ -183,9 +191,17 @@ export function validatePlan(raw, options = {}) {
         problems.push(`"${key}" must be a whole number.`); continue;
       }
       if (spec.min !== undefined && value < spec.min) { problems.push(`"${key}" must be at least ${spec.min}.`); continue; }
-      // limit is clamped rather than refused: a model asking for 500 rows is
-      // asking a reasonable question badly, and the cap is ours to enforce.
-      plan[key] = spec.max !== undefined ? Math.min(value, spec.max) : value;
+      // Only a field marked clamp may be silently capped, and only limit is:
+      // a page size is ours to enforce and is not part of the question. Capping
+      // a threshold would answer a different question from the one asked —
+      // turning "slipped more than 99999 days" into "more than 3650" — so an
+      // out-of-range threshold is refused instead.
+      if (spec.max !== undefined && value > spec.max) {
+        if (!spec.clamp) { problems.push(`"${key}" must be at most ${spec.max}.`); continue; }
+        plan[key] = spec.max;
+        continue;
+      }
+      plan[key] = value;
 
     } else if (spec.type === "intArray") {
       if (!Array.isArray(value)) { problems.push(`"${key}" must be an array.`); continue; }
@@ -233,7 +249,13 @@ export function describePlan(plan = {}) {
   if (plan.excludeComplete) parts.push("Excludes complete");
   if (plan.risk) parts.push(`${plan.riskLevel || "High"} ${plan.risk === "either" ? "budget or schedule" : plan.risk} risk`);
   if (plan.delayed) parts.push("Current turnover later than original");
+  if (plan.minDelayDays !== undefined) {
+    parts.push(plan.minDelayDays >= 0
+      ? `Slipped ${plan.minDelayDays} days or more`
+      : `Turnover moved no more than ${Math.abs(plan.minDelayDays)} days earlier`);
+  }
   if (plan.overBudget) parts.push("Forecast above approved budget");
+  if (plan.minVariance !== undefined) parts.push(`Over budget by ${plan.minVariance} or more`);
   if (plan.minAmount !== undefined) {
     parts.push(`${plan.amountField === "approved_budget" ? "Approved budget" : "Forecast"} above ${plan.minAmount}`);
   }
@@ -325,6 +347,17 @@ function planWhere(plan, scope) {
 
   if (plan.delayed) clauses.push(`(${DAY_VARIANCE_SQL}) > 0`);
   if (plan.overBudget) clauses.push(`(${FORECAST_VARIANCE_SQL}) > 0`);
+  // The numeric forms of the two booleans above. A project with no turnover
+  // dates, or no budget figures, is unknown rather than below the threshold, so
+  // the NULL case is excluded rather than compared.
+  if (plan.minDelayDays !== undefined) {
+    clauses.push(`(${DAY_VARIANCE_SQL}) IS NOT NULL AND (${DAY_VARIANCE_SQL}) >= ?`);
+    bindings.push(plan.minDelayDays);
+  }
+  if (plan.minVariance !== undefined) {
+    clauses.push(`(${FORECAST_VARIANCE_SQL}) IS NOT NULL AND (${FORECAST_VARIANCE_SQL}) >= ?`);
+    bindings.push(plan.minVariance);
+  }
   if (plan.minAmount !== undefined) {
     const column = plan.amountField === "approved_budget" ? "p.approved_budget" : "p.anticipated_final_cost";
     clauses.push(`${column} IS NOT NULL AND ${column} >= ?`);

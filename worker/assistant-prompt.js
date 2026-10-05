@@ -28,7 +28,11 @@ Domain rules for this tracker:
   number and sits in the development pipeline.
 - Risk is rated separately for budget and for schedule. "High risk" with no
   further qualification means either of them is High.
-- Amounts are in dollars with no currency symbol.`;
+- Amounts are in dollars with no currency symbol.
+- If the question names a number, that number must land in a field. "Slipped
+  more than 30 days" is minDelayDays: 30, not delayed: true. "More than $50k
+  over budget" is minVariance: 50000, not overBudget: true. Dropping the number
+  answers a broader question than the one asked, which is worse than refusing.`;
 
 const BEHAVIOUR = `
 How to answer:
@@ -47,6 +51,37 @@ How to answer:
   business unit you were not given, use intent "clarify" and say so.
 - Reply in the same language the question was asked in. The language of the
   question decides this, not any other setting.`;
+
+// Written here rather than left to the model, so a refusal always says
+// something. Each explains why, and what the user can do instead — a dead end
+// with no explanation reads as a broken screen.
+export const INTENT_FALLBACK = {
+  refuse: "I can only read project information, not change it. Use the Tracker's own screens to add, edit or delete a record.",
+  off_topic: "I can only answer questions about this tracker: projects, budgets, schedules, risk ratings, turnover dates, photographs and activity updates. That question is outside what I hold.",
+  clarify: "I need a little more detail before I can answer that. Which project or business unit do you mean?",
+  definition: "I can explain the Tracker's own columns — Days, variance, risk ratings, phases and turnover dates. Ask about one of those.",
+  help: "Ask me about projects by business unit, status, risk, budget overrun or schedule slip. For example: “which Gaming projects slipped more than 30 days?”",
+};
+
+// What a user is allowed to ask about, named explicitly so an out-of-scope
+// question gets an answer rather than an empty one. The unit list is theirs, so
+// it doubles as a statement of what they can see.
+export function scopeNote(units) {
+  if (!Array.isArray(units) || !units.length) return "";
+  return ` You can ask about ${units.length === 1 ? "the " : ""}${units.join(", ")} ${units.length === 1 ? "business unit" : "business units"}.`;
+}
+
+export function messageFor(intent, modelMessage, units) {
+  const text = typeof modelMessage === "string" && modelMessage.trim()
+    ? modelMessage.trim()
+    : INTENT_FALLBACK[intent] || null;
+  if (!text) return null;
+  // Only the two "you cannot ask that" cases get the scope note appended; on a
+  // definition or a clarification it would be noise.
+  return ["off_topic", "clarify"].includes(intent) && !modelMessage
+    ? text + scopeNote(units)
+    : text;
+}
 
 export function systemPrompt({ units } = {}) {
   return [

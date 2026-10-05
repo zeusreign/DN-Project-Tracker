@@ -265,6 +265,66 @@ await check("minAmount applies to the named column", async () => {  // Forecasts
   assert.deepEqual(names(await runPlan(db, { minAmount: 1500, amountField: "approved_budget" }, ALL)),
     ["Gaming On Time"]);});
 
+// --- Numeric thresholds ------------------------------------------------------
+// A number in the question must survive into the query. Before these fields
+// existed, "slipped more than 30 days" became delayed: true and answered a
+// broader question — in production that is 16 projects reported where 10 match.
+
+await check("minDelayDays filters by the size of the slip, not just its existence", async () => {
+  // Fixture slips: project 1 = 26 days, project 3 = 40 days, project 2 = 0.
+  assert.deepEqual(names(await runPlan(db, { delayed: true }, ALL)),
+    ["Gaming Over Budget", "Patina Delayed"]);
+  assert.deepEqual(names(await runPlan(db, { minDelayDays: 30 }, ALL)),
+    ["Patina Delayed"], "26 days must not answer a question about more than 30");
+  assert.deepEqual(names(await runPlan(db, { minDelayDays: 26 }, ALL)),
+    ["Gaming Over Budget", "Patina Delayed"], "the threshold is inclusive");
+  assert.deepEqual(names(await runPlan(db, { minDelayDays: 41 }, ALL)), []);
+});
+
+await check("a project with no turnover dates is unknown, not below the threshold", async () => {
+  // Project 4 has neither date. It must not be counted as having slipped 0 days.
+  const result = await runPlan(db, { minDelayDays: -3650 }, ALL);
+  assert.ok(!names(result).includes("Gaming Complete"));
+});
+
+await check("minVariance filters by the size of the overrun", async () => {
+  // Overruns: project 1 = +500, project 3 = +400, project 2 = -200.
+  assert.deepEqual(names(await runPlan(db, { overBudget: true }, ALL)),
+    ["Gaming Over Budget", "Patina Delayed"]);
+  assert.deepEqual(names(await runPlan(db, { minVariance: 450 }, ALL)), ["Gaming Over Budget"]);
+  assert.deepEqual(names(await runPlan(db, { minVariance: 400 }, ALL)),
+    ["Gaming Over Budget", "Patina Delayed"]);
+  assert.deepEqual(names(await runPlan(db, { minVariance: 501 }, ALL)), []);
+});
+
+await check("minVariance is the overrun, minAmount is the budget's size", async () => {
+  // Distinct fields: project 2 has the largest budget and no overrun at all.
+  assert.deepEqual(names(await runPlan(db, { minAmount: 1500, amountField: "approved_budget" }, ALL)),
+    ["Gaming On Time"]);
+  assert.ok(!names(await runPlan(db, { minVariance: 1 }, ALL)).includes("Gaming On Time"));
+});
+
+await check("thresholds stay inside the user's scope", async () => {
+  assert.deepEqual(names(await runPlan(db, { minDelayDays: 30 }, GAMING)), [],
+    "the only project past 30 days is Patina, which a Gaming viewer cannot see");
+});
+
+await check("the applied threshold is shown to the user, not hidden", () => {
+  const { plan } = validatePlan({ minDelayDays: 30, minVariance: 50000 });
+  const text = describePlan(plan).join(" · ");
+  assert.match(text, /Slipped 30 days or more/);
+  assert.match(text, /Over budget by 50000 or more/);
+  assert.match(describePlan(validatePlan({ minDelayDays: -14 }).plan).join(" "),
+    /14 days earlier/);
+});
+
+await check("the thresholds are range-checked and type-checked", () => {
+  assert.equal(validatePlan({ minDelayDays: 1.5 }).plan, null, "days are whole");
+  assert.equal(validatePlan({ minDelayDays: 99999 }).plan, null);
+  assert.equal(validatePlan({ minVariance: "50k" }).plan, null);
+  assert.equal(validatePlan({ minVariance: 50000 }).plan.minVariance, 50000);
+});
+
 // --- Result shape ------------------------------------------------------------
 
 await check("total counts the whole match, rows are capped, truncation is reported", async () => {  const result = await runPlan(db, { limit: 1 }, GAMING);

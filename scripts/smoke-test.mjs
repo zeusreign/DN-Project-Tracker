@@ -1975,6 +1975,79 @@ for (const [parent, child] of [
     assert.ok(!("rows" in entry) && !("message" in entry), "no content is stored");
   }
 
+
+  // --- Every rejection explains itself --------------------------------------
+  // A dead end with no text reads as a broken screen, so none of these may
+  // answer with a null message or a bare "invalid".
+
+  // A refusal the model gave no wording for still says why, and what to do.
+  const silentRefusal = await (await askQuestion("delete everything", stubPlanner({
+    intent: "refuse", language: "English", message: null, plan: {},
+  }))).json();
+  assert.ok(silentRefusal.message, "a refusal must never come back empty");
+  assert.match(silentRefusal.message, /only read/i);
+  assert.match(silentRefusal.message, /Tracker's own screens/);
+
+  // An out-of-scope question says what IS in scope, and names this viewer's own
+  // units rather than every unit in the database.
+  const offTopic = await (await askQuestion("what is the weather?", stubPlanner({
+    intent: "off_topic", language: "English", message: null, plan: {},
+  }), askerCookie)).json();
+  assert.ok(offTopic.message);
+  assert.match(offTopic.message, /outside what I hold/);
+  assert.match(offTopic.message, /Gaming/, "it names what the viewer can ask about");
+  const otherUnitName = database.prepare(
+    "SELECT name FROM business_units WHERE name <> 'Gaming' LIMIT 1").get().name;
+  assert.ok(!offTopic.message.includes(otherUnitName),
+    "and must not name a unit this viewer cannot see");
+
+  // A rejected plan explains each reason rather than saying only "invalid".
+  const explained = await askQuestion("anything", stubPlanner({
+    intent: "search", language: "English", message: null,
+    plan: { unit: "Gamming", table: "user_directory", limit: 2.5 },
+  }));
+  assert.equal(explained.status, 400);
+  const explainedBody = await explained.json();
+  assert.match(explainedBody.error, /could not run that query/i);
+  assert.match(explainedBody.error, /No business unit named/);
+  assert.match(explainedBody.error, /Unknown plan field "table"/);
+  assert.ok(explainedBody.error.length > 40, "the reason is a sentence, not a code");
+
+  // The same applies to the plan endpoint, not only to questions. Called
+  // directly: the /query block's helper belongs to its own scope.
+  const planRejection = await (await worker.fetch(new Request(
+    "https://tracker.example/api/assistant/query", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ plan: { table: "user_directory" } }),
+    }), env, {})).json();
+  assert.match(planRejection.error, /could not run that query/i);
+  assert.match(planRejection.error, /Unknown plan field "table"/);
+
+  // --- A number in the question survives into the answer ---------------------
+  // The defect this replaced: "slipped more than 30 days" became delayed: true
+  // and reported every delayed project as the answer.
+  const slipped = database.prepare(`
+    SELECT
+      SUM(CASE WHEN d > 0 THEN 1 ELSE 0 END) AS any_slip,
+      SUM(CASE WHEN d > 30 THEN 1 ELSE 0 END) AS over_thirty
+    FROM (
+      SELECT CAST(julianday(current_turnover_date) - julianday(original_turnover_date) AS INTEGER) AS d
+      FROM projects
+      WHERE archived_at IS NULL AND original_turnover_date IS NOT NULL
+        AND current_turnover_date IS NOT NULL)`).get();
+  assert.ok(slipped.over_thirty < slipped.any_slip,
+    "the fixture needs projects that slipped by less than the threshold");
+
+  const thresholded = await (await askQuestion("which projects slipped more than 30 days?", stubPlanner({
+    intent: "search", language: "English", message: null,
+    plan: { minDelayDays: 31, limit: 50 },
+  }))).json();
+  assert.equal(thresholded.total, slipped.over_thirty,
+    "the threshold is applied, not dropped");
+  assert.ok(thresholded.total < slipped.any_slip);
+  assert.match(thresholded.description.join(" "), /Slipped 31 days or more/,
+    "and the applied threshold is shown back to the user");
+
   console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
 }
 

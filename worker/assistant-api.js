@@ -7,11 +7,20 @@
 
 import { validatePlan, runPlan, describePlan, planSchemaPrompt, availableUnits, PLAN_LIMIT_MAX } from "./assistant-plan.js";
 import { plannerFor, PlannerError } from "./assistant-model.js";
+import { messageFor, scopeNote } from "./assistant-prompt.js";
 
 // A refused plan is reported with its reasons so the model can correct itself on
 // the next turn, rather than being silently coerced into something that would
 // answer a different question from the one asked.
-const REFUSED = "That request could not be turned into a valid query.";
+// A rejection names what was wrong and what is available instead. The reasons
+// come from validatePlan(), which already explains each one; this joins them
+// into something a person can act on rather than a bare "invalid".
+function refusalMessage(problems, units) {
+  const reasons = (problems || []).filter(Boolean);
+  if (!reasons.length) return "I could not turn that into a query I am allowed to run." + scopeNote(units);
+  const joined = reasons.length === 1 ? reasons[0] : reasons.map((r) => `• ${r}`).join("\n");
+  return `I could not run that query.\n${joined}`;
+}
 
 export async function assistantApi(request, env, user, role, scope, helpers) {
   const { json, error } = helpers, url = new URL(request.url);
@@ -34,7 +43,9 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     // which other units exist.
     const units = await availableUnits(env.DB, scope);
     const { plan, problems } = validatePlan(body.plan, { units });
-    if (!plan) return json({ ok: false, error: REFUSED, problems }, 400);
+    if (!plan) {
+      return json({ ok: false, error: refusalMessage(problems, units), problems }, 400);
+    }
 
     const result = await runPlan(env.DB, plan, scope);
 
@@ -94,7 +105,10 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       await recordAsk(env, user, outcome, null, scope);
       return json({
         ok: true, intent: outcome.intent, language: outcome.language,
-        message: outcome.message, rows: [], sources: [], total: 0,
+        // Never null: a refusal or an out-of-scope question must say why, and
+        // say what can be asked instead.
+        message: messageFor(outcome.intent, outcome.message, units),
+        rows: [], sources: [], total: 0,
       });
     }
 
@@ -105,7 +119,7 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       await recordAsk(env, user, outcome, null, scope);
       return json({
         ok: false, intent: outcome.intent, language: outcome.language,
-        error: REFUSED, problems,
+        error: refusalMessage(problems, units), problems,
       }, 400);
     }
 
