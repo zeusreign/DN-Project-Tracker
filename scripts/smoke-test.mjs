@@ -2225,6 +2225,23 @@ for (const [parent, child] of [
   assert.match(droppedBody.error, /could not be reached/,
     "and carries a message, so the browser does not fall back to its generic text");
 
+
+  // A status the question never mentioned, sitting beside "not complete", is the
+  // invented half: it drops the projects on hold or in closeout that the
+  // question asked to see. A status the question did name stays.
+  const notComplete = await (await askWithContext("every project that is not complete",
+    recordingPlanner({ excludeComplete: true, status: "Active", limit: 50 }))).json();
+  const reallyNotComplete = database.prepare(
+    "SELECT COUNT(*) AS n FROM projects WHERE archived_at IS NULL AND status <> 'Complete'").get().n;
+  assert.equal(notComplete.total, reallyNotComplete,
+    "the invented status is dropped, so on hold and closeout are still counted");
+  assert.ok(!("status" in notComplete.plan));
+
+  const namedStatus = await (await askWithContext("active projects that are not complete",
+    recordingPlanner({ excludeComplete: true, status: "Active", limit: 50 }))).json();
+  assert.equal(namedStatus.plan.status, "Active",
+    "a status the question actually named is kept");
+
   console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
 }
 

@@ -325,6 +325,17 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     // search now finds noise rather than nothing - "budget over 1" matches any
     // project whose update mentions a budget - and a wrongly narrowed answer
     // never reaches the zero that a rescue waits for.
+    // "Every project that is not complete" came back with excludeComplete and
+    // status Active together, which answers a narrower question: it drops the
+    // ones on hold, in closeout or awaiting a status, all of which the question
+    // asked to see. The two are redundant in any case - a status already decides
+    // completeness - and when the status word appears nowhere in the question,
+    // it is the invented half.
+    if (plan.excludeComplete && plan.status
+      && !question.toLowerCase().includes(plan.status.toLowerCase())) {
+      delete plan.status;
+    }
+
     const realFilters = Object.keys(plan).filter((key) => key !== "search" && key !== "limit"
       && key !== "sort" && key !== "unit" && key !== "ids"
       && key !== "includeUpdates" && key !== "includePhotos");
