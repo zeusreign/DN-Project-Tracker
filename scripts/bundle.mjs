@@ -31,6 +31,8 @@ const [enhanced, enhancedStyles, projectImages] = await Promise.all(["enhanced.j
 
 const workflows = await readFile(resolve(workerRoot, "enhanced-workflows.js"), "utf8");
 const enhancedApi = await readFile(resolve(workerRoot, "enhanced-api.js"), "utf8");
+const assistantPlan = await readFile(resolve(workerRoot, "assistant-plan.js"), "utf8");
+const assistantApi = await readFile(resolve(workerRoot, "assistant-api.js"), "utf8");
 const photoModule = await readFile(resolve(workerRoot, "enhanced-photos.js"), "utf8");
 const photoDrop = await readFile(resolve(workerRoot, "enhanced-drop.js"), "utf8");
 const bundled = [
@@ -38,6 +40,8 @@ const bundled = [
   photoModule.replace("export const PHOTO_MODULE", "const PHOTO_MODULE"),
   workflows.replace("export const ENHANCED_WORKFLOWS", "const ENHANCED_WORKFLOWS"),
   enhancedApi.replace(/^export /gm, ""),
+  assistantPlan.replace(/^export /gm, ""),
+  assistantApi.replace(/^import .*;\n/gm, "").replace(/^export .*from.*;\n/gm, "").replace(/^export /gm, ""),
   projectImages.replace("export const PROJECT_IMAGES", "const PROJECT_IMAGES"),
   enhanced.replace(/^import .*;\n/gm, "").replace("export const ENHANCED_CLIENT", "const ENHANCED_CLIENT"),
   enhancedStyles.replace("export const ENHANCED_STYLES", "const ENHANCED_STYLES"),

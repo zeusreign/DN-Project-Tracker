@@ -1,4 +1,5 @@
 import { enhancedApi, editDeadline } from "./enhanced-api.js";
+import { assistantApi } from "./assistant-api.js";
 import { PAGE } from "./page.js";
 import { SEED_PROJECTS } from "./seed.js";
 import { OG_IMAGE_BASE64 } from "./social.js";
@@ -1228,6 +1229,8 @@ async function handleApi(request, env, url) {
   }
   const enhancedResponse = await enhancedApi(request, env, user, role, scope, {json,error,projectInScope,canWrite});
   if(enhancedResponse) return enhancedResponse;
+  const assistantResponse = await assistantApi(request, env, user, role, scope, {json,error});
+  if (assistantResponse) return assistantResponse;
   const historyMatch = url.pathname.match(/^\/api\/projects\/(\d+)\/history$/);
   if (request.method === "GET" && historyMatch) {
     const projectId = Number(historyMatch[1]);

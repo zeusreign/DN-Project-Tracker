@@ -1689,4 +1689,130 @@ for (const [parent, child] of [
   console.log("QA regressions: DNC-007 and DNC-008 covered through the served page.");
 }
 
+
+// --- Assistant query endpoint ------------------------------------------------
+// The plan module is unit-tested in scripts/assistant-plan-test.mjs. What this
+// block proves is the part only the real worker can prove: that the endpoint
+// inherits the authentication, CSRF and business-unit gates of every other
+// route, and that a scoped user cannot reach another unit's records through it.
+{
+  const gamingOnly = database.prepare(`
+    SELECT COUNT(*) AS n FROM projects p JOIN business_units b ON b.id = p.business_unit_id
+    WHERE p.archived_at IS NULL AND b.name = 'Gaming'`).get().n;
+  const everything = database.prepare(
+    "SELECT COUNT(*) AS n FROM projects WHERE archived_at IS NULL").get().n;
+  assert.ok(gamingOnly > 0 && everything > gamingOnly, "the fixture needs a unit to exclude");
+
+  const ask = (plan, extra = {}) => call("/api/assistant/query", {
+    method: "POST", headers: { "content-type": "application/json", ...extra },
+    body: JSON.stringify({ plan }),
+  });
+
+  // Anonymous callers are refused before any plan is parsed. A bare fetch,
+  // because call() always supplies the platform identity headers.
+  const anonymous = await worker.fetch(new Request("https://tracker.example/api/assistant/query", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan: {} }),
+  }), { DB, BUCKET, ADMIN_EMAILS: "owner@example.com", ALLOW_PLATFORM_AUTH: "false" }, {});
+  assert.equal(anonymous.status, 401, "the assistant must not answer an unauthenticated caller");
+
+  // Unrestricted access sees the whole portfolio, and the count is the real
+  // total rather than the length of the returned page.
+  const wide = await (await ask({ limit: 5 })).json();
+  assert.equal(wide.ok, true);
+  assert.equal(wide.total, everything, "total is COUNT(*) over the scoped query");
+  assert.equal(wide.returned, 5);
+  assert.equal(wide.truncated, true);
+  assert.equal(wide.rows.length, 5);
+  assert.equal(wide.sources.length, 5, "every answer carries its source records");
+
+  // A plan the validator rejects is refused with its reasons, not coerced.
+  const refused = await ask({ table: "user_directory" });
+  assert.equal(refused.status, 400);
+  const refusedBody = await refused.json();
+  assert.equal(refusedBody.ok, false);
+  assert.match(refusedBody.problems.join(" "), /Unknown plan field "table"/);
+
+  // The cap is the server's to enforce, whatever the model asks for.
+  const greedy = await (await ask({ limit: 5000 })).json();
+  assert.ok(greedy.returned <= 50, "limit is clamped server-side");
+  assert.equal(greedy.plan.limit, 50);
+
+  // No response may carry a column the assistant is not allowed to see.
+  for (const row of wide.rows) {
+    for (const column of ["password_hash", "password_salt", "token_hash", "csrf_token",
+      "object_key", "author_email", "source_key", "source_sheet", "business_unit_id"]) {
+      assert.ok(!(column in row), `${column} must not reach the assistant`);
+    }
+  }
+
+  // The published vocabulary gives nothing away either.
+  const schema = await (await call("/api/assistant/schema")).json();
+  for (const leak of ["password", "token", "object_key", "user_directory", "login_sessions"]) {
+    assert.ok(!schema.schema.includes(leak), `${leak} must not appear in the plan schema`);
+  }
+
+  // A Gaming-scoped viewer, signed in for real, against the same endpoint.
+  const assistantViewerPassword = "Kk2!" + crypto.randomUUID();
+  const viewerId = (await (await call("/api/admin/users", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      first_name: "Assistant", last_name: "Scoped",
+      username: "assistant-scoped@example.invalid", user_email: "assistant-scoped@example.invalid",
+      role: "viewer", business_unit_scope: "Gaming", account_status: "active",
+      site_access_status: "authorized",
+      temporary_password: assistantViewerPassword, confirm_password: assistantViewerPassword,
+    }),
+  })).json()).id;
+  database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE id = ?").run(viewerId);
+
+  const viewerCookie = await loginAs("assistant-scoped@example.invalid", assistantViewerPassword);
+  const viewerCsrf = await csrfFor(viewerCookie);
+  const askAsViewer = (plan) => worker.fetch(new Request("https://tracker.example/api/assistant/query", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: viewerCookie, "x-csrf-token": viewerCsrf },
+    body: JSON.stringify({ plan }),
+  }), env, {});
+
+  const scoped = await (await askAsViewer({ limit: 50 })).json();
+  assert.equal(scoped.total, gamingOnly, "a scoped viewer sees only their own unit");
+  assert.ok(scoped.rows.every((row) => row.business_unit === "Gaming"));
+
+  // The obvious escape attempts, through the two fields that look like they
+  // might allow one.
+  const outside = database.prepare(`
+    SELECT p.id FROM projects p JOIN business_units b ON b.id = p.business_unit_id
+    WHERE p.archived_at IS NULL AND b.name <> 'Gaming' LIMIT 1`).get().id;
+  const byId = await (await askAsViewer({ ids: [outside] })).json();
+  assert.equal(byId.total, 0, "an explicit id cannot reach outside the viewer's scope");
+  assert.equal(byId.rows.length, 0);
+
+  const otherUnit = database.prepare(
+    "SELECT name FROM business_units WHERE name <> 'Gaming' LIMIT 1").get().name;
+  const byUnit = await (await askAsViewer({ unit: otherUnit })).json();
+  assert.equal(byUnit.total, 0, "unit narrows within scope; it never replaces it");
+
+  // A local session still has to present its CSRF token, like every other write.
+  const noCsrf = await worker.fetch(new Request("https://tracker.example/api/assistant/query", {
+    method: "POST", headers: { "content-type": "application/json", cookie: viewerCookie },
+    body: JSON.stringify({ plan: {} }),
+  }), env, {});
+  assert.equal(noCsrf.status, 403, "the assistant is not exempt from CSRF");
+
+  // Every query is recorded, with the plan and the row count but never the rows.
+  const entries = database.prepare(
+    "SELECT actor_email, details FROM audit_log WHERE action = 'assistant_query' ORDER BY id").all();
+  // Five queries above were accepted and executed; the 401, the 400 refusal and
+  // the 403 never reached the database, so they correctly leave no trace.
+  assert.equal(entries.length, 5, "one audit row per executed query, and none for a refused one");
+  assert.ok(entries.some((entry) => entry.actor_email === "assistant-scoped@example.invalid"));
+  for (const entry of entries) {
+    const details = JSON.parse(entry.details);
+    assert.ok("plan" in details && "total" in details, "the plan and total are recorded");
+    assert.ok(!("rows" in details) && !("sources" in details),
+      "the audit trail records the query, never the records it read");
+  }
+
+  console.log("Assistant endpoint: auth, CSRF, scope, clamping and audit covered.");
+}
+
 console.log("Smoke test passed: source data, KPIs, development workflow, history, formulas, export, secure roles, directory, and PDF guide.");

@@ -21,8 +21,9 @@
     "workbook:apply": "node scripts/apply-workbook-import.mjs",
     "workbook:apply:test": "node scripts/apply-test.mjs",
     "validate": "node scripts/validate-artifact.mjs",
-    "test": "npm run build && npm run validate && node scripts/smoke-test.mjs",
-    "test:enhanced": "npm run build && node scripts/enhanced-workflows-test.mjs"
+    "test": "npm run build && npm run validate && node scripts/smoke-test.mjs && node scripts/assistant-plan-test.mjs",
+    "test:enhanced": "npm run build && node scripts/enhanced-workflows-test.mjs",
+    "test:assistant": "node scripts/assistant-plan-test.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.4",
