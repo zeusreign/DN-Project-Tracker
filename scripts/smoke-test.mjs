@@ -2364,14 +2364,34 @@ for (const [parent, child] of [
   // WebRTC and no microphone, which is exactly the condition a locked-down
   // browser presents, so the path that matters here is the one that says so
   // instead of failing silently.
-  assert.ok(browser.byId("askVoiceBtn"), "the pane offers a voice control");
-  assert.equal(browser.byId("askVoiceBtn").textContent, "Start voice");
+  // Quiet chat and Voice are two ways into one conversation, so the transcript
+  // survives switching between them.
+  assert.equal(browser.byId("askVoicePanel").hidden, true, "the pane opens in quiet chat");
+  const beforeSwitch = browser.byId("askThread").textContent;
+  await browser.fire("askVoiceMode", "click").results;
+  await browser.settle();
+  assert.equal(browser.byId("askVoicePanel").hidden, false, "the voice panel appears");
+  assert.equal(browser.byId("askForm").hidden, true, "and the typing composer steps aside");
+  assert.equal(browser.byId("askVoiceMode").getAttribute("aria-pressed"), "true");
+  assert.equal(browser.byId("askThread").textContent, beforeSwitch,
+    "switching mode keeps the conversation rather than starting a new one");
+
+  // The orb says what is happening without being read.
+  assert.equal(browser.byId("askOrb").getAttribute("data-state"), "idle");
+
+  // The harness has no WebRTC and no microphone, which is also what a
+  // locked-down browser looks like: it must say so and stay usable.
   await browser.fire("askVoiceBtn", "click").results;
   await browser.settle();
   assert.match(browser.text("askVoiceStatus"), /cannot open a voice session|Typing still works/,
     "a browser without WebRTC is told so, and typing is still offered");
-  assert.equal(browser.byId("askVoiceBtn").textContent, "Start voice",
-    "and the control returns to its resting state rather than staying stuck");
+  assert.equal(browser.byId("askOrb").getAttribute("data-state"), "idle",
+    "and the orb returns to rest rather than spinning for ever");
+
+  await browser.fire("askQuietMode", "click").results;
+  await browser.settle();
+  assert.equal(browser.byId("askVoicePanel").hidden, true, "quiet chat comes back");
+  assert.equal(browser.byId("askForm").hidden, false, "with the composer");
 
   // Signing out must leave nothing behind: not the rendered transcript, and not
   // the stored one. A site office shares a browser.

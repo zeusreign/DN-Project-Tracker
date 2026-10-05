@@ -181,9 +181,42 @@ ${ENHANCED_STYLES}
 .ask-send[disabled]{opacity:.55;cursor:default}
 .ask-btn{background:#fff;color:#284e63;border:1px solid #cbd9e1;padding:8px 13px;
   border-radius:6px;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
-.ask-voice-status{padding:0 20px 8px;font-size:12px;color:#586c7a;min-height:0}
-.ask-btn[data-state="connecting"]{opacity:.7}
-.ask-btn.is-live{background:#9a3e2b;border-color:#9a3e2b;color:#fff}
+.ask-modes{display:flex;gap:2px;background:#edf2f5;padding:3px;border-radius:7px;
+  margin:14px 16px 0;align-self:flex-start}
+.ask-modes button{border:0;background:transparent;color:#536d7c;padding:6px 14px;
+  border-radius:5px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.ask-modes button[aria-pressed="true"]{background:#fff;color:var(--ask-ink);
+  box-shadow:0 1px 2px rgba(10,60,80,.12)}
+
+/* The orb is the whole interface while a call is live, so its state has to be
+   readable from across a room: resting, reaching out, listening, speaking. */
+.ask-voice-panel{padding:28px 20px 22px;text-align:center;background:#f3f8fa;
+  border-bottom:1px solid var(--ask-line)}
+.ask-orb{position:relative;width:188px;height:188px;margin:0 auto;border-radius:50%}
+.ask-orb-skin{position:absolute;inset:0;border-radius:50%;
+  background:
+    radial-gradient(circle at 30% 22%, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 42%),
+    linear-gradient(142deg, #58c24a 0%, #3fbb7a 32%, #2aa9b4 62%, #2f86d8 100%);
+  box-shadow:0 20px 44px rgba(20,90,120,.3), inset 0 -16px 36px rgba(8,54,86,.3);
+  transition:transform .45s ease, filter .45s ease}
+.ask-orb[data-state="idle"] .ask-orb-skin{filter:saturate(.55) brightness(1.04)}
+.ask-orb[data-state="connecting"] .ask-orb-skin{animation:askOrbReach 1.5s ease-in-out infinite}
+.ask-orb[data-state="listening"] .ask-orb-skin{animation:askOrbBreathe 3.4s ease-in-out infinite}
+.ask-orb[data-state="speaking"] .ask-orb-skin{animation:askOrbSpeak 1.05s ease-in-out infinite}
+@keyframes askOrbBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+@keyframes askOrbReach{0%,100%{transform:scale(.96);filter:saturate(.7)}50%{transform:scale(1.02);filter:saturate(1)}}
+@keyframes askOrbSpeak{0%,100%{transform:scale(1.01)}50%{transform:scale(1.085)}}
+@media (prefers-reduced-motion:reduce){
+  .ask-orb .ask-orb-skin{animation:none!important}
+}
+.ask-orb-call{position:relative;margin:-26px auto 0;display:grid;place-items:center;
+  width:52px;height:52px;border-radius:50%;border:3px solid #f3f8fa;background:#10303f;
+  color:#fff;cursor:pointer;box-shadow:0 6px 16px rgba(10,48,63,.3)}
+.ask-orb-call svg{width:20px;height:20px;fill:currentColor}
+.ask-orb-call.is-live{background:#9a3e2b}
+.ask-orb-call.is-live svg{transform:rotate(135deg)}
+.ask-orb-call[disabled]{opacity:.6;cursor:default}
+.ask-voice-status{margin:14px auto 0;max-width:40ch;font-size:12.5px;color:#586c7a;line-height:1.5}
 #askVoiceAudio{display:none}
 .ask-suggestions{display:flex;gap:7px;flex-wrap:wrap;padding:10px 20px 12px;border-top:1px solid #f0f3f5}
 .ask-suggestion{border:1px solid #d9e4e9;background:#fff;color:#246174;border-radius:6px;

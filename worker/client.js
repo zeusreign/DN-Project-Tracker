@@ -993,17 +993,46 @@ function openAskRecord(id){
 // exactly what typing reaches, and nothing more.
 var voice={state:"off",pc:null,mic:null,channel:null,audio:null};
 
+var VOICE_STATUS={
+  off:"Tap to start talking. Answers come from the same records as typing.",
+  connecting:"Connecting…",
+  listening:"Listening. Speak when you are ready.",
+  speaking:"Answering…"
+};
+
 function setVoiceState(next,detail){
   voice.state=next;
+  var live=next==="listening"||next==="speaking";
   var button=byId("askVoiceBtn");
   if(button){
-    button.dataset.state=next;
-    button.textContent=next==="live"?"End call":next==="connecting"?"Connecting…":"Start voice";
-    button.classList.toggle("is-live",next==="live");
+    button.classList.toggle("is-live",live);
+    button.setAttribute("aria-label",live?"End voice conversation":"Start voice conversation");
+    button.disabled=next==="connecting";
   }
+  var orb=byId("askOrb");
+  // The orb carries the state: resting, reaching, listening, speaking. It is the
+  // only thing on screen during a call, so it has to say which of those it is
+  // without being read.
+  if(orb)orb.dataset.state=next==="off"?"idle":next;
   var status=byId("askVoiceStatus");
-  if(status)status.textContent=detail||(next==="live"?"Listening. Speak when ready."
-    :next==="connecting"?"Opening a voice session…":"");
+  if(status)status.textContent=detail||VOICE_STATUS[next]||VOICE_STATUS.off;
+}
+
+// Quiet chat or Voice. The transcript is the same either way: a spoken question
+// and a typed one are the same conversation, so switching does not clear it.
+function setAskMode(mode){
+  var voiceMode=mode==="voice";
+  var panel=byId("askVoicePanel");
+  if(panel)panel.hidden=!voiceMode;
+  var quietBtn=byId("askQuietMode"),voiceBtn=byId("askVoiceMode");
+  if(quietBtn)quietBtn.setAttribute("aria-pressed",String(!voiceMode));
+  if(voiceBtn)voiceBtn.setAttribute("aria-pressed",String(voiceMode));
+  var composer=byId("askForm");
+  if(composer)composer.hidden=voiceMode;
+  var suggestions=byId("askSuggestions");
+  if(suggestions)suggestions.hidden=voiceMode;
+  // Leaving voice ends the call rather than leaving it running out of sight.
+  if(!voiceMode&&voice.state!=="off")stopVoice("");
 }
 
 function stopVoice(detail){
@@ -1053,7 +1082,7 @@ function voiceToolResult(answer){
 function wireVoiceChannel(channel,session){
   channel.addEventListener("open",function(){
     channel.send(JSON.stringify({type:"session.update",session:{tools:session.tools,tool_choice:"auto"}}));
-    setVoiceState("live");
+    setVoiceState("listening");
   });
   channel.addEventListener("message",async function(event){
     var message;
@@ -1067,6 +1096,15 @@ function wireVoiceChannel(channel,session){
         output:JSON.stringify(voiceToolResult(answer))
       }}));
       channel.send(JSON.stringify({type:"response.create"}));
+    }
+    // Event names differ between realtime API revisions, so the orb follows the
+    // shape of the type rather than an exact string: anything that is audio
+    // arriving means speaking, and the end of a response means listening again.
+    if(/audio/.test(message.type||"")&&/delta|started/.test(message.type||"")){
+      if(voice.state==="listening")setVoiceState("speaking");
+    }
+    if(/^response\.(done|completed)$/.test(message.type||"")||/audio.*(done|stopped)/.test(message.type||"")){
+      if(voice.state==="speaking")setVoiceState("listening");
     }
     if(message.type==="error"){
       stopVoice("The voice session ended unexpectedly. Start it again to carry on.");
@@ -1238,6 +1276,9 @@ document.addEventListener("click",function(event){
   var chip=event.target.closest?event.target.closest(".ask-suggestion"):null;
   if(chip){submitAsk(chip.textContent);return}
   if(event.target&&event.target.id==="askClear"){askTurns=[];askSave();renderAsk()}
-  if(event.target&&event.target.id==="askVoiceBtn"){startVoice()}
+  var orbCall=event.target.closest?event.target.closest("#askVoiceBtn"):null;
+  if(orbCall){startVoice();return}
+  if(event.target&&event.target.id==="askQuietMode"){setAskMode("quiet");return}
+  if(event.target&&event.target.id==="askVoiceMode"){setAskMode("voice");return}
 });
 `;
