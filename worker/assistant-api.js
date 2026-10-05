@@ -58,7 +58,19 @@ const PLAN_WORDS = new Set([
 ]);
 
 export function restatesThePlan(plan) {
-  const text = String(plan.search).toLowerCase();
+  const text = String(plan.search).toLowerCase().trim();
+
+  // The same value already sitting in a field of its own. "What is John
+  // Kolkowski working on" came back with manager and search both set to his
+  // name: the manager filter was right, and the search looked for a person in
+  // project names and venues, which matched nothing and emptied 18 projects.
+  // A name is a real search term, so no vocabulary test can catch this - what
+  // gives it away is that the plan already says it somewhere better.
+  for (const field of ["manager", "requestor", "unit"]) {
+    const value = plan[field];
+    if (typeof value === "string" && value.trim() && value.trim().toLowerCase() === text) return true;
+  }
+
   const numbers = [plan.minAmount, plan.minVariance, plan.minDelayDays]
     .filter((value) => typeof value === "number");
   for (const value of numbers) {
@@ -71,6 +83,21 @@ export function restatesThePlan(plan) {
   }
   const words = text.split(/[^a-z0-9]+/).filter(Boolean);
   return words.length > 0 && words.every((word) => PLAN_WORDS.has(word) || /^\d+$/.test(word));
+}
+
+// Does the question actually point back at the previous answer?
+//
+// The model declares followUp, and declares it wrongly often enough to matter:
+// "give projects with high budget risks" came back as a follow-up and was
+// answered inside eleven unrelated projects, finding none of the five. A
+// question that genuinely depends on the previous answer says so in words, so
+// the declaration is only honoured when the wording agrees with it. Being wrong
+// in this direction widens the search, which for a question with a subject of
+// its own is what was asked anyway.
+const BACK_REFERENCE = /\b(these|those|them|they|their|theirs|it|its|that|this|same|ones|above|previous|earlier|instead|also|narrow|exclude|just those|of the above)\b/i;
+
+export function refersBack(question) {
+  return BACK_REFERENCE.test(String(question || ""));
 }
 
 export async function assistantApi(request, env, user, role, scope, helpers) {
@@ -248,7 +275,8 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     // follow-up but left the ids out, so the question was answered across the
     // whole portfolio: 14 projects where 8 of the previous 11 qualified. The ids
     // are ours already; the model only has to say that the question follows on.
-    if (outcome.followUp && context && context.ids && context.ids.length && !plan.ids) {
+    const followsOn = outcome.followUp && refersBack(question);
+    if (followsOn && context && context.ids && context.ids.length && !plan.ids) {
       plan.ids = context.ids;
     }
 
@@ -269,7 +297,7 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       // carries a restated search the dead-search retry below is there to
       // handle, and answering it across the whole portfolio is a different
       // question.
-      if (fromContext && !outcome.followUp) {
+      if (fromContext && !followsOn) {
         delete plan.ids;
       }
     }

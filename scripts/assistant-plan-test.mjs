@@ -19,7 +19,7 @@ import {
   validatePlan, describePlan, planSchemaPrompt, planQueries, runPlan, availableUnits,
   summarisePlan, PLAN_FIELDS, PLAN_LIMIT_MAX,
 } from "../worker/assistant-plan.js";
-import { restatesThePlan } from "../worker/assistant-api.js";
+import { restatesThePlan, refersBack } from "../worker/assistant-api.js";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -225,6 +225,34 @@ await check("a search made only of question words is recognised", () => {
   ]) {
     assert.equal(restatesThePlan({ search: text }), true, `${text} names no record`);
   }
+});
+
+await check("a follow-up has to be worded as one, not only declared", () => {
+  // The model declares followUp and gets it wrong often enough to matter: "give
+  // projects with high budget risks" came back as a follow-up and was answered
+  // inside eleven unrelated projects, finding none of the five that match.
+  for (const question of [
+    "which of these are in Gaming?", "and which of those have low budget risk?",
+    "filter out those whose schedule risk is also high", "show only the high risk ones",
+  ]) assert.equal(refersBack(question), true, question);
+
+  for (const question of [
+    "give projects with high budget risks", "Give details of Holiday Inn",
+    "what about Parks & Resorts?", "which projects slipped more than 30 days?",
+  ]) assert.equal(refersBack(question), false, question);
+});
+
+await check("a search duplicating a field of its own is recognised", () => {
+  // A person's name is a real search term, so no vocabulary test catches this.
+  // What gives it away is that the plan already says it somewhere better: the
+  // manager filter was right and the search looked for a person in project
+  // names, which matched nothing and emptied eighteen projects.
+  assert.equal(restatesThePlan({ search: "John Kolkowski", manager: "John Kolkowski" }), true);
+  assert.equal(restatesThePlan({ search: "Mina QA", requestor: "Mina QA" }), true);
+  assert.equal(restatesThePlan({ search: "Gaming", unit: "Gaming" }), true);
+  assert.equal(restatesThePlan({ search: "John Kolkowski" }), false, "on its own it is a real term");
+  assert.equal(restatesThePlan({ search: "asbestos", manager: "Tim Brown" }), false,
+    "a different value is a condition of its own");
 });
 
 await check("a real term is never mistaken for a restatement", () => {

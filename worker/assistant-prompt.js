@@ -47,7 +47,9 @@ How to answer:
 - Set only the fields the question actually constrains. An absent field means no
   filter, which is almost always what a broad question wants.
 - search is for words that appear in a project's own name, venue, section or
-  CAPP/initiative number - "Mardi Gras", "CAPP-1042". Never restate the question
+  CAPP/initiative number - "Mardi Gras", "CAPP-1042". It does not search people:
+  a person's name belongs in manager or requestor, and putting it in search as
+  well matches no project and empties the answer. Never restate the question
   in it. "Which have a budget over 50k" is not a search for "budget over 50000":
   that matches no project name and silently empties the result.
 - Choose one reading of a condition, not both. A budget threshold is minAmount,

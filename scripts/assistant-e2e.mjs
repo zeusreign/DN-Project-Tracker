@@ -193,12 +193,16 @@ const answers = new Map();
 // One dropped connection used to end the whole run, losing every case after it.
 // A transient network failure says nothing about whether the assistant is
 // correct, so it is retried before being reported as its own kind of result.
-const transcript = [];
-const ask = async (question, context, attempt = 1) => {
+// History belongs to the chain a case declares with `after`, not to the whole
+// run. A global transcript made unrelated cases depend on whatever happened to
+// precede them: an independent question arriving after several others was read
+// as following on from them, which is not what a real session looks like and
+// made failures move around between runs for no reason.
+const ask = async (question, context, history, attempt = 1) => {
   try {
     const payload = { question };
     if (context) payload.context = context;
-    if (transcript.length) payload.history = transcript.slice(-6);
+    if (history && history.length) payload.history = history;
     const response = await worker.fetch(new Request("https://e2e.local/api/assistant/ask", {
       method: "POST", headers, body: JSON.stringify(payload),
     }), env, {});
@@ -206,7 +210,7 @@ const ask = async (question, context, attempt = 1) => {
   } catch (problem) {
     if (attempt < 3) {
       await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
-      return ask(question, context, attempt + 1);
+      return ask(question, context, history, attempt + 1);
     }
     return { status: 0, body: null, network: String(problem.message || problem).split("\n")[0] };
   }
@@ -217,17 +221,18 @@ let passed = 0; const failures = [];
 
 for (const item of selected) {
   let context = null;
+  let history = null;
   if (item.after) {
     const prior = answers.get(item.after);
     if (!prior) { console.log(`SKIP ${item.name} — needs "${item.after}" to have run`); continue; }
+    history = [{ question: prior.question, intent: prior.intent, total: prior.total, plan: prior.plan }];
     context = {
       ids: prior.rows.map((row) => row.id), total: prior.total,
       description: prior.description, plan: prior.plan,
     };
   }
 
-  const { status, body, network } = await ask(item.q, context);
-  if (body) transcript.push({ question: item.q, intent: body.intent, total: body.total, plan: body.plan });
+  const { status, body, network } = await ask(item.q, context, history);
   const problems = [];
 
   if (network) problems.push(`network: ${network}`);
@@ -238,7 +243,7 @@ for (const item of selected) {
   } else if (!body.ok) {
     problems.push(`rejected: ${String(body.error).split("\n")[0]}`);
   } else {
-    answers.set(item.name, body);
+    answers.set(item.name, { ...body, question: item.q });
     // A case expecting rows that comes back as a message-only intent is a
     // misclassification, not a counting error: say which intent it chose, or the
     // failure reads as "found nothing" and sends the reader looking at the data.
