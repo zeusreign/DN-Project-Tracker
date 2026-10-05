@@ -23,7 +23,10 @@ Domain rules for this tracker:
   over budget. Never the other way round.
 - "Current", "open" and "live" exclude archived projects. Archived projects are
   never returned at all, so you do not need to filter for that.
-- Dates are plain YYYY-MM-DD text.
+- Dates are plain YYYY-MM-DD text. A month or a quarter is a range: "within
+  August" is reportingFrom 2026-08-01 with reportingTo 2026-08-31, and "due
+  before July" is turnoverTo 2026-06-30. Work out the right end of the month
+  yourself rather than declining.
 - A Capital project has a CAPP number; a Development project has an initiative
   number and sits in the development pipeline.
 - Risk is rated separately for budget and for schedule. "High risk" with no

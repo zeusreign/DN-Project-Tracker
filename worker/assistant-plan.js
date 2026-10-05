@@ -74,6 +74,30 @@ export const PLAN_FIELDS = {
     type: "enum", values: ["Active", "On Hold", "Complete", "Needs Status", "Closeout"],
     describe: "Exact project status.",
   },
+  phase: {
+    type: "string", max: 120,
+    describe: "Matched against the project's phase, such as Planning, Design, Construction / Delivery or Closeout.",
+  },
+  // The dates on the record had no filter at all, so "projects whose reporting
+  // period is within August" could only be declined. A range rather than a
+  // single value, because that is how people ask: a month, a quarter, before a
+  // deadline, since a date.
+  reportingFrom: {
+    type: "date",
+    describe: "Earliest reporting period, as YYYY-MM-DD. A month is a range: August 2026 is reportingFrom 2026-08-01 with reportingTo 2026-08-31.",
+  },
+  reportingTo: {
+    type: "date",
+    describe: "Latest reporting period, as YYYY-MM-DD.",
+  },
+  turnoverFrom: {
+    type: "date",
+    describe: "Earliest current turnover date, as YYYY-MM-DD. \"Handing over after March\" is turnoverFrom 2026-04-01.",
+  },
+  turnoverTo: {
+    type: "date",
+    describe: "Latest current turnover date, as YYYY-MM-DD. \"Due before July\" is turnoverTo 2026-06-30.",
+  },
   type: {
     type: "enum", values: ["Capital", "Development"],
     describe: "Project type.",
@@ -251,6 +275,15 @@ export function validatePlan(raw, options = {}) {
       }
       plan[key] = value;
 
+    } else if (spec.type === "date") {
+      // Refused rather than coerced: a date the model invented a format for
+      // would filter on something nobody asked about, and the dates in this
+      // database are plain YYYY-MM-DD text.
+      if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+        problems.push(`"${key}" must be a date written as YYYY-MM-DD.`); continue;
+      }
+      plan[key] = value.trim();
+
     } else if (spec.type === "intArray") {
       if (!Array.isArray(value)) { problems.push(`"${key}" must be an array.`); continue; }
       if (value.length > spec.maxItems) { problems.push(`"${key}" accepts at most ${spec.maxItems} entries.`); continue; }
@@ -293,6 +326,11 @@ export function describePlan(plan = {}) {
   if (plan.search) parts.push(`Matching “${plan.search}”`);
   if (plan.manager) parts.push(plan.manager);
   if (plan.status) parts.push(plan.status);
+  if (plan.phase) parts.push(`Phase ${plan.phase}`);
+  if (plan.reportingFrom) parts.push(`Reported from ${plan.reportingFrom}`);
+  if (plan.reportingTo) parts.push(`Reported to ${plan.reportingTo}`);
+  if (plan.turnoverFrom) parts.push(`Turnover from ${plan.turnoverFrom}`);
+  if (plan.turnoverTo) parts.push(`Turnover to ${plan.turnoverTo}`);
   if (plan.type) parts.push(plan.type);
   if (plan.excludeComplete) parts.push("Excludes complete");
   if (plan.risk) parts.push(`${plan.riskLevel || "High"} ${plan.risk === "either" ? "budget or schedule" : plan.risk} risk`);
@@ -348,6 +386,13 @@ export function summarisePlan(plan = {}, total = 0) {
   if (plan.excludeComplete) clauses.push("that are not complete");
   if (plan.manager) clauses.push(`led by ${plan.manager}`);
   if (plan.search) clauses.push(`mentioning “${plan.search}”`);
+  if (plan.phase) clauses.push(`in the ${plan.phase} phase`);
+  if (plan.reportingFrom && plan.reportingTo) clauses.push(`reported between ${plan.reportingFrom} and ${plan.reportingTo}`);
+  else if (plan.reportingFrom) clauses.push(`reported on or after ${plan.reportingFrom}`);
+  else if (plan.reportingTo) clauses.push(`reported on or before ${plan.reportingTo}`);
+  if (plan.turnoverFrom && plan.turnoverTo) clauses.push(`handing over between ${plan.turnoverFrom} and ${plan.turnoverTo}`);
+  else if (plan.turnoverFrom) clauses.push(`handing over on or after ${plan.turnoverFrom}`);
+  else if (plan.turnoverTo) clauses.push(`handing over on or before ${plan.turnoverTo}`);
 
   if (plan.risk) {
     const level = RATING(plan.riskLevel || "High");
@@ -479,6 +524,21 @@ function planWhere(plan, scope, loose) {
   }
   if (plan.requestor) { clauses.push("d.requestor LIKE ?"); bindings.push(`%${plan.requestor}%`); }
   if (plan.status) { clauses.push("p.status = ?"); bindings.push(plan.status); }
+  if (plan.phase) { clauses.push("p.phase LIKE ?"); bindings.push(`%${plan.phase}%`); }
+  // Dates are plain YYYY-MM-DD text, so a string comparison orders them
+  // correctly. A blank is not a date: a project with none is unknown rather than
+  // outside the range, which is the same treatment the thresholds give.
+  for (const [field, column, op] of [
+    ["reportingFrom", "p.reporting_period", ">="],
+    ["reportingTo", "p.reporting_period", "<="],
+    ["turnoverFrom", "p.current_turnover_date", ">="],
+    ["turnoverTo", "p.current_turnover_date", "<="],
+  ]) {
+    if (plan[field]) {
+      clauses.push(`${column} IS NOT NULL AND trim(${column}) <> '' AND ${column} ${op} ?`);
+      bindings.push(plan[field]);
+    }
+  }
   if (plan.excludeComplete) clauses.push("p.status <> 'Complete'");
   if (plan.type) { clauses.push("p.project_type = ?"); bindings.push(plan.type); }
 

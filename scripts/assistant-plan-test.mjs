@@ -507,6 +507,66 @@ await check("the sentence says what was attached", () => {
   assert.match(summarisePlan(validatePlan({ includeUpdates: true }).plan, 1), /with its recent updates/);
 });
 
+// --- Dates and phase ---------------------------------------------------------
+// Fields the record view shows but the search could not reach. "Projects whose
+// reporting period is within August" could only be declined, which is a poor
+// answer to a question the data answers plainly.
+
+await check("a reporting period range selects the right months", async () => {
+  database.exec(`UPDATE projects SET reporting_period = '2026-08-28' WHERE id IN (1, 2)`);
+  database.exec(`UPDATE projects SET reporting_period = '2026-09-11' WHERE id = 3`);
+  database.exec(`UPDATE projects SET reporting_period = NULL WHERE id = 4`);
+
+  assert.deepEqual(names(await runPlan(db, { reportingFrom: "2026-08-01", reportingTo: "2026-08-31" }, ALL)),
+    ["Gaming On Time", "Gaming Over Budget"]);
+  assert.deepEqual(names(await runPlan(db, { reportingFrom: "2026-09-01" }, ALL)), ["Patina Delayed"]);
+  assert.deepEqual(names(await runPlan(db, { reportingTo: "2026-08-31" }, ALL)),
+    ["Gaming On Time", "Gaming Over Budget"]);
+  assert.ok(!names(await runPlan(db, { reportingFrom: "1900-01-01" }, ALL)).includes("Gaming Complete"),
+    "a project with no reporting period is unknown, not inside every range");
+
+  // Put the fixture back. Later checks read the reporting period, and a test
+  // that leaves the data changed makes the next one fail for reasons of its own.
+  database.exec("UPDATE projects SET reporting_period = '2026-09-11'");
+});
+
+await check("a turnover range selects by handover date", async () => {
+  // Fixture current turnovers: project 1 on 2027-03-31, project 2 on 2027-04-01,
+  // project 3 on 2027-02-10, project 4 none at all.
+  assert.deepEqual(names(await runPlan(db, { turnoverFrom: "2027-03-01" }, ALL)),
+    ["Gaming On Time", "Gaming Over Budget"]);
+  assert.deepEqual(names(await runPlan(db, { turnoverTo: "2027-02-28" }, ALL)), ["Patina Delayed"]);
+  assert.deepEqual(names(await runPlan(db, { turnoverFrom: "2027-04-01" }, ALL)), ["Gaming On Time"],
+    "the bound is inclusive");
+  assert.deepEqual(names(await runPlan(db, { turnoverFrom: "2027-01-01", turnoverTo: "2027-12-31" }, ALL)),
+    ["Gaming On Time", "Gaming Over Budget", "Patina Delayed"]);
+  assert.ok(!names(await runPlan(db, { turnoverFrom: "1900-01-01" }, ALL)).includes("Gaming Complete"),
+    "a project with no turnover date is unknown, not inside every range");
+});
+
+await check("phase is matched loosely, since it is written out in full", async () => {
+  database.exec(`UPDATE projects SET phase = 'Construction / Delivery' WHERE id = 1`);
+  database.exec(`UPDATE projects SET phase = 'Planning' WHERE id = 2`);
+  assert.deepEqual(names(await runPlan(db, { phase: "Construction" }, ALL)), ["Gaming Over Budget"]);
+  assert.deepEqual(names(await runPlan(db, { phase: "Planning" }, ALL)), ["Gaming On Time"]);
+  database.exec("UPDATE projects SET phase = NULL");
+});
+
+await check("a date that is not a date is refused, not guessed at", () => {
+  for (const bad of ["August", "2026-8-1", "01/08/2026", "next month", 20260801]) {
+    assert.equal(validatePlan({ reportingFrom: bad }).plan, null, String(bad));
+  }
+  assert.equal(validatePlan({ reportingFrom: "2026-08-01" }).plan.reportingFrom, "2026-08-01");
+});
+
+await check("the sentence names the range that was applied", () => {
+  const { plan } = validatePlan({ reportingFrom: "2026-08-01", reportingTo: "2026-08-31" });
+  assert.match(summarisePlan(plan, 74), /reported between 2026-08-01 and 2026-08-31/);
+  assert.match(summarisePlan(validatePlan({ turnoverTo: "2026-06-30" }).plan, 4),
+    /handing over on or before 2026-06-30/);
+  assert.match(summarisePlan(validatePlan({ phase: "Closeout" }).plan, 2), /in the Closeout phase/);
+});
+
 // --- Result shape ------------------------------------------------------------
 
 await check("total counts the whole match, rows are capped, truncation is reported", async () => {  const result = await runPlan(db, { limit: 1 }, GAMING);
