@@ -435,7 +435,17 @@ export async function availableUnits(db, scope) {
 // to every query here, ahead of any plan filter — never afterwards to a result
 // set that has already been fetched.
 
-function planWhere(plan, scope) {
+export function searchTerms(search, loose) {
+  if (!loose) return [search];
+  const words = String(search)
+    .split(/[^\p{L}\p{N}#&.-]+/u)
+    .map((word) => word.trim())
+    .filter((word) => word.length > 1)
+    .slice(0, 8);
+  return words.length ? words : [search];
+}
+
+function planWhere(plan, scope, loose) {
   const clauses = ["p.archived_at IS NULL"];
   const bindings = [];
 
@@ -451,10 +461,17 @@ function planWhere(plan, scope) {
     bindings.push(...plan.ids);
   }
   if (plan.search) {
-    clauses.push(`(p.name LIKE ? OR p.venue LIKE ? OR p.section_name LIKE ?
-      OR p.capp_number LIKE ? OR p.initiative_number LIKE ?
-      OR p.scope_description LIKE ? OR p.current_update LIKE ?)`);
-    bindings.push(...Array(7).fill(`%${plan.search}%`));
+    // The phrase as given, unless the caller asked to loosen it. Loose matching
+    // takes the words one at a time, so "DN suit remodel" still finds "DN Suite
+    // Remodel"; it is a second attempt rather than the default, because taking
+    // words separately costs precision - "Venue A" drops the "A" and matches
+    // every venue.
+    for (const term of searchTerms(plan.search, loose)) {
+      clauses.push(`(p.name LIKE ? OR p.venue LIKE ? OR p.section_name LIKE ?
+        OR p.capp_number LIKE ? OR p.initiative_number LIKE ?
+        OR p.scope_description LIKE ? OR p.current_update LIKE ?)`);
+      bindings.push(...Array(7).fill(`%${term}%`));
+    }
   }
   if (plan.manager) {
     clauses.push("(p.project_manager LIKE ? OR p.development_lead LIKE ?)");
@@ -521,8 +538,8 @@ function orderSql(plan) {
   return " ORDER BY p.source_sort_order, p.id";
 }
 
-export function planQueries(plan, scope) {
-  const where = planWhere(plan, scope);
+export function planQueries(plan, scope, loose) {
+  const where = planWhere(plan, scope, loose);
   const limit = Math.min(plan.limit || PLAN_LIMIT_DEFAULT, PLAN_LIMIT_MAX);
   return {
     rows: {
@@ -594,11 +611,24 @@ async function attachChildren(db, rows, plan) {
 }
 
 export async function runPlan(db, plan, scope) {
-  const { rows, count, limit } = planQueries(plan, scope);
-  const [page, totals] = await Promise.all([
-    db.prepare(rows.sql).bind(...rows.bindings).all(),
-    db.prepare(count.sql).bind(...count.bindings).first(),
-  ]);
+  const run = async (loose) => {
+    const { rows, count, limit } = planQueries(plan, scope, loose);
+    const [page, totals] = await Promise.all([
+      db.prepare(rows.sql).bind(...rows.bindings).all(),
+      db.prepare(count.sql).bind(...count.bindings).first(),
+    ]);
+    return { page, totals, limit };
+  };
+
+  let { page, totals, limit } = await run(false);
+  let loosened = false;
+  // Only when the phrase found nothing. A name heard or typed slightly wrong -
+  // "DN suit remodel" for "DN Suite Remodel" - should still find its project,
+  // but not at the cost of a phrase that matched perfectly well.
+  if (plan.search && !(totals?.total) && searchTerms(plan.search, true).length > 1) {
+    const second = await run(true);
+    if (second.totals?.total) { page = second.page; totals = second.totals; limit = second.limit; loosened = true; }
+  }
   const results = await attachChildren(db, page.results || [], plan);
   const total = totals?.total ?? results.length;
   return {
@@ -614,5 +644,8 @@ export async function runPlan(db, plan, scope) {
       reporting_period: row.reporting_period,
     })),
     description: describePlan(plan),
+    // Said in the answer, because a looser match is a different question from
+    // the one the words literally asked.
+    loosened,
   };
 }

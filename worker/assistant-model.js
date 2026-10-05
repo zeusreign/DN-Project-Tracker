@@ -122,23 +122,43 @@ export function openAiPlanner({ apiKey, model = DEFAULT_PLANNER_MODEL, fetchImpl
 export async function mintVoiceSession(env, { instructions, tools, model, fetchImpl } = {}) {
   if (!env.OPENAI_API_KEY) throw new PlannerError("The assistant is not configured on this environment.", 503);
   const call = fetchImpl || fetch;
-  const response = await call(CLIENT_SECRETS, {
+  const chosen = model || env.ASSISTANT_VOICE_MODEL || DEFAULT_VOICE_MODEL;
+
+  const payload = (withTranscription) => ({
+    session: {
+      type: "realtime",
+      model: chosen,
+      instructions,
+      audio: {
+        // Transcribing what the listener said is what lets the transcript show
+        // their words rather than the model's rewriting of them.
+        ...(withTranscription
+          ? { input: { transcription: { model: env.ASSISTANT_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe" } } }
+          : {}),
+        output: { voice: "alloy" },
+      },
+      // Declared here rather than by the browser sending session.update after
+      // the channel opens. The session accepts them at mint time, and that
+      // round trip was a failure the user saw as "the voice session ended
+      // unexpectedly" with nothing to act on.
+      ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
+    },
+  });
+
+  const post = (body) => call(CLIENT_SECRETS, {
     method: "POST",
     headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      session: {
-        type: "realtime",
-        model: model || env.ASSISTANT_VOICE_MODEL || DEFAULT_VOICE_MODEL,
-        instructions,
-        audio: { output: { voice: "alloy" } },
-        // Declared here rather than by the browser sending session.update after
-        // the channel opens. The session accepts them at mint time, and that
-        // round trip was a failure the user saw as "the voice session ended
-        // unexpectedly" with nothing to act on.
-        ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
-      },
-    }),
+    body: JSON.stringify(body),
   });
+
+  let response = await post(payload(true));
+  // A rejected transcription block must not cost the whole call. If the service
+  // will not take it, mint again without it: the transcript then falls back to
+  // the question the model asked for, which is worse but still works.
+  if (response.status === 400) {
+    const retry = await post(payload(false));
+    if (retry.ok) response = retry;
+  }
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     console.log(`assistant voice session failed: ${response.status} ${detail.slice(0, 300)}`);

@@ -315,36 +315,17 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       }
     }
 
-    let result = await runPlan(env.DB, plan, scope);
+    // A search that restates the question is dropped before the query runs, not
+    // rescued after it returns nothing. Matching word by word means such a
+    // search now finds noise rather than nothing - "budget over 1" matches any
+    // project whose update mentions a budget - and a wrongly narrowed answer
+    // never reaches the zero that a rescue waits for.
+    const realFilters = Object.keys(plan).filter((key) => key !== "search" && key !== "limit"
+      && key !== "sort" && key !== "unit" && key !== "ids"
+      && key !== "includeUpdates" && key !== "includePhotos");
+    if (plan.search && realFilters.length && restatesThePlan(plan)) delete plan.search;
 
-    // A free-text search that matches nothing empties the whole result, even
-    // when every other filter was right. The model keeps restating the question
-    // in it - "budget over 50000" is not a project name - and a prompt rule did
-    // not stop that, so the server handles it: retry once without the search and
-    // say so. The alternative is answering "none" to a question with ten
-    // answers, which is the failure this assistant exists to avoid.
-    //
-    // Only when something else was actually asked for. Dropping the search from
-    // a plan that is nothing but a search would answer a different question.
-    // ids are not a filter the question asked for - they are the previous
-    // answer. A plan of {ids, search} is a new subject the model wrongly kept
-    // context on, so dropping the search would hand back the previous answer as
-    // though it answered this question. That is worse than finding nothing.
-    const otherFilters = Object.keys(plan).filter((key) => key !== "search" && key !== "limit"
-      && key !== "sort" && key !== "unit" && key !== "ids");
-    if (result.total === 0 && plan.search && otherFilters.length && restatesThePlan(plan)) {
-      const widened = { ...plan };
-      delete widened.search;
-      const retry = await runPlan(env.DB, widened, scope);
-      if (retry.total > 0) {
-        // No notice: nothing was lost. The dropped text restated a filter that
-        // is still applied, so saying it was ignored reads as a degraded answer
-        // when the answer is complete.
-        result = retry;
-        plan.search = undefined;
-        delete plan.search;
-      }
-    }
+    let result = await runPlan(env.DB, plan, scope);
 
     await recordAsk(env, user, outcome, result, scope);
     return json({

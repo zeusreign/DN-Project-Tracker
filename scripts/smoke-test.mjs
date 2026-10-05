@@ -2150,9 +2150,11 @@ for (const [parent, child] of [
   const withJunkSearch = await (await askWithContext("which have a budget over 1?",
     recordingPlanner({ search: "budget over 1", minAmount: 1, amountField: "approved_budget", limit: 50 }))).json();
   assert.equal(withJunkSearch.total, realTotal.total,
-    "the restated search is dropped rather than emptying the result");
+    "the restated search is dropped before the query runs, not after it returns nothing");
   assert.match(withJunkSearch.summary, /approved budget of \$1 or more/,
     "and the sentence describes the filter that remains, not the text dropped");
+  assert.ok(!withJunkSearch.summary.includes("mentioning"),
+    "the dropped text is not claimed as a condition of the answer");
   assert.ok(!("search" in withJunkSearch.plan), "the plan reported back no longer claims it");
 
   // A real term that matches nothing is NOT dropped. Widening here would return

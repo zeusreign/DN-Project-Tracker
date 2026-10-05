@@ -206,6 +206,11 @@ export function voiceInstructions({ units, name } = {}) {
     "from memory, and never invent a project, a figure or a business unit. If the",
     "tool returns nothing, say so plainly.",
     "",
+    "Pass the question as it was asked. Do not add to it: a listener who asks to",
+    "look up a project has not asked for its status, schedule, budget, risk and",
+    "turnover date as well, and what you send is what appears on screen as their",
+    "question.",
+    "",
     units && units.length ? `The listener can ask about ${units.join(", ")}.` : "",
     "",
     "Keep answers short enough to listen to. Say how many projects matched, then",
@@ -235,7 +240,7 @@ export const VOICE_TOOLS = [{
     properties: {
       question: {
         type: "string",
-        description: "The question to answer, in plain words. Include everything that matters: business unit, risk, dates, amounts.",
+        description: "The listener's question, in their own words. Pass what they asked and nothing more: do not add requests they did not make, and do not expand a short question into a longer one. Resolve only what they left implicit, such as which projects \"these\" refers to.",
       },
     },
   },

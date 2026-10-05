@@ -991,7 +991,7 @@ function openAskRecord(id){
 // /api/assistant/ask - the same endpoint typing uses, with the same session
 // cookie, the same planner and the same scope. Speaking therefore reaches
 // exactly what typing reaches, and nothing more.
-var voice={state:"off",pc:null,mic:null,channel:null,audio:null};
+var voice={state:"off",pc:null,mic:null,channel:null,audio:null,heard:""};
 
 var VOICE_STATUS={
   off:"Tap to start talking. Answers come from the same records as typing.",
@@ -1047,11 +1047,18 @@ function stopVoice(detail){
 // A spoken question is answered by the same endpoint a typed one is, and lands
 // in the same transcript, so the two are one conversation rather than two.
 async function voiceAskTracker(question){
-  var turn={question:question,state:"pending",answer:null,spoken:true};
+  // Show what was said, not the model's rewriting of it. Asked to "look up DN
+  // Suite Remodel", the model sent a question that also demanded status,
+  // schedule, budget, risk and turnover date, and that is what appeared on
+  // screen as the user's own words. The transcription is theirs; the tool
+  // argument is only the fallback when transcription is unavailable.
+  var spoken=voice.heard&&voice.heard.trim()?voice.heard.trim():question;
+  voice.heard="";
+  var turn={question:spoken,state:"pending",answer:null,spoken:true};
   askTurns.push(turn);
   renderAsk();
   try{
-    var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify({question:question})});
+    var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify({question:spoken})});
     turn.state="done";turn.answer=answer;
     askSave();renderAsk();
     return answer;
@@ -1116,6 +1123,10 @@ function wireVoiceChannel(channel,session){
     }
     if(/^response\.(done|completed)$/.test(message.type||"")||/audio.*(done|stopped)/.test(message.type||"")){
       if(voice.state==="speaking")setVoiceState("listening");
+    }
+    // What the listener actually said, when the session is transcribing it.
+    if(/input_audio_transcription/.test(message.type||"")&&message.transcript){
+      voice.heard=String(message.transcript);
     }
     if(message.type==="error"){
       // Say what actually went wrong. The first version swallowed the payload

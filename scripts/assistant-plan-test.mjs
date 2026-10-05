@@ -312,6 +312,32 @@ await check("risk filters address the right column", async () => {  assert.deepE
 await check("excludeComplete and status", async () => {  assert.ok(!names(await runPlan(db, { excludeComplete: true }, GAMING)).includes("Gaming Complete"));
   assert.deepEqual(names(await runPlan(db, { status: "On Hold" }, ALL)), ["Patina Delayed"]);});
 
+await check("a near-miss name still finds its project, without loosening a good match", async () => {
+  // The phrase runs first. "Venue A" keeps its single-letter half and matches
+  // one project; loosening would drop the "A" and match every venue. Only a
+  // phrase that finds nothing is retried word by word, which is what lets a
+  // name heard or typed slightly wrong still land.
+  database.exec(`INSERT INTO projects (id, source_key, business_unit_id, venue, project_type, name,
+    status, budget_risk, schedule_risk, reporting_period, source_sort_order, archived_at)
+    VALUES (9, 'k9', 1, 'Highmark', 'Capital', 'DN Suite Remodel', 'Active', 'Low', 'Low', '2026-09-11', 9, NULL)`);
+
+  const exact = await runPlan(db, { search: "DN Suite Remodel" }, ALL);
+  assert.deepEqual(names(exact), ["DN Suite Remodel"]);
+  assert.equal(exact.loosened, false, "a phrase that matches is never loosened");
+
+  const misheard = await runPlan(db, { search: "DN suit remodel" }, ALL);
+  assert.deepEqual(names(misheard), ["DN Suite Remodel"], "a missing letter still finds it");
+  assert.equal(misheard.loosened, true, "and the answer knows it was loosened");
+
+  const reordered = await runPlan(db, { search: "remodel suite" }, ALL);
+  assert.deepEqual(names(reordered), ["DN Suite Remodel"], "word order does not matter on a retry");
+
+  const nothing = await runPlan(db, { search: "asbestos survey" }, ALL);
+  assert.deepEqual(names(nothing), [], "loosening does not invent a match");
+
+  database.exec("DELETE FROM projects WHERE id = 9");
+});
+
 await check("search covers the fields the pilot searched", async () => {  assert.deepEqual(names(await runPlan(db, { search: "CAPP-3" }, ALL)), ["Patina Delayed"]);
   assert.deepEqual(names(await runPlan(db, { search: "Venue A" }, ALL)), ["Gaming Over Budget"]);
   assert.deepEqual(names(await runPlan(db, { search: "Cara" }, ALL)), [], "manager is not a search field");
