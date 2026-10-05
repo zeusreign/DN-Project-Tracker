@@ -2242,6 +2242,41 @@ for (const [parent, child] of [
   assert.equal(namedStatus.plan.status, "Active",
     "a status the question actually named is kept");
 
+
+  // --- The developer panel ---------------------------------------------------
+  // Off unless the environment asks for it. Production asserts it off in
+  // scripts/check-deploy-target.sh, so the only way it appears is deliberately.
+  const quiet = await (await askWithContext("anything",
+    recordingPlanner({ status: "Active", limit: 5 }))).json();
+  assert.equal(quiet.debug, undefined, "no query panel unless the environment enables it");
+
+  const loud = await (await worker.fetch(new Request("https://tracker.example/api/assistant/ask", {
+    method: "POST", headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ question: "which are active?" }),
+  }), {
+    ...env, ASSISTANT_DEBUG: "true",
+    ASSISTANT_PLANNER: recordingPlanner({ status: "Active", limit: 5 }),
+  }, {})).json();
+  assert.ok(loud.debug, "the panel appears when it is turned on");
+  assert.equal(loud.debug.question, "which are active?");
+  assert.deepEqual(loud.debug.plan, { status: "Active", limit: 5 });
+  assert.match(loud.debug.sql, /^SELECT /, "it shows the statement that ran");
+  assert.match(loud.debug.sql, /FROM projects p/);
+  assert.ok(Array.isArray(loud.debug.bindings), "and the values bound into it");
+  assert.equal(loud.debug.total, loud.total);
+
+  // The panel is a view of the query, not a way around the scope.
+  const scopedDebug = await (await worker.fetch(new Request("https://tracker.example/api/assistant/ask", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: askerCookie, "x-csrf-token": askerCsrf },
+    body: JSON.stringify({ question: "show everything" }),
+  }), {
+    ...env, ASSISTANT_DEBUG: "true",
+    ASSISTANT_PLANNER: recordingPlanner({ limit: 50 }),
+  }, {})).json();
+  assert.deepEqual(scopedDebug.debug.scope, ["Gaming"], "it names the scope that was applied");
+  assert.match(scopedDebug.debug.sql, /b\.name IN/, "which is in the statement, not applied after it");
+
   console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
 }
 

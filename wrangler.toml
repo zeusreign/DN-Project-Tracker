@@ -58,6 +58,13 @@ bucket_name = "dnc-tracker-assets"
 # caller could send one and arrive as an administrator.
 ALLOW_PLATFORM_AUTH = "false"
 
+# Shows developers the plan and the SQL behind each assistant answer, in the
+# answer itself. Off here and asserted off by scripts/check-deploy-target.sh:
+# the queries carry no secrets and the business-unit scope applies either way,
+# but handing every reader the shape of the database invites probing at it, and
+# it is debugging furniture rather than something the client asked for.
+ASSISTANT_DEBUG = "false"
+
 # TODO(config): optional comma-separated list granting the `admin` role by email.
 # Intentionally left empty — it does NOT create a login account (it only applies
 # to the platform-auth fallback above and to role lookup). The first real

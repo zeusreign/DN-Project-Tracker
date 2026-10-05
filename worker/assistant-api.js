@@ -5,7 +5,7 @@
 // data, and the release scope is deliberately search/report only — creating or
 // editing records through conversation is not part of it.
 
-import { validatePlan, runPlan, describePlan, planSchemaPrompt, availableUnits, summarisePlan, PLAN_LIMIT_MAX } from "./assistant-plan.js";
+import { validatePlan, runPlan, describePlan, planSchemaPrompt, availableUnits, summarisePlan, planQueries, PLAN_LIMIT_MAX } from "./assistant-plan.js";
 import { plannerFor, mintVoiceSession, PlannerError } from "./assistant-model.js";
 import { messageFor, scopeNote, voiceInstructions, VOICE_TOOLS } from "./assistant-prompt.js";
 
@@ -100,6 +100,30 @@ export function refersBack(question) {
   return BACK_REFERENCE.test(String(question || ""));
 }
 
+// What a developer needs to see to tell a wrong answer from a wrong question:
+// the plan the model produced, the SQL it became, and the values bound into it.
+// Off unless the environment asks for it, and asserted off for production by
+// scripts/check-deploy-target.sh.
+function debugFor(env, { plan, scope, result, outcome, question }) {
+  if (env.ASSISTANT_DEBUG !== "true") return undefined;
+  const { rows, count } = planQueries(plan, scope);
+  return {
+    question,
+    intent: outcome ? outcome.intent : "plan",
+    followUp: outcome ? outcome.followUp : undefined,
+    language: outcome ? outcome.language : undefined,
+    plan,
+    scope: scope || "unrestricted",
+    sql: rows.sql.replace(/\s+/g, " ").trim(),
+    bindings: rows.bindings,
+    countSql: count.sql.replace(/\s+/g, " ").trim(),
+    total: result ? result.total : 0,
+    returned: result ? result.returned : 0,
+    loosened: result ? result.loosened : false,
+    usage: outcome ? outcome.usage : undefined,
+  };
+}
+
 export async function assistantApi(request, env, user, role, scope, helpers) {
   const { json, error } = helpers, url = new URL(request.url);
   if (!url.pathname.startsWith("/api/assistant/")) return null;
@@ -173,6 +197,7 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       // instead of producing a confident answer to something else.
       description: result.description,
       plan,
+      debug: debugFor(env, { plan, scope, result }),
     });
   }
 
@@ -363,6 +388,7 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       // not match what was asked.
       summary: summarisePlan(plan, result.total),
       plan,
+      debug: debugFor(env, { plan, scope, result, outcome, question }),
     });
   }
 

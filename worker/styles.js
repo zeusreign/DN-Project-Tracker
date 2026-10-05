@@ -160,6 +160,14 @@ ${ENHANCED_STYLES}
 .ask-chips{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}
 .ask-chip{padding:4px 8px;border-radius:4px;background:#eef4f6;color:#486577;font-size:11px;line-height:1.5}
 .ask-label-ai{letter-spacing:.8px;text-transform:uppercase;font-size:11px;color:#1f5a6b}
+.ask-debug{margin-top:12px;border:1px dashed #c3d3db;border-radius:6px;background:#fbfdfe}
+.ask-debug summary{cursor:pointer;padding:7px 10px;font-size:11px;font-weight:600;
+  letter-spacing:.4px;text-transform:uppercase;color:#5c7383}
+.ask-debug dl{margin:0;padding:0 10px 10px;display:grid;
+  grid-template-columns:minmax(74px,auto) 1fr;gap:4px 12px}
+.ask-debug dt{font-size:11px;color:#6e8290;text-transform:uppercase;letter-spacing:.4px}
+.ask-debug dd{margin:0;font-size:11.5px;color:#28404e;font-family:ui-monospace,SFMono-Regular,
+  Menlo,Consolas,monospace;word-break:break-word;white-space:pre-wrap}
 .ask-results{margin:12px 0 0}
 .ask-result{padding:10px 0;border-bottom:1px solid #eef2f4}
 .ask-result:last-child{border-bottom:0}

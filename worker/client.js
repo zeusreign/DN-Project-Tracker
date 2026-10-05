@@ -885,6 +885,29 @@ function askResultListHtml(answer){
   return html;
 }
 
+// The query behind an answer, for whoever is building this. Present only when
+// the environment turned it on, so there is nothing to hide in the client: if
+// the field is absent the panel does not exist.
+function askDebugHtml(debug){
+  if(!debug)return "";
+  var rows=[
+    ["Question",debug.question||""],
+    ["Intent",debug.intent+(debug.followUp?" (follow-up)":"")+(debug.language?" · "+debug.language:"")],
+    ["Plan",JSON.stringify(debug.plan)],
+    ["Scope",Array.isArray(debug.scope)?debug.scope.join(", "):String(debug.scope)],
+    ["SQL",debug.sql],
+    ["Bindings",JSON.stringify(debug.bindings)],
+    ["Result",debug.total+" matched, "+debug.returned+" returned"+(debug.loosened?" · search loosened":"")],
+  ];
+  if(debug.usage){
+    rows.push(["Tokens",debug.usage.model+" · "+debug.usage.inputTokens+" in / "+debug.usage.outputTokens+" out"]);
+  }
+  return '<details class="ask-debug"><summary>Query behind this answer</summary>'
+    +'<dl>'+rows.filter(function(r){return r[1]!==undefined&&r[1]!==""}).map(function(r){
+      return '<dt>'+esc(r[0])+'</dt><dd>'+esc(String(r[1]))+'</dd>';
+    }).join("")+'</dl></details>';
+}
+
 function askTurnHtml(turn){
   var answer=turn.answer||{};
   var cls=turn.state==="error"?" is-error"
@@ -916,7 +939,7 @@ function askTurnHtml(turn){
   }
   return '<div class="ask-turn">'
     +'<div class="ask-user"><div class="ask-bubble">'+esc(turn.question)+'</div></div>'
-    +askAiLabel()+body
+    +askAiLabel()+body+askDebugHtml(answer&&answer.debug)
     +'</div>';
 }
 

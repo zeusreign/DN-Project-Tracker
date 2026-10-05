@@ -118,7 +118,10 @@ function trackerPreview(previewAdmin) {
             method,
             headers,
             body: chunks.length ? Buffer.concat(chunks) : undefined,
-          }), { DB, ADMIN_EMAILS: "preview@example.com", OPENAI_API_KEY: previewOpenAiKey }, {});
+          }), { DB, ADMIN_EMAILS: "preview@example.com", OPENAI_API_KEY: previewOpenAiKey,
+            // The local preview is for developing against, so the plan and the
+            // SQL behind each answer are shown. Production asserts this off.
+            ASSISTANT_DEBUG: "true" }, {});
           response.statusCode = result.status;
           result.headers.forEach((value, name) => response.setHeader(name, value));
           response.end(Buffer.from(await result.arrayBuffer()));
