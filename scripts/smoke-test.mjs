@@ -1146,6 +1146,65 @@ assert.equal(promoted.project_type, "Capital");
 assert.equal(promoted.capp_number, "CAPP-TEST");
 assert.ok(promoted.development_promoted_at);
 
+// The same Days recompute, but on the create path, which the PATCH block above
+// cannot reach: it only ever edits a project the seed already made. POST
+// /api/projects does not list duration_change_days in its INSERT, so without the
+// UPDATE that follows it in the same batch a project created with both turnover
+// dates would show an empty Days until somebody happened to edit a date. That
+// UPDATE is keyed on source_key, so this also covers the key matching exactly one
+// row. Gaming is deliberate: a non-Gaming Capital project would compete for the
+// scope marker the Viewer test below picks out.
+const createWithDates = await call("/api/projects", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    name: "Pilot Days On Create",
+    business_unit: "Gaming",
+    section_name: "Pilot Capital Heading",
+    project_type: "Capital",
+    capp_number: "CAPP-DAYS",
+    project_manager: "Pilot Owner",
+    original_turnover_date: "2027-03-05",
+    current_turnover_date: "2027-03-31",
+  }),
+});
+assert.equal(createWithDates.status, 201);
+const createdWithDates = (await (await call("/api/projects")).json())
+  .projects.find((project) => project.name === "Pilot Days On Create");
+assert.ok(createdWithDates, "the project created with both turnover dates reads back");
+assert.equal(
+  createdWithDates.duration_change_days, 26,
+  "a project created with both turnover dates must report Days at once, not an empty column");
+assert.equal(
+  daysOf(createdWithDates.id), 26,
+  "and the stored column itself must hold it, not just the served payload");
+assert.equal(
+  database.prepare("SELECT COUNT(*) AS n FROM projects WHERE duration_change_days = 26").get().n, 1,
+  "the create-path recompute must touch exactly the new row");
+
+// Created with only one of the two dates there is nothing to subtract, so Days
+// has to stay empty rather than settle on a misleading zero.
+const createOneDate = await call("/api/projects", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    name: "Pilot Days On Create Partial",
+    business_unit: "Gaming",
+    section_name: "Pilot Capital Heading",
+    project_type: "Capital",
+    capp_number: "CAPP-DAYS-PARTIAL",
+    project_manager: "Pilot Owner",
+    current_turnover_date: "2027-03-31",
+  }),
+});
+assert.equal(createOneDate.status, 201);
+const createdOneDate = (await (await call("/api/projects")).json())
+  .projects.find((project) => project.name === "Pilot Days On Create Partial");
+assert.ok(createdOneDate, "the partially dated project reads back");
+assert.equal(
+  daysOf(createdOneDate.id), null,
+  "one turnover date alone leaves nothing to subtract, so Days must be empty, not 0");
+
 // The admin backup has to restore into real D1, and real D1 is stricter than the
 // SQLite this test runs on: it rejects BEGIN TRANSACTION outright, does not honour
 // PRAGMA foreign_keys, and enforces foreign keys throughout an import. None of that

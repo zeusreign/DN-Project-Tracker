@@ -6,6 +6,10 @@ served page cannot tell them apart.
 
 Observed 2026-09-29. Re-check with the commands in §4 rather than assuming this is current.
 
+Re-verified 2026-10-05 against `wrangler pages deployment list`: production still serves `e302b3e`
+(deployment `d172266b`), unchanged since this record was written. Nothing has been deployed in the
+interval.
+
 ---
 
 ## 1. The two environments
@@ -137,8 +141,10 @@ npx wrangler d1 execute 94241844-c709-445f-a71c-49f8b65a7cfd --remote --yes \
   --command "SELECT COUNT(*) FROM projects"
 ```
 
-The `Source` column of `deployment list` is the commit hash passed at upload time by
-`scripts/deploy-prod.sh` / `scripts/deploy-test.sh` via `--commit-hash`.
+The `Source` column of `deployment list` is the commit the deployment was recorded against.
+`scripts/deploy-test.sh` passes it explicitly via `--commit-hash`; `scripts/deploy-prod.sh` passes
+**no** branch or commit flag, so for production Wrangler infers both from the checked-out git
+branch (see §5).
 
 ---
 
@@ -149,7 +155,21 @@ When it is wanted, `docs/DEPLOY.md` §2 is the procedure. Two things specific to
 
 1. **Deploy from the `handoff` branch.** It is the Pages production branch. A production deploy made
    from any other branch is silently published as a *preview* instead, and the live URL does not
-   move. `handoff` currently sits at `b59c847`, behind `2334e91`.
+   move.
+
+   **`deploy-prod.sh` sets neither branch nor commit.** It ends in a bare `npx wrangler pages
+   deploy`, so Wrangler infers both from the checked-out git branch. Deploying while on any branch
+   other than `handoff` therefore publishes a *preview*, not production. `deploy-test.sh` is not
+   comparable — it passes `--branch test --commit-dirty true` and an explicit `--commit-hash`.
+
+   **The `handoff` ref is not the deployed version.** The branch points at `b59c847` and, per its
+   reflog, has not moved since 2026-09-25 — `e302b3e` is **not reachable from it at all**. Yet
+   production records branch `handoff` at source `e302b3e`, and a *preview* sits at that same commit
+   on branch `enhanced-integration` (`1a74169c`). The live deploy was therefore made with an explicit
+   `--branch handoff` override, not by the script as written. Read the deployed commit from the
+   `Source` column of `wrangler pages deployment list`, never from the branch pointer: the ref
+   understates what is live, because `b59c847` predates the Enhanced merge while `e302b3e` contains
+   it, so Enhanced *is* in production.
 2. **The Days fix changes no data on deploy.** It only recomputes `duration_change_days` on
    subsequent writes. Existing rows keep their imported value until a turnover date is edited; there
    is no backfill. If the 24 projects currently holding a stored value should be corrected
