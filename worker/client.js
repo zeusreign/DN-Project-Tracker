@@ -894,9 +894,11 @@ function askTurnHtml(turn){
   }else if(turn.state==="error"){
     body='<div class="ask-reply is-error">'+esc(turn.message||"That question could not be answered.")+'</div>';
   }else{
-    if(answer.description&&answer.description.length){
-      body+='<div class="ask-chips">'+answer.description.map(function(part){
-        return '<span class="ask-chip">'+esc(part)+'</span>';
+    // The filter list is internal detail and is not shown. A correction is:
+    // it explains a result that would otherwise look wrong.
+    if(answer.notices&&answer.notices.length){
+      body+='<div class="ask-notices">'+answer.notices.map(function(note){
+        return '<div class="ask-notice">'+esc(note)+'</div>';
       }).join("")+'</div>';
     }
     if(answer.message)body+='<div class="ask-reply'+cls+'">'+esc(answer.message)+'</div>';
@@ -1032,7 +1034,10 @@ async function submitAsk(question){
         context={
           ids:prior.answer.rows.map(function(row){return row.id}),
           total:prior.answer.total,
-          description:prior.answer.description||[]
+          description:prior.answer.description||[],
+          // The conditions, so "what about Patina?" can ask the same question
+          // about somewhere else rather than starting from nothing.
+          plan:prior.answer.plan||null
         };
         break;
       }

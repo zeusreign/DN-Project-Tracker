@@ -28,6 +28,7 @@ function readPlannerOutput(parsed) {
   if (!intent) throw new PlannerError(`The assistant returned an unknown intent "${parsed.intent}".`);
   return {
     intent,
+    followUp: parsed.followUp === true,
     language: typeof parsed.language === "string" ? parsed.language.slice(0, 40) : "English",
     message: typeof parsed.message === "string" && parsed.message.trim() ? parsed.message.trim() : null,
     plan: compactPlan(parsed.plan),

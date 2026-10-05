@@ -55,9 +55,16 @@ How to answer:
   "refuse": this assistant only reads.
 - If the question is not about construction projects, budgets, schedules, risk,
   photos or activity updates, use intent "off_topic".
-- If it names a venue or project ambiguously and the answer depends on which one
-  is meant, use intent "clarify" and say what you need.
+- If a question names a project, venue or CAPP number, search for it with the
+  search field. Several matching records are an answer, not an ambiguity: list
+  them and let the reader choose. Reserve "clarify" for a question you cannot
+  turn into any sensible plan at all.
 - If it asks what a column or term means, use intent "definition".
+- If it asks what you can do, what you know, or how to use this, use intent
+  "help". That is a question about this tracker, never off_topic.
+- Add no filter the question did not ask for. "Not complete" is excludeComplete
+  on its own: adding status "Active" as well drops the projects that are on
+  hold, in closeout or awaiting a status, which the question asked to see.
 - Never invent a figure, a project name or a business unit. If a question names a
   business unit you were not given, use intent "clarify" and say so.
 - Reply in the same language the question was asked in. The language of the
@@ -69,7 +76,19 @@ How to answer:
   different question from the one asked, while looking like an answer to this
   one.
 - A question that names a new business unit, or says "all projects", "everything"
-  or "start again", drops the previous result instead of narrowing it.`;
+  or "start again", drops the previous result instead of narrowing it.
+- A question that names a project, venue or any new subject is a new search, not
+  a follow-up. Leave ids out of it. "Show Central City's latest update" after a
+  question about delayed projects is about Central City, and searching inside the
+  previous eleven answers neither question.
+- Only carry ids when the question has no subject of its own and depends on the
+  previous answer to mean anything.
+- "What about X?" asks the previous question again about X. Keep the conditions
+  the last question established and change only what X names - leave ids out,
+  since those were the answer for somewhere else. After "which projects slipped
+  more than 30 days?", "what about Patina?" means Patina projects that slipped
+  more than 30 days. Never answer it with clarify when X names a unit or project
+  you were given: it has already said which one it means.`;
 
 // Written here rather than left to the model, so a refusal always says
 // something. Each explains why, and what the user can do instead — a dead end
@@ -113,6 +132,13 @@ export function contextNote(context) {
   ];
   if (context.description && context.description.length) {
     lines.push(`It was filtered by: ${context.description.join(" · ")}.`);
+  }
+  // The plan itself, not only a description of it. "What about Parks &
+  // Resorts?" has to re-apply the previous conditions and change only the unit,
+  // and it cannot do that from prose.
+  if (context.plan && Object.keys(context.plan).length) {
+    lines.push(`The plan that produced it was: ${JSON.stringify(context.plan)}.`);
+    lines.push('To ask the same question about something else, reuse those conditions, change what the question changes, and leave ids out.');
   }
   if (context.total && context.total > ids.length) {
     lines.push(`Only the first ${ids.length} are listed, so a follow-up about "these" covers those.`);
@@ -163,13 +189,21 @@ export function planResponseSchema({ units } = {}) {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["language", "intent", "message", "plan"],
+    required: ["language", "intent", "followUp", "message", "plan"],
     properties: {
       language: {
         type: "string",
         description: "The language the question was asked in, as an English name.",
       },
       intent: { type: "string", enum: INTENTS },
+      // Declared rather than inferred. Reading it off the plan's shape was not
+      // reliable: "give projects with high budget risks" came back carrying the
+      // previous answer's ids and no search term, which no heuristic separates
+      // from a genuine narrowing.
+      followUp: {
+        type: "boolean",
+        description: "True only if this question depends on the previous answer to mean anything - 'which of these', 'and those', 'narrow that'. False for any question with a subject of its own, even when one was asked just before.",
+      },
       message: {
         type: ["string", "null"],
         description: "For definition, help, clarify, refuse and off_topic: the answer itself, in the question's language. Null for search and report.",

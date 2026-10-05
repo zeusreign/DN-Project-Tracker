@@ -99,6 +99,11 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
         description: Array.isArray(raw.description)
           ? raw.description.filter((part) => typeof part === "string").slice(0, 12)
           : undefined,
+        // Re-validated rather than trusted: it came from the browser, and it is
+        // shown to the model as the previous question's conditions.
+        plan: raw.plan && typeof raw.plan === "object" && !Array.isArray(raw.plan)
+          ? validatePlan(raw.plan).plan || undefined
+          : undefined,
       }
       : null;
 
@@ -139,6 +144,19 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       }, 400);
     }
 
+    // The model declares whether this question depends on the previous answer.
+    // When it does not, ids carried in from the context are the previous answer
+    // leaking into a new question - "give projects with high budget risks" is
+    // not a question about the one project just shown - so they are dropped.
+    const notices = [];
+    if (plan.ids && context && context.ids && context.ids.length) {
+      const fromContext = plan.ids.every((id) => context.ids.includes(id));
+      if (fromContext && (!outcome.followUp || plan.search)) {
+        delete plan.ids;
+        notices.push("Searched every project, not only the previous answer.");
+      }
+    }
+
     let result = await runPlan(env.DB, plan, scope);
 
     // A free-text search that matches nothing empties the whole result, even
@@ -150,17 +168,18 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     //
     // Only when something else was actually asked for. Dropping the search from
     // a plan that is nothing but a search would answer a different question.
+    // ids are not a filter the question asked for - they are the previous
+    // answer. A plan of {ids, search} is a new subject the model wrongly kept
+    // context on, so dropping the search would hand back the previous answer as
+    // though it answered this question. That is worse than finding nothing.
     const otherFilters = Object.keys(plan).filter((key) => key !== "search" && key !== "limit"
-      && key !== "sort" && key !== "unit");
+      && key !== "sort" && key !== "unit" && key !== "ids");
     if (result.total === 0 && plan.search && otherFilters.length) {
       const widened = { ...plan };
       delete widened.search;
       const retry = await runPlan(env.DB, widened, scope);
       if (retry.total > 0) {
-        retry.description = [
-          ...retry.description,
-          `ignored “${plan.search}”, which matched no project`,
-        ];
+        notices.push(`No project matched “${plan.search}”, so that part was ignored.`);
         result = retry;
         plan.search = undefined;
         delete plan.search;
@@ -180,6 +199,10 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
       rows: result.rows,
       sources: result.sources,
       description: result.description,
+      // Only corrections are meant for the reader: they explain a result that
+      // would otherwise look wrong. The filter list stays in the payload for the
+      // audit row and the tests, but is no longer shown.
+      notices,
       plan,
     });
   }

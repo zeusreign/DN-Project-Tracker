@@ -2055,10 +2055,13 @@ for (const [parent, child] of [
   // projects that were never in the previous answer - a different question,
   // answered confidently.
   const seenByPlanner = [];
-  const recordingPlanner = (plan) => ({
+  // followUp mirrors what the model declares. A planner that omits it is read as
+  // "not a follow-up", which is the safe default: the question is answered
+  // across everything the user can see rather than inside a stale result.
+  const recordingPlanner = (plan, followUp = false) => ({
     async plan(question, options) {
       seenByPlanner.push(options.context || null);
-      return { intent: "search", language: "English", message: null, plan };
+      return { intent: "search", language: "English", message: null, followUp, plan };
     },
   });
   const askWithContext = (question, planner, context) => worker.fetch(new Request(
@@ -2077,7 +2080,7 @@ for (const [parent, child] of [
   // The follow-up is handed those ids, and the model is expected to use them.
   const narrowed = await (await askWithContext(
     "which of these have high schedule risk?",
-    recordingPlanner({ ids: firstIds, risk: "schedule", riskLevel: "High", limit: 50 }),
+    recordingPlanner({ ids: firstIds, risk: "schedule", riskLevel: "High", limit: 50 }, true),
     { ids: firstIds, total: firstAnswer.total, description: firstAnswer.description },
   )).json();
   assert.deepEqual(seenByPlanner.at(-1).ids, firstIds,
@@ -2103,7 +2106,7 @@ for (const [parent, child] of [
       question: "and these?",
       context: { ids: [outsideId], total: 1, description: ["forged"] },
     }),
-  }), { ...env, ASSISTANT_PLANNER: recordingPlanner({ ids: [outsideId], limit: 50 }) }, {});
+  }), { ...env, ASSISTANT_PLANNER: recordingPlanner({ ids: [outsideId], limit: 50 }, true) }, {});
   const forgedBody = await forged.json();
   assert.equal(forgedBody.total, 0,
     "a forged context cannot reach a project outside the caller's scope");
@@ -2128,7 +2131,9 @@ for (const [parent, child] of [
     recordingPlanner({ search: "budget over 1", minAmount: 1, amountField: "approved_budget", limit: 50 }))).json();
   assert.equal(withJunkSearch.total, realTotal.total,
     "the unmatched search is dropped rather than emptying the result");
-  assert.match(withJunkSearch.description.join(" · "), /ignored .budget over 1./,
+  // The correction is shown to the reader; the filter list is not displayed at
+  // all any more, so the notice is where this has to appear.
+  assert.match((withJunkSearch.notices || []).join(" "), /No project matched .budget over 1./,
     "and the user is told it was dropped, rather than it happening silently");
   assert.ok(!("search" in withJunkSearch.plan), "the plan reported back no longer claims it");
 
@@ -2139,15 +2144,14 @@ for (const [parent, child] of [
     "SELECT name FROM projects WHERE archived_at IS NULL AND status = 'Active' LIMIT 1").get().name;
   const goodSearch = await (await askWithContext(`tell me about ${realName}`,
     recordingPlanner({ search: realName, status: "Active", limit: 50 }))).json();
-  assert.ok(!goodSearch.description.join(" ").includes("ignored"),
-    "a search that matches is never dropped");
+  assert.deepEqual(goodSearch.notices, [], "a search that matches is never dropped");
 
   // A question that is only a search is never widened: dropping it would answer
   // a different question rather than the one asked.
   const onlySearch = await (await askWithContext("find Nonexistent Project Name",
     recordingPlanner({ search: "Nonexistent Project Name Zzz", limit: 50 }))).json();
   assert.equal(onlySearch.total, 0, "a search-only question that matches nothing stays empty");
-  assert.ok(!onlySearch.description.join(" ").includes("ignored"));
+  assert.deepEqual(onlySearch.notices, []);
 
   console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
 }
@@ -2212,8 +2216,10 @@ for (const [parent, child] of [
   const thread = browser.byId("askThread");
   assert.match(thread.textContent, /which projects slipped more than 30 days\?/,
     "the question is echoed in the transcript");
-  assert.match(thread.textContent, /Slipped 30 days or more/,
-    "the filters that were applied are shown, so a misread question is visible");
+  // The filter list is deliberately not rendered: it was internal plan detail.
+  // What must still be visible is the answer itself and what it was drawn from.
+  assert.ok(!thread.textContent.includes("Slipped 30 days or more"),
+    "the internal filter list is not shown to the reader");
   assert.match(thread.textContent, /I found \d+ projects? matching your question/,
     "the answer states what it found in words, not only as a count");
   assert.match(thread.textContent, /AI Tracker/, "replies are attributed to the assistant");
