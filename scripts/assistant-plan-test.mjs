@@ -19,6 +19,7 @@ import {
   validatePlan, describePlan, planSchemaPrompt, planQueries, runPlan, availableUnits,
   PLAN_FIELDS, PLAN_LIMIT_MAX,
 } from "../worker/assistant-plan.js";
+import { restatesThePlan } from "../worker/assistant-api.js";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -202,6 +203,37 @@ await check("the generated schema lists the real units for this user", async () 
   const scoped = planSchemaPrompt({ units: await availableUnits(db, GAMING) });
   assert.match(scoped, /unit: "Gaming" \| "All"/);
   assert.ok(!scoped.includes("Patina"), "the schema must not name units out of scope");
+});
+
+// --- Restating the question is not a search ----------------------------------
+// The model puts the question into the search field - "high budget issue",
+// "over 100K budget" - which matches no project name and empties an otherwise
+// correct answer. Dropping that text is safe; dropping a real term is not, so
+// the two have to be told apart. Err towards keeping: a kept term gives an
+// honestly empty answer, a wrongly dropped one gives a confident wrong answer.
+
+await check("a search restating a numeric filter is recognised", () => {
+  assert.equal(restatesThePlan({ search: "over 100K budget", minAmount: 100000 }), true);
+  assert.equal(restatesThePlan({ search: "more than 30 days", minDelayDays: 30 }), true);
+  assert.equal(restatesThePlan({ search: "over $2m", minAmount: 2000000 }), true);
+});
+
+await check("a search made only of question words is recognised", () => {
+  for (const text of [
+    "high budget issue", "projects with budget problems", "show me high risk",
+    "which projects are delayed", "high schedule risk",
+  ]) {
+    assert.equal(restatesThePlan({ search: text }), true, `${text} names no record`);
+  }
+});
+
+await check("a real term is never mistaken for a restatement", () => {
+  for (const text of [
+    "asbestos", "Central City", "Mardi Gras", "CAPP-1042", "roof replacement",
+    "Yellowstone", "elevator", "Kolkowski",
+  ]) {
+    assert.equal(restatesThePlan({ search: text }), false, `${text} is something to look for`);
+  }
 });
 
 // --- Scope enforcement -------------------------------------------------------

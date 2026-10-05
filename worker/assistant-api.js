@@ -31,17 +31,33 @@ function refusalMessage(problems, units) {
 // question nobody asked, so the search stays and the answer is honestly empty.
 //
 // The signal is correspondence: a number in the text that a numeric field
-// already carries, or text made only of words naming the plan's own concepts.
+// already carries, or text made entirely of words that describe the plan rather
+// than name a record. One content word the list does not know - a venue, a
+// supplier, a material - is enough to keep the search, which is the side to err
+// on: keeping it yields an honestly empty answer, dropping it yields a confident
+// wrong one.
 const PLAN_WORDS = new Set([
+  // what the plan's own fields are called
   "project", "projects", "budget", "budgets", "risk", "risks", "high", "medium",
-  "low", "rated", "schedule", "cost", "costs", "over", "under", "above", "below",
-  "more", "less", "than", "at", "least", "most", "day", "days", "week", "weeks",
-  "month", "months", "slipped", "slip", "delayed", "late", "variance", "overrun",
-  "approved", "forecast", "anticipated", "final", "and", "or", "the", "with",
-  "of", "in", "is", "are", "k", "m", "usd", "dollars",
+  "low", "rated", "schedule", "scheduling", "cost", "costs", "variance",
+  "overrun", "approved", "forecast", "anticipated", "final", "turnover",
+  "status", "phase", "capital", "development", "unit", "units", "manager",
+  // the words people use for those same things
+  "issue", "issues", "problem", "problems", "trouble", "concern", "concerns",
+  "exposure", "slipped", "slip", "slipping", "delayed", "delay", "delays",
+  "late", "behind", "overbudget", "spend", "spending",
+  // comparisons and quantities
+  "over", "under", "above", "below", "more", "less", "than", "at", "least",
+  "most", "day", "days", "week", "weeks", "month", "months", "year", "years",
+  "k", "m", "usd", "dollars", "dollar",
+  // the shape of a question, which carries no meaning to search for
+  "give", "show", "list", "find", "get", "tell", "me", "us", "which", "what",
+  "that", "those", "these", "have", "has", "having", "with", "without", "and",
+  "or", "not", "the", "a", "an", "of", "in", "on", "is", "are", "any", "all",
+  "projects_with", "please",
 ]);
 
-function restatesThePlan(plan) {
+export function restatesThePlan(plan) {
   const text = String(plan.search).toLowerCase();
   const numbers = [plan.minAmount, plan.minVariance, plan.minDelayDays]
     .filter((value) => typeof value === "number");
