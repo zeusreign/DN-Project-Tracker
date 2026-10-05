@@ -2113,7 +2113,12 @@ for (const [parent, child] of [
     "the question is echoed in the transcript");
   assert.match(thread.textContent, /Slipped 30 days or more/,
     "the filters that were applied are shown, so a misread question is visible");
-  assert.match(thread.textContent, /projects? matched/);
+  assert.match(thread.textContent, /I found \d+ projects? matching your question/,
+    "the answer states what it found in words, not only as a count");
+  assert.match(thread.textContent, /AI Tracker/, "replies are attributed to the assistant");
+  assert.match(thread.textContent, /source records?/, "and say how many records stand behind them");
+  assert.ok(thread.querySelectorAll(".ask-result").length > 0,
+    "the results are listed in the answer itself, not only in the evidence panel");
   assert.equal(browser.byId("askInput").value, "", "the box is cleared ready for the next question");
 
   // The evidence panel carries the records behind the answer, and only ones this

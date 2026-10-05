@@ -118,6 +118,12 @@ button:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
 
 ${ENHANCED_STYLES}
 
+/* The AI mark, in the sidebar and beside every assistant reply. */
+.nav-icon-ai{background:linear-gradient(135deg,#0e8ea8,#14b8a6);color:#fff}
+.ai-spark{width:15px;height:15px;display:block;fill:currentColor}
+.ask-ai-mark{width:22px;height:22px;border-radius:6px;background:#e3f3f4;color:#00767e;
+  display:inline-flex;align-items:center;justify-content:center;flex:none}
+.ask-ai-mark .ai-spark{width:13px;height:13px}
 /* --- Ask the Tracker ------------------------------------------------------ */
 /* Follows the Ask the Tracker pilot: a conversation on the left and an evidence
    panel on the right, so every figure in an answer can be traced to the record
@@ -127,8 +133,9 @@ ${ENHANCED_STYLES}
 .ask-workspace{display:grid;grid-template-columns:minmax(390px,1.25fr) minmax(320px,1fr);
   gap:20px;min-height:520px;height:calc(100vh - 300px);max-height:950px}
 .ask-conversation{background:#fff;border:1px solid var(--ask-line);border-radius:10px;
-  display:flex;flex-direction:column;min-width:0;overflow:hidden;box-shadow:0 2px 4px #17334505}
-.ask-messages{flex:1;min-height:150px;overflow:auto;padding:25px 23px 8px;scroll-behavior:smooth}
+  display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;overflow:hidden;
+  box-shadow:0 2px 4px #17334505}
+.ask-messages{flex:1 1 0;min-height:0;overflow-y:auto;padding:25px 23px 8px;scroll-behavior:smooth}
 .ask-turn{margin-bottom:24px}
 .ask-label{display:flex;align-items:center;gap:8px;color:#265569;font-size:12px;
   font-weight:700;margin-bottom:9px}
@@ -141,7 +148,16 @@ ${ENHANCED_STYLES}
 .ask-pending{color:var(--ask-muted);font-style:italic;font-size:14px}
 .ask-chips{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}
 .ask-chip{padding:4px 8px;border-radius:4px;background:#eef4f6;color:#486577;font-size:11px;line-height:1.5}
-.ask-answer-count{color:#36596d;font-size:13px;font-weight:600;margin-top:8px}
+.ask-label-ai{letter-spacing:.8px;text-transform:uppercase;font-size:11px;color:#1f5a6b}
+.ask-results{margin:12px 0 0}
+.ask-result{padding:10px 0;border-bottom:1px solid #eef2f4}
+.ask-result:last-child{border-bottom:0}
+.ask-result-name{display:block;border:0;background:none;padding:0;text-align:left;cursor:pointer;
+  font-size:14px;font-weight:600;color:#00767e;line-height:1.4}
+.ask-result-name:hover{text-decoration:underline}
+.ask-result-meta{font-size:12px;color:#72848f;margin-top:3px}
+.ask-sources{margin-top:12px;padding-top:10px;border-top:1px solid var(--ask-line);
+  font-size:11px;color:#72848f}
 .ask-composer{margin:0 16px 10px;border:1px solid #b6d0d8;border-radius:9px;
   box-shadow:0 1px 4px #0a53600a;padding:10px 12px 8px;background:#fff}
 .ask-composer textarea{resize:none;border:0;background:transparent;width:100%;outline:none;
@@ -159,7 +175,7 @@ ${ENHANCED_STYLES}
   padding:7px 10px;font-size:12px;text-align:left;cursor:pointer}
 .ask-suggestion:hover{border-color:var(--ask-teal);color:var(--ask-teal)}
 .ask-evidence{display:flex;flex-direction:column;background:#fafcfd;border:1px solid var(--ask-line);
-  border-radius:10px;min-width:0;overflow:hidden}
+  border-radius:10px;min-width:0;min-height:0;height:100%;overflow:hidden}
 .ask-evidence-header{padding:20px 20px 17px;display:flex;justify-content:space-between;
   align-items:center;border-bottom:1px solid var(--ask-line);gap:10px}
 .ask-kicker{display:block;font-size:11px;letter-spacing:1.5px;font-weight:700;color:#627786}

@@ -12,7 +12,7 @@ export const PAGE = `<!doctype html>
     <nav class="nav">
       <button class="nav-btn principal" data-view="portfolio"><span class="nav-icon">PF</span><span><strong>Portfolio</strong></span></button>
       <button class="nav-btn principal active" data-view="projects"><span class="nav-icon">PR</span><span><strong>Projects</strong></span></button>
-      <button class="nav-btn" data-view="ask" id="askNav">Ask the Tracker</button><button class="nav-btn" data-view="development"><span class="nav-icon">DP</span><span>Development Pipeline</span></button>
+      <button class="nav-btn" data-view="ask" id="askNav"><span class="nav-icon nav-icon-ai"><svg class="ai-spark" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2.2l2.15 6.15 6.15 2.15-6.15 2.15L12 18.8l-2.15-6.15L3.7 10.5l6.15-2.15z"/><path d="M18.6 2.6l.78 2.22 2.22.78-2.22.78-.78 2.22-.78-2.22-2.22-.78 2.22-.78z" opacity=".65"/></svg></span><span><strong>AI Tracker</strong></span></button><button class="nav-btn" data-view="development"><span class="nav-icon">DP</span><span>Development Pipeline</span></button>
       <button class="nav-btn" data-view="cost"><span class="nav-icon">CC</span><span>Cost Control</span></button>
       <button class="nav-btn" data-view="risk"><span class="nav-icon">RR</span><span>Risk Register</span></button>
       <button class="nav-btn" data-view="admin" id="adminNav" hidden><span class="nav-icon">A</span><span>Admin</span></button>

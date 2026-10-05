@@ -849,6 +849,39 @@ function renderEvidence(answer){
   body.scrollTop=0;
 }
 
+var ASK_SPARK='<svg class="ai-spark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+  +'<path d="M12 2.2l2.15 6.15 6.15 2.15-6.15 2.15L12 18.8l-2.15-6.15L3.7 10.5l6.15-2.15z"/>'
+  +'<path d="M18.6 2.6l.78 2.22 2.22.78-2.22.78-.78 2.22-.78-2.22-2.22-.78 2.22-.78z" opacity=".65"/>'
+  +'</svg>';
+
+function askAiLabel(){
+  return '<div class="ask-label ask-label-ai"><span class="ask-ai-mark">'+ASK_SPARK+'</span>AI Tracker</div>';
+}
+
+// The results as the answer itself, not only as a count. A list the reader can
+// scan is what makes the figure checkable; the evidence panel then carries the
+// detail for whichever record they want to look at.
+function askResultListHtml(answer){
+  var rows=answer.rows||[];
+  if(!rows.length)return "";
+  var html='<div class="ask-results">'+rows.map(function(p){
+    var lead=p.section_name||p.venue||"";
+    var who=p.project_manager||p.development_lead||"";
+    var meta=[p.business_unit,p.status,who].filter(Boolean).map(esc).join(" · ");
+    return '<div class="ask-result">'
+      +'<button type="button" class="ask-result-name" data-ask-project="'+esc(String(p.id))+'">'
+      +(lead?esc(lead)+' · ':"")+esc(p.name)+'</button>'
+      +'<div class="ask-result-meta">'+meta+'</div>'
+      +'</div>';
+  }).join("")+'</div>';
+  var period=rows.map(function(p){return p.reporting_period}).filter(Boolean).sort().pop();
+  html+='<div class="ask-sources">'+esc(String(answer.total))+' source record'
+    +(answer.total===1?"":"s")
+    +(answer.truncated?' · showing the first '+esc(String(answer.returned)):"")
+    +(period?' · saved updates '+esc(dateText(period)):"")+'</div>';
+  return html;
+}
+
 function askTurnHtml(turn){
   var answer=turn.answer||{};
   var cls=turn.state==="error"?" is-error"
@@ -859,22 +892,28 @@ function askTurnHtml(turn){
   }else if(turn.state==="error"){
     body='<div class="ask-reply is-error">'+esc(turn.message||"That question could not be answered.")+'</div>';
   }else{
-    if(answer.message)body+='<div class="ask-reply'+cls+'">'+esc(answer.message)+'</div>';
     if(answer.description&&answer.description.length){
       body+='<div class="ask-chips">'+answer.description.map(function(part){
         return '<span class="ask-chip">'+esc(part)+'</span>';
       }).join("")+'</div>';
     }
-    if(answer.total!==undefined&&answer.rows){
-      body+='<div class="ask-answer-count">'+esc(String(answer.total))+' project'
-        +(answer.total===1?"":"s")+' matched'
-        +(answer.truncated?', showing the first '+esc(String(answer.returned)):"")+'</div>';
+    if(answer.message)body+='<div class="ask-reply'+cls+'">'+esc(answer.message)+'</div>';
+    if(answer.rows){
+      if(answer.total){
+        body+='<div class="ask-reply">I found <strong>'+esc(String(answer.total))+' project'
+          +(answer.total===1?"":"s")+'</strong> matching your question.</div>';
+        body+=askResultListHtml(answer);
+      }else if(!answer.message){
+        // The wording matters: an empty result has to read as "nothing matched
+        // these filters", which are listed above it, rather than as a failure.
+        body+='<div class="ask-reply">No matching records. Try a project name, venue, '
+          +'CAPP number, or a wider business unit.</div>';
+      }
     }
   }
   return '<div class="ask-turn">'
-    +'<div class="ask-user"><div class="ask-label">You</div>'
-    +'<div class="ask-bubble">'+esc(turn.question)+'</div></div>'
-    +'<div class="ask-label">Ask the Tracker</div>'+body
+    +'<div class="ask-user"><div class="ask-bubble">'+esc(turn.question)+'</div></div>'
+    +askAiLabel()+body
     +'</div>';
 }
 
@@ -884,7 +923,12 @@ function renderAsk(){
   thread.innerHTML=askTurns.length?askTurns.map(askTurnHtml).join("")
     :'<div class="ask-empty">Ask about the projects you can see — their budgets, schedules, '
      +'risk ratings and turnover dates. This assistant reads; it never changes a record.</div>';
-  thread.scrollTop=thread.scrollHeight;
+  var toBottom=function(){
+    if(typeof thread.scrollTo==="function")thread.scrollTo({top:thread.scrollHeight,behavior:"auto"});
+    else thread.scrollTop=thread.scrollHeight;
+  };
+  toBottom();
+  if(typeof requestAnimationFrame==="function")requestAnimationFrame(toBottom);
   var chips=byId("askSuggestions");
   if(chips){
     chips.innerHTML=ASK_SUGGESTIONS.map(function(text){
