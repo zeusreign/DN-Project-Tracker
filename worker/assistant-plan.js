@@ -51,7 +51,12 @@ const DAY_VARIANCE_SQL = `
 export const PLAN_FIELDS = {
   unit: {
     type: "string", max: 120,
-    describe: "Business unit name, or 'All'. Narrows within the signed-in user's access; it can never widen it.",
+    // The accepted values are the signed-in user's own business units, loaded
+    // from the database by availableUnits() and listed in the generated schema.
+    // A name outside that list is refused rather than turned into a query that
+    // matches nothing: an empty result reads as "there are none", which is a
+    // confident wrong answer to a misspelling.
+    describe: "Business unit name, or 'All' for every unit available to you. Must be one of the listed units.",
   },
   ids: {
     type: "intArray", maxItems: 50,
@@ -136,7 +141,7 @@ export const PLAN_LIMIT_MAX = PLAN_FIELDS.limit.max;
 // means the plan is refused; nothing is silently corrected, because a quietly
 // altered filter produces a confident answer to a question nobody asked.
 
-export function validatePlan(raw) {
+export function validatePlan(raw, options = {}) {
   const problems = [];
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     return { plan: null, problems: ["A plan object is required."] };
@@ -194,6 +199,21 @@ export function validatePlan(raw) {
   if (plan.risk && !plan.riskLevel) plan.riskLevel = "High";
   if (plan.minAmount !== undefined && !plan.amountField) plan.amountField = "anticipated_final_cost";
 
+  // Closed vocabulary for unit, when the caller supplied one. Case and spacing
+  // are corrected to the stored name — that is reading a value back from the
+  // database, not guessing at intent — but an unrecognised name is refused with
+  // its reason so the model can correct itself on the next turn.
+  //
+  // The list is already narrowed to the user's scope, so a unit they cannot see
+  // is indistinguishable from one that does not exist. That is the same choice
+  // the project routes make in returning 404 rather than 403 for an id outside
+  // scope: the error must not become a way to enumerate other units.
+  if (Array.isArray(options.units) && plan.unit && plan.unit !== "All") {
+    const match = options.units.find((name) => name.toLowerCase() === plan.unit.toLowerCase());
+    if (match) plan.unit = match;
+    else problems.push(`No business unit named “${plan.unit}”. Available: ${options.units.join(", ")}.`);
+  }
+
   return { plan: problems.length ? null : plan, problems };
 }
 
@@ -227,14 +247,34 @@ export function describePlan(plan = {}) {
 // Generated from PLAN_FIELDS so the model is never told about a field that does
 // not exist, and never left unaware of one that does.
 
-export function planSchemaPrompt() {
+export function planSchemaPrompt(options = {}) {
   const lines = Object.entries(PLAN_FIELDS).map(([key, spec]) => {
-    const type = spec.type === "enum" ? spec.values.map((v) => JSON.stringify(v)).join(" | ")
+    // unit is the one field whose values come from data rather than the
+    // declaration, so the model is shown the names this user actually has and
+    // cannot invent one.
+    const type = key === "unit" && Array.isArray(options.units)
+      ? [...options.units, "All"].map((v) => JSON.stringify(v)).join(" | ")
+      : spec.type === "enum" ? spec.values.map((v) => JSON.stringify(v)).join(" | ")
       : spec.type === "intArray" ? "integer[]"
       : spec.type;
     return `  ${key}: ${type}\n      ${spec.describe}`;
   });
   return `The plan object accepts only these fields. Omit any field you do not need.\n\n${lines.join("\n")}`;
+}
+
+// --- Available business units ------------------------------------------------
+// The vocabulary for the unit field, narrowed to what this user may see. Read
+// from business_units rather than hardcoded, so a unit added through the admin
+// screens is immediately askable about and a renamed one stops being offered.
+
+export async function availableUnits(db, scope) {
+  const result = await db.prepare(
+    "SELECT name FROM business_units ORDER BY sort_order, name"
+  ).bind().all();
+  const names = (result.results || []).map((row) => row.name);
+  if (!scope) return names;
+  const allowed = new Set(scope.map((name) => name.toLowerCase()));
+  return names.filter((name) => allowed.has(name.toLowerCase()));
 }
 
 // --- Execution ---------------------------------------------------------------

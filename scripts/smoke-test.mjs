@@ -1786,10 +1786,34 @@ for (const [parent, child] of [
   assert.equal(byId.total, 0, "an explicit id cannot reach outside the viewer's scope");
   assert.equal(byId.rows.length, 0);
 
+  // Naming a unit outside scope is refused rather than answered with an empty
+  // result: "0 projects" reads as "there are none", which is a confident wrong
+  // answer. The vocabulary handed to the validator is already scoped, so the
+  // refusal is indistinguishable from a misspelling and cannot be used to
+  // enumerate units — the same reasoning as 404-not-403 on project ids.
   const otherUnit = database.prepare(
     "SELECT name FROM business_units WHERE name <> 'Gaming' LIMIT 1").get().name;
-  const byUnit = await (await askAsViewer({ unit: otherUnit })).json();
-  assert.equal(byUnit.total, 0, "unit narrows within scope; it never replaces it");
+  const byUnitResponse = await askAsViewer({ unit: otherUnit });
+  assert.equal(byUnitResponse.status, 400, "a unit outside scope is refused, not silently empty");
+  const byUnit = await byUnitResponse.json();
+  assert.equal(byUnit.ok, false);
+  assert.match(byUnit.problems.join(" "), new RegExp(`No business unit named .${otherUnit}.`));
+  assert.ok(!byUnit.problems.join(" ").includes(otherUnit + ","),
+    "the refusal must not list units the viewer cannot see");
+
+  // The viewer's own unit still works, spelled in any case.
+  const lowercased = await (await askAsViewer({ unit: "gaming" })).json();
+  assert.equal(lowercased.ok, true);
+  assert.equal(lowercased.plan.unit, "Gaming", "the stored spelling is used");
+  assert.equal(lowercased.total, gamingOnly);
+
+  // And the published schema offers only the units this viewer has.
+  const viewerSchema = await (await worker.fetch(new Request(
+    "https://tracker.example/api/assistant/schema",
+    { headers: { cookie: viewerCookie } }), env, {})).json();
+  assert.deepEqual(viewerSchema.units, ["Gaming"]);
+  assert.ok(!viewerSchema.schema.includes(otherUnit),
+    "the schema must not name a unit outside the viewer's scope");
 
   // A local session still has to present its CSRF token, like every other write.
   const noCsrf = await worker.fetch(new Request("https://tracker.example/api/assistant/query", {
@@ -1803,7 +1827,13 @@ for (const [parent, child] of [
     "SELECT actor_email, details FROM audit_log WHERE action = 'assistant_query' ORDER BY id").all();
   // Five queries above were accepted and executed; the 401, the 400 refusal and
   // the 403 never reached the database, so they correctly leave no trace.
-  assert.equal(entries.length, 5, "one audit row per executed query, and none for a refused one");
+  // One row per query that actually ran: the wide read, the clamped read, the
+  // viewer's scoped read, the out-of-scope id read (which ran and matched
+  // nothing) and the lower-cased unit read. The 401, the two 400 refusals and
+  // the 403 never reached the database, so they correctly leave no trace.
+  const executed = ["wide", "clamped", "scoped", "out-of-scope id", "lower-cased unit"];
+  assert.equal(entries.length, executed.length,
+    `one audit row per executed query (${executed.join(", ")}), and none for a refused one`);
   assert.ok(entries.some((entry) => entry.actor_email === "assistant-scoped@example.invalid"));
   for (const entry of entries) {
     const details = JSON.parse(entry.details);

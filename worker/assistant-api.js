@@ -5,7 +5,7 @@
 // data, and the release scope is deliberately search/report only — creating or
 // editing records through conversation is not part of it.
 
-import { validatePlan, runPlan, describePlan, planSchemaPrompt, PLAN_LIMIT_MAX } from "./assistant-plan.js";
+import { validatePlan, runPlan, describePlan, planSchemaPrompt, availableUnits, PLAN_LIMIT_MAX } from "./assistant-plan.js";
 
 // A refused plan is reported with its reasons so the model can correct itself on
 // the next turn, rather than being silently coerced into something that would
@@ -19,7 +19,8 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
   // The plan vocabulary, for building the model's system prompt. Served rather
   // than duplicated client-side so the browser and the validator cannot drift.
   if (request.method === "GET" && url.pathname === "/api/assistant/schema") {
-    return json({ schema: planSchemaPrompt(), limitMax: PLAN_LIMIT_MAX });
+    const units = await availableUnits(env.DB, scope);
+    return json({ schema: planSchemaPrompt({ units }), units, limitMax: PLAN_LIMIT_MAX });
   }
 
   if (url.pathname === "/api/assistant/query") {
@@ -27,7 +28,11 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object" || Array.isArray(body)) return error("A query plan is required.");
 
-    const { plan, problems } = validatePlan(body.plan);
+    // The unit vocabulary is this user's own, so a unit outside their scope is
+    // refused the same way a misspelling is, and cannot be used to discover
+    // which other units exist.
+    const units = await availableUnits(env.DB, scope);
+    const { plan, problems } = validatePlan(body.plan, { units });
     if (!plan) return json({ ok: false, error: REFUSED, problems }, 400);
 
     const result = await runPlan(env.DB, plan, scope);

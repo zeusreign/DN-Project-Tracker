@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  validatePlan, describePlan, planSchemaPrompt, planQueries, runPlan,
+  validatePlan, describePlan, planSchemaPrompt, planQueries, runPlan, availableUnits,
   PLAN_FIELDS, PLAN_LIMIT_MAX,
 } from "../worker/assistant-plan.js";
 
@@ -144,6 +144,64 @@ await check("ids are capped", () => {
 await check("risk implies High, minAmount implies the forecast column", () => {
   assert.equal(validatePlan({ risk: "budget" }).plan.riskLevel, "High");
   assert.equal(validatePlan({ minAmount: 10 }).plan.amountField, "anticipated_final_cost");
+});
+
+// --- Unit vocabulary ---------------------------------------------------------
+// A unit name is checked against the units this user actually has. Without this
+// a misspelling validates, becomes b.name = 'Gamming', matches nothing, and the
+// assistant reports "0 projects" — a confident wrong answer, which is worse than
+// a refusal because nothing about an empty result signals failure.
+
+await check("availableUnits reads the real names and narrows them to scope", async () => {
+  assert.deepEqual(await availableUnits(db, null), ["Gaming", "Patina"]);
+  assert.deepEqual(await availableUnits(db, GAMING), ["Gaming"]);
+  assert.deepEqual(await availableUnits(db, []), []);
+});
+
+await check("a misspelled unit is refused, not turned into an empty result", async () => {
+  const units = await availableUnits(db, null);
+  const { plan, problems } = validatePlan({ unit: "Gamming" }, { units });
+  assert.equal(plan, null);
+  assert.match(problems.join(" "), /No business unit named .Gamming./);
+  assert.match(problems.join(" "), /Available: Gaming, Patina/);
+});
+
+await check("case and spacing are corrected to the stored name", async () => {
+  const units = await availableUnits(db, null);
+  assert.equal(validatePlan({ unit: "gaming" }, { units }).plan.unit, "Gaming");
+  assert.equal(validatePlan({ unit: "  PATINA  " }, { units }).plan.unit, "Patina");
+});
+
+await check("All stays valid and means every unit in scope", async () => {
+  const units = await availableUnits(db, GAMING);
+  assert.equal(validatePlan({ unit: "All" }, { units }).plan.unit, "All");
+});
+
+await check("a unit outside scope is refused like a misspelling, revealing nothing", async () => {
+  // The vocabulary handed to the validator is already scoped, so for a Gaming
+  // viewer "Patina" is simply not a unit. The refusal must not name it as one
+  // that exists elsewhere — the same reason project ids outside scope return 404
+  // rather than 403.
+  const units = await availableUnits(db, GAMING);
+  const { plan, problems } = validatePlan({ unit: "Patina" }, { units });
+  assert.equal(plan, null);
+  assert.match(problems.join(" "), /No business unit named .Patina./);
+  assert.ok(!problems.join(" ").includes("Available: Gaming, Patina"),
+    "a scoped user must not be shown units they cannot see");
+});
+
+await check("without a vocabulary the field is still only type-checked", async () => {
+  // Pure-function callers that have no database may omit units; the other
+  // fields keep working, and the unit check simply does not run.
+  assert.equal(validatePlan({ unit: "Anything" }).plan.unit, "Anything");
+});
+
+await check("the generated schema lists the real units for this user", async () => {
+  const wide = planSchemaPrompt({ units: await availableUnits(db, null) });
+  assert.match(wide, /unit: "Gaming" \| "Patina" \| "All"/);
+  const scoped = planSchemaPrompt({ units: await availableUnits(db, GAMING) });
+  assert.match(scoped, /unit: "Gaming" \| "All"/);
+  assert.ok(!scoped.includes("Patina"), "the schema must not name units out of scope");
 });
 
 // --- Scope enforcement -------------------------------------------------------
