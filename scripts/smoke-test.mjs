@@ -2183,6 +2183,34 @@ for (const [parent, child] of [
   assert.match(onlySearch.summary, /I found no projects mentioning/,
     "a search-only question that matches nothing says what it looked for");
 
+
+  // --- Voice session ---------------------------------------------------------
+  // The browser speaks to OpenAI directly, which is what WebRTC is for, but it
+  // never holds the account key and every tool call still comes back here.
+  const voiceCalls = [];
+  const voiceEnv = (fetchImpl) => ({ ...env, OPENAI_API_KEY: "sk-test-not-a-real-key", VOICE_FETCH: fetchImpl });
+
+  // Unconfigured environments say so rather than failing oddly.
+  const noKey = await worker.fetch(new Request("https://tracker.example/api/assistant/voice-session", {
+    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: "{}",
+  }), env, {});
+  assert.equal(noKey.status, 503, "a voice session without a key is a configuration message");
+
+  // A local session must present its CSRF token: minting a credential is not a
+  // read, and another origin must not be able to start a call as this user.
+  const voiceNoCsrf = await worker.fetch(new Request("https://tracker.example/api/assistant/voice-session", {
+    method: "POST", headers: { "content-type": "application/json", cookie: askerCookie }, body: "{}",
+  }), env, {});
+  assert.equal(voiceNoCsrf.status, 403, "voice is not exempt from CSRF");
+
+  // Anonymous callers never reach it.
+  const voiceAnon = await worker.fetch(new Request("https://tracker.example/api/assistant/voice-session", {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  }), { ...env, ALLOW_PLATFORM_AUTH: "false" }, {});
+  assert.equal(voiceAnon.status, 401);
+
+  console.log("Assistant voice session: configuration, CSRF and anonymous access covered.");
+
   console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
 }
 
@@ -2331,6 +2359,19 @@ for (const [parent, child] of [
   // left over from an earlier answer can never be read as this one's.
   assert.match(browser.text("askEvidenceTitle"), /slipped more than 30 days/,
     "the evidence panel says which question it is showing");
+
+  // The voice control is present and degrades honestly. The harness has no
+  // WebRTC and no microphone, which is exactly the condition a locked-down
+  // browser presents, so the path that matters here is the one that says so
+  // instead of failing silently.
+  assert.ok(browser.byId("askVoiceBtn"), "the pane offers a voice control");
+  assert.equal(browser.byId("askVoiceBtn").textContent, "Start voice");
+  await browser.fire("askVoiceBtn", "click").results;
+  await browser.settle();
+  assert.match(browser.text("askVoiceStatus"), /cannot open a voice session|Typing still works/,
+    "a browser without WebRTC is told so, and typing is still offered");
+  assert.equal(browser.byId("askVoiceBtn").textContent, "Start voice",
+    "and the control returns to its resting state rather than staying stuck");
 
   // Signing out must leave nothing behind: not the rendered transcript, and not
   // the stored one. A site office shares a browser.

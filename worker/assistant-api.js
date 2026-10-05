@@ -6,8 +6,8 @@
 // editing records through conversation is not part of it.
 
 import { validatePlan, runPlan, describePlan, planSchemaPrompt, availableUnits, summarisePlan, PLAN_LIMIT_MAX } from "./assistant-plan.js";
-import { plannerFor, PlannerError } from "./assistant-model.js";
-import { messageFor, scopeNote } from "./assistant-prompt.js";
+import { plannerFor, mintVoiceSession, PlannerError } from "./assistant-model.js";
+import { messageFor, scopeNote, voiceInstructions, VOICE_TOOLS } from "./assistant-prompt.js";
 
 // A refused plan is reported with its reasons so the model can correct itself on
 // the next turn, rather than being silently coerced into something that would
@@ -82,6 +82,27 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
   if (request.method === "GET" && url.pathname === "/api/assistant/schema") {
     const units = await availableUnits(env.DB, scope);
     return json({ schema: planSchemaPrompt({ units }), units, limitMax: PLAN_LIMIT_MAX });
+  }
+
+  // A short-lived credential for the browser's own realtime connection. The
+  // account key stays here; what the browser gets expires in about a minute, so
+  // this is called when a call starts and not when the page loads.
+  //
+  // It is a POST so the CSRF gate above applies: minting a credential is not a
+  // read, and a page on another origin must not be able to start a call with
+  // this user's session.
+  if (url.pathname === "/api/assistant/voice-session") {
+    if (request.method !== "POST") return error("Method not allowed.", 405);
+    const units = await availableUnits(env.DB, scope);
+    try {
+      const session = await mintVoiceSession(env, {
+        instructions: voiceInstructions({ units, name: user.name || user.email }),
+      });
+      return json({ ...session, tools: VOICE_TOOLS, units });
+    } catch (problem) {
+      if (problem instanceof PlannerError) return error(problem.message, problem.status);
+      throw problem;
+    }
   }
 
   if (url.pathname === "/api/assistant/query") {

@@ -129,6 +129,7 @@ function clearAccountData(){
   // budgets, this runs on shared machines, and sessionStorage outlives a sign-out
   // unless something removes it.
   askForget();
+  if(voice.state!=="off")stopVoice("");
   var askRecord=byId("askRecordDialog");if(askRecord&&askRecord.open)askRecord.close();
   ACCOUNT_HTML.forEach(function(id){var el=byId(id);if(el)el.innerHTML=""});
   ACCOUNT_TEXT.forEach(function(id){var el=byId(id);if(el)el.textContent=""});
@@ -979,6 +980,143 @@ function openAskRecord(id){
   byId("askRecordDialog").showModal();
 }
 
+// --- Voice -------------------------------------------------------------------
+// The browser opens its own realtime connection to OpenAI, because audio has to
+// go straight there to stay in step with speech. What it holds is a credential
+// this worker minted that expires in about a minute; the account key never
+// leaves the server.
+//
+// The model cannot read the database. When it wants data it calls one tool,
+// ask_tracker, with a question in plain words, and the browser passes that to
+// /api/assistant/ask - the same endpoint typing uses, with the same session
+// cookie, the same planner and the same scope. Speaking therefore reaches
+// exactly what typing reaches, and nothing more.
+var voice={state:"off",pc:null,mic:null,channel:null,audio:null};
+
+function setVoiceState(next,detail){
+  voice.state=next;
+  var button=byId("askVoiceBtn");
+  if(button){
+    button.dataset.state=next;
+    button.textContent=next==="live"?"End call":next==="connecting"?"Connecting…":"Start voice";
+    button.classList.toggle("is-live",next==="live");
+  }
+  var status=byId("askVoiceStatus");
+  if(status)status.textContent=detail||(next==="live"?"Listening. Speak when ready."
+    :next==="connecting"?"Opening a voice session…":"");
+}
+
+function stopVoice(detail){
+  if(voice.channel){try{voice.channel.close()}catch(e){}}
+  if(voice.pc){try{voice.pc.close()}catch(e){}}
+  if(voice.mic){voice.mic.getTracks().forEach(function(track){try{track.stop()}catch(e){}})}
+  if(voice.audio){try{voice.audio.srcObject=null}catch(e){}}
+  voice.pc=null;voice.mic=null;voice.channel=null;
+  setVoiceState("off",detail||"");
+}
+
+// A spoken question is answered by the same endpoint a typed one is, and lands
+// in the same transcript, so the two are one conversation rather than two.
+async function voiceAskTracker(question){
+  var turn={question:question,state:"pending",answer:null,spoken:true};
+  askTurns.push(turn);
+  renderAsk();
+  try{
+    var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify({question:question})});
+    turn.state="done";turn.answer=answer;
+    askSave();renderAsk();
+    return answer;
+  }catch(error){
+    turn.state="error";turn.message=error&&error.message?error.message:"That question could not be answered.";
+    askSave();renderAsk();
+    return {ok:false,error:turn.message};
+  }
+}
+
+// What the model is given back. The rows are already on screen, so this is kept
+// short: a long list spoken aloud is worse than a count and a few names.
+function voiceToolResult(answer){
+  if(!answer||answer.ok===false)return {error:answer&&answer.error?answer.error:"The lookup failed."};
+  if(!answer.rows||!answer.rows.length){
+    return {summary:answer.summary||answer.message||"Nothing matched.",total:answer.total||0,projects:[]};
+  }
+  return {
+    summary:answer.summary,
+    total:answer.total,
+    projects:answer.rows.slice(0,8).map(function(p){
+      return {name:p.name,business_unit:p.business_unit,status:p.status,
+        days:p.duration_change_days,variance:p.forecast_variance};
+    })
+  };
+}
+
+function wireVoiceChannel(channel,session){
+  channel.addEventListener("open",function(){
+    channel.send(JSON.stringify({type:"session.update",session:{tools:session.tools,tool_choice:"auto"}}));
+    setVoiceState("live");
+  });
+  channel.addEventListener("message",async function(event){
+    var message;
+    try{message=JSON.parse(event.data)}catch(e){return}
+    if(message.type==="response.function_call_arguments.done"&&message.name==="ask_tracker"){
+      var args={};
+      try{args=JSON.parse(message.arguments||"{}")}catch(e){}
+      var answer=await voiceAskTracker(String(args.question||"").trim()||"show me the projects");
+      channel.send(JSON.stringify({type:"conversation.item.create",item:{
+        type:"function_call_output",call_id:message.call_id,
+        output:JSON.stringify(voiceToolResult(answer))
+      }}));
+      channel.send(JSON.stringify({type:"response.create"}));
+    }
+    if(message.type==="error"){
+      stopVoice("The voice session ended unexpectedly. Start it again to carry on.");
+    }
+  });
+}
+
+async function startVoice(){
+  if(voice.state!=="off")return stopVoice("Call ended.");
+  if(!navigator.mediaDevices||!window.RTCPeerConnection){
+    return setVoiceState("off","This browser cannot open a voice session. Typing still works.");
+  }
+  setVoiceState("connecting");
+  var session;
+  try{
+    session=await api("/api/assistant/voice-session",{method:"POST",body:"{}"});
+  }catch(error){
+    return setVoiceState("off",error&&error.message?error.message:"A voice session could not be started.");
+  }
+  try{
+    voice.mic=await navigator.mediaDevices.getUserMedia({audio:true});
+  }catch(e){
+    return setVoiceState("off","The microphone is not available. Check the browser's permission for this site.");
+  }
+  try{
+    var pc=new RTCPeerConnection();
+    voice.pc=pc;
+    var audio=byId("askVoiceAudio");
+    voice.audio=audio;
+    pc.ontrack=function(event){if(audio)audio.srcObject=event.streams[0]};
+    voice.mic.getTracks().forEach(function(track){pc.addTrack(track,voice.mic)});
+    var channel=pc.createDataChannel("oai-events");
+    voice.channel=channel;
+    wireVoiceChannel(channel,session);
+    var offer=await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    // The browser exchanges SDP with OpenAI directly, holding only the
+    // short-lived credential minted above.
+    var reply=await fetch("https://api.openai.com/v1/realtime/calls?model="+encodeURIComponent(session.model),{
+      method:"POST",
+      headers:{authorization:"Bearer "+session.clientSecret,"content-type":"application/sdp"},
+      body:offer.sdp
+    });
+    if(!reply.ok)throw new Error("The voice service refused the connection.");
+    await pc.setRemoteDescription({type:"answer",sdp:await reply.text()});
+  }catch(error){
+    stopVoice(error&&error.message?error.message:"The voice session could not be opened.");
+  }
+}
+
 function renderAsk(){
   var thread=byId("askThread");
   if(!thread)return;
@@ -1100,5 +1238,6 @@ document.addEventListener("click",function(event){
   var chip=event.target.closest?event.target.closest(".ask-suggestion"):null;
   if(chip){submitAsk(chip.textContent);return}
   if(event.target&&event.target.id==="askClear"){askTurns=[];askSave();renderAsk()}
+  if(event.target&&event.target.id==="askVoiceBtn"){startVoice()}
 });
 `;

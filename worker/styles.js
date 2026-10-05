@@ -181,6 +181,10 @@ ${ENHANCED_STYLES}
 .ask-send[disabled]{opacity:.55;cursor:default}
 .ask-btn{background:#fff;color:#284e63;border:1px solid #cbd9e1;padding:8px 13px;
   border-radius:6px;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
+.ask-voice-status{padding:0 20px 8px;font-size:12px;color:#586c7a;min-height:0}
+.ask-btn[data-state="connecting"]{opacity:.7}
+.ask-btn.is-live{background:#9a3e2b;border-color:#9a3e2b;color:#fff}
+#askVoiceAudio{display:none}
 .ask-suggestions{display:flex;gap:7px;flex-wrap:wrap;padding:10px 20px 12px;border-top:1px solid #f0f3f5}
 .ask-suggestion{border:1px solid #d9e4e9;background:#fff;color:#246174;border-radius:6px;
   padding:7px 10px;font-size:12px;text-align:left;cursor:pointer}

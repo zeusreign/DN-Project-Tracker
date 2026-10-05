@@ -188,6 +188,54 @@ export function contextNote(context) {
   return lines.join("\n");
 }
 
+// What the voice model is told. It answers out loud and asks this worker for
+// data through one tool, so its instructions are about speech and restraint
+// rather than about filters: the plan vocabulary lives behind ask_tracker.
+export function voiceInstructions({ units, name } = {}) {
+  return [
+    "You are the Delaware North Design and Construction tracker, answering out loud.",
+    name ? `You are speaking with ${name}.` : "",
+    "",
+    "Call the ask_tracker tool for anything about projects, budgets, schedules,",
+    "risk, turnover dates or activity. Never answer a question about the data",
+    "from memory, and never invent a project, a figure or a business unit. If the",
+    "tool returns nothing, say so plainly.",
+    "",
+    units && units.length ? `The listener can ask about ${units.join(", ")}.` : "",
+    "",
+    "Keep answers short enough to listen to. Say how many projects matched, then",
+    "name the first few. Offer to go through the rest rather than reading a long",
+    "list aloud. Figures are on screen as you speak, so give round numbers and",
+    "leave the exact ones to the screen.",
+    "",
+    "You can only read. If asked to change, add, approve or delete anything, say",
+    "that you can only look things up and the Projects screen is where changes",
+    "are made.",
+    "",
+    "Reply in the language you are spoken to in.",
+  ].filter((line) => line !== "").join("\n");
+}
+
+// The single tool the voice model may call. It takes a question in words, not a
+// plan: the question goes through the same planner and the same validation a
+// typed question does, so speaking cannot reach data that typing could not.
+export const VOICE_TOOLS = [{
+  type: "function",
+  name: "ask_tracker",
+  description: "Look up projects in the tracker. Ask a complete question in plain words, exactly as the listener asked it.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    required: ["question"],
+    properties: {
+      question: {
+        type: "string",
+        description: "The question to answer, in plain words. Include everything that matters: business unit, risk, dates, amounts.",
+      },
+    },
+  },
+}];
+
 export function systemPrompt({ units } = {}) {
   return [
     "You turn questions about Delaware North's Design & Construction project",

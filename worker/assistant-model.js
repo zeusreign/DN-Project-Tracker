@@ -10,7 +10,14 @@
 import { systemPrompt, planResponseSchema, compactPlan, contextNote, historyNote, INTENTS } from "./assistant-prompt.js";
 
 export const DEFAULT_PLANNER_MODEL = "gpt-4o-mini";
+// Voice and planning are different models and must not be conflated: this one
+// speaks, gpt-4o-mini turns a question into a plan.
+export const DEFAULT_VOICE_MODEL = "gpt-realtime-2.1-mini";
 const ENDPOINT = "https://api.openai.com/v1/responses";
+// Ephemeral credentials for the browser. The real key never leaves the worker;
+// what the browser receives expires about a minute after it is issued, which is
+// why this is called at connect time and not when the page loads.
+const CLIENT_SECRETS = "https://api.openai.com/v1/realtime/client_secrets";
 
 export class PlannerError extends Error {
   constructor(message, status = 502) {
@@ -104,6 +111,46 @@ export function openAiPlanner({ apiKey, model = DEFAULT_PLANNER_MODEL, fetchImpl
         },
       };
     },
+  };
+}
+
+// Mints the short-lived credential the browser uses to open its own realtime
+// connection. The browser talks to OpenAI directly for audio - that is what
+// WebRTC is for - but it never holds the account key, and every tool call the
+// model makes comes back through this worker, where the session cookie and the
+// business-unit scope still decide what it can see.
+export async function mintVoiceSession(env, { instructions, model, fetchImpl } = {}) {
+  if (!env.OPENAI_API_KEY) throw new PlannerError("The assistant is not configured on this environment.", 503);
+  const call = fetchImpl || fetch;
+  const response = await call(CLIENT_SECRETS, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      session: {
+        type: "realtime",
+        model: model || env.ASSISTANT_VOICE_MODEL || DEFAULT_VOICE_MODEL,
+        instructions,
+        audio: { output: { voice: "alloy" } },
+      },
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    console.log(`assistant voice session failed: ${response.status} ${detail.slice(0, 300)}`);
+    throw new PlannerError(
+      response.status === 401 ? "The assistant's API key was rejected."
+        : response.status === 429 ? "The assistant is rate limited. Try again shortly."
+        : "A voice session could not be started.",
+      response.status === 401 ? 503 : 502,
+    );
+  }
+  const body = await response.json();
+  const secret = body.value || body.client_secret?.value;
+  if (!secret) throw new PlannerError("A voice session could not be started.");
+  return {
+    clientSecret: secret,
+    expiresAt: body.expires_at || body.client_secret?.expires_at || null,
+    model: body.session?.model || model || env.ASSISTANT_VOICE_MODEL || DEFAULT_VOICE_MODEL,
   };
 }
 
