@@ -15,7 +15,7 @@
 // marked where it happens.
 
 import {
-  validatePlan, runPlan, describePlan, planSchemaPrompt, summarisePlan, PLAN_LIMIT_MAX,
+  validatePlan, runPlan, describePlan, planSchemaPrompt, summarisePlan, planQueries, PLAN_LIMIT_MAX,
 } from "./assistant-plan.js";
 import { legacyPlannerFor } from "./assistant-plan-model.js";
 import { PlannerError } from "../assistant-model.js";
@@ -159,7 +159,7 @@ export async function legacyPlanRoutes(request, env, user, scope, helpers, share
       // instead of producing a confident answer to something else.
       description: result.description,
       plan,
-      debug: debugFor(env, { plan, scope, result }),
+      debug: debugFor(env, { plan, scope, result, planQueries }),
     });
   }
 
@@ -350,7 +350,7 @@ export async function legacyPlanRoutes(request, env, user, scope, helpers, share
       // not match what was asked.
       summary: summarisePlan(plan, result.total),
       plan,
-      debug: debugFor(env, { plan, scope, result, outcome, question }),
+      debug: debugFor(env, { plan, scope, result, outcome, question, planQueries }),
     });
   }
 

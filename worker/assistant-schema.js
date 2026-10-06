@@ -164,3 +164,209 @@ What the tracker's figures mean:
 - The size of a budget and the size of an overrun are different questions and
   must never be swapped: "a budget over $50k" is the approved budget, "over
   budget by $50k" is the variance.`;
+
+// =============================================================================
+// The query surface the SQL generator sees, and the scoped views it runs against
+// =============================================================================
+// Phase 3. Everything above is shared with the legacy planner; everything below
+// belongs to the SQL engine.
+//
+// The model writes SQL against five table names. Those names are not the real
+// tables: at execution time each one is bound to a common table expression that
+// has already applied this reader's business-unit scope, dropped soft-deleted
+// rows, and replaced the stale stored columns with the computed ones. SQLite
+// resolves a WITH name ahead of a real table, so every reference the model can
+// write - in a join, a subquery, a UNION branch, an EXISTS, or a CTE of its own
+// - resolves to the scoped view. Permission enforcement is therefore structural
+// rather than a clause we have to find somewhere in the model's text.
+//
+// The one escape is schema qualification: main.projects would reach the real
+// table. assistant-sql.js rejects a qualified table reference outright.
+
+// What the model may name. A column absent here is absent from the view as
+// well, so naming it is a SQL error rather than a leak - but the validator
+// rejects it first, with something a reader can act on.
+export const QUERY_COLUMNS = {
+  projects: [
+    "id", "business_unit", "venue", "section_name", "name", "project_type",
+    "capp_number", "initiative_number", "project_manager", "development_lead",
+    "status", "phase", "scope_description", "current_update", "previous_update",
+    "budget_risk", "schedule_risk", "precon_capp", "construction_capp", "add_capp",
+    "approved_budget", "anticipated_final_cost", "forecast_variance",
+    "original_start_date", "current_start_date",
+    "original_turnover_date", "current_turnover_date", "duration_change_days",
+    "reporting_period", "updated_at", "source_sort_order",
+  ],
+  business_units: ["id", "name", "sort_order"],
+  project_updates: [
+    "id", "project_id", "reporting_period", "current_summary", "previous_summary",
+    "author_name", "created_at",
+  ],
+  project_photos: [
+    "id", "project_id", "kind", "reporting_period", "caption", "date_taken",
+    "taken_by", "area", "category", "include_in_report", "notes", "photo_number", "created_at",
+  ],
+  development_details: [
+    "project_id", "request_date", "requestor", "deliverable_due_date", "consultants",
+    "food_service_design", "design_capp", "subsidiary_expense_total",
+    "original_estimate", "original_estimate_date", "current_estimate", "current_estimate_date",
+  ],
+};
+
+export const QUERY_TABLES = Object.keys(QUERY_COLUMNS);
+
+// Columns that exist in an approved table but must never be read. Credentials
+// and session material are in tables the model cannot name at all; these are
+// the ones sitting beside data it can. object_key is how a photograph is
+// fetched from R2, and the route that serves it checks who is asking.
+export const FORBIDDEN_COLUMNS = [
+  "password_hash", "password_salt", "token_hash", "csrf_token", "reset_token",
+  "must_change_password", "object_key", "actor_email", "author_email", "author_id",
+  "promoted_by", "source_key", "source_sheet", "business_unit_id", "archived_at", "deleted_at",
+];
+
+// The scoped views, as a WITH prefix. Returns the SQL and its bindings, which
+// come first in the final statement because the prefix does.
+//
+// scope === null means unrestricted, and the views then carry no unit filter -
+// but they still drop archived projects, still hide the forbidden columns, and
+// still compute the derived figures, because none of that is about permission.
+export function scopedViews(scope) {
+  const unit = scopePredicate(scope);
+  const where = unit && unit.sql !== "1 = 0" ? ` AND ${unit.sql}` : (unit ? " AND 1 = 0" : "");
+  const bindings = unit && unit.sql !== "1 = 0" ? unit.bindings : [];
+  // Repeated for each child view, which each need their own copy of the filter.
+  const liveProjects = `SELECT p2.id FROM main.projects p2
+      JOIN main.business_units b2 ON b2.id = p2.business_unit_id
+      WHERE p2.archived_at IS NULL${where.replace(/\bb\.name\b/g, "b2.name")}`;
+  const child = (table, columns, extra = "") => ({
+    sql: `${table} AS (
+    SELECT ${columns}
+    FROM main.${table} c
+    WHERE c.project_id IN (${liveProjects})${extra}
+  )`,
+    bindings,
+  });
+
+  const views = [
+    {
+      sql: `projects AS (
+    SELECT p.id, b.name AS business_unit, p.venue, p.section_name, p.name, p.project_type,
+      p.capp_number, p.initiative_number, p.project_manager, p.development_lead,
+      p.status, p.phase, p.scope_description, p.current_update, p.previous_update,
+      p.budget_risk, p.schedule_risk, p.precon_capp, p.construction_capp, p.add_capp,
+      p.approved_budget, p.anticipated_final_cost,
+      ${FORECAST_VARIANCE_SQL} AS forecast_variance,
+      p.original_start_date, p.current_start_date,
+      p.original_turnover_date, p.current_turnover_date,
+      -- Computed, shadowing the stored column of the same name, which is stale
+      -- on 24 production rows. The model cannot reach the stored one.
+      ${DAY_VARIANCE_SQL} AS duration_change_days,
+      p.reporting_period, p.updated_at, p.source_sort_order
+    FROM main.projects p
+    JOIN main.business_units b ON b.id = p.business_unit_id
+    WHERE ${LIVE_PROJECT_SQL}${where}
+  )`,
+      bindings,
+    },
+    {
+      sql: `business_units AS (
+    SELECT b.id, b.name, b.sort_order FROM main.business_units b
+    WHERE 1 = 1${where}
+  )`,
+      bindings,
+    },
+    child("project_updates",
+      "c.id, c.project_id, c.reporting_period, c.current_summary, c.previous_summary, c.author_name, c.created_at"),
+    child("project_photos",
+      "c.id, c.project_id, c.kind, c.reporting_period, c.caption, c.date_taken, c.taken_by, "
+      + "c.area, c.category, c.include_in_report, c.notes, c.photo_number, c.created_at",
+      ` AND c.${LIVE_PHOTO_SQL.replace("deleted_at", "deleted_at")}`),
+    child("development_details",
+      "c.project_id, c.request_date, c.requestor, c.deliverable_due_date, c.consultants, "
+      + "c.food_service_design, c.design_capp, c.subsidiary_expense_total, "
+      + "c.original_estimate, c.original_estimate_date, c.current_estimate, c.current_estimate_date"),
+  ];
+  return {
+    sql: "WITH " + views.map((v) => v.sql).join(",\n  "),
+    bindings: views.flatMap((v) => v.bindings),
+  };
+}
+
+// What the model is told about the data. Written out rather than generated from
+// the column lists, because a column name is not a meaning: "duration_change_days
+// is positive when a project slipped" is the part that stops a wrong answer.
+export function schemaPrompt({ units, today, role } = {}) {
+  return `The database is SQLite (Cloudflare D1). You may read these five tables and no others.
+Every one has already been filtered to what this reader is allowed to see, so do
+not write any permission condition yourself.
+
+projects - one row per project, archived projects already excluded
+  id                     integer, the project's key
+  business_unit          text, the owning business unit's name${units && units.length ? ` (one of: ${units.join(", ")})` : ""}
+  name                   text, the project's title
+  venue                  text, the property or site
+  section_name           text, the area within the venue
+  project_type           text: 'Capital' or 'Development'
+  capp_number            text, capital appropriation number; Capital projects have one
+  initiative_number      text, Development projects have one instead
+  project_manager        text, may be null
+  development_lead       text, the equivalent on Development projects; may be null
+  status                 text: 'Active', 'On Hold', 'Complete', 'Closeout', or null
+  phase                  text, free text such as 'Construction', 'Design'
+  scope_description      text, what the project covers
+  current_update         text, the latest saved activity update
+  previous_update        text, the one before it
+  budget_risk            text: 'High', 'Medium', 'Low' or 'Not Rated'
+  schedule_risk          text: same four values
+  approved_budget        real dollars, null when not yet recorded
+  anticipated_final_cost real dollars, the forecast; null when not recorded
+  forecast_variance      real, anticipated_final_cost - approved_budget, already
+                         computed. Positive means over budget. Null when either
+                         side is missing, so a project with no figures is never
+                         reported as on budget. Use this rather than subtracting.
+  precon_capp            real, pre-construction appropriation
+  construction_capp      real, construction appropriation
+  add_capp               real, additional appropriation
+  original_start_date    text 'YYYY-MM-DD', may be null
+  current_start_date     text 'YYYY-MM-DD', may be null
+  original_turnover_date text 'YYYY-MM-DD', the handover date first committed to
+  current_turnover_date  text 'YYYY-MM-DD', the handover date now expected
+  duration_change_days   integer, current_turnover_date - original_turnover_date in
+                         whole days, already computed. Positive means the project
+                         has slipped later. Null when either date is missing. Use
+                         this rather than subtracting the dates yourself.
+  reporting_period       text 'YYYY-MM-DD', the reporting cycle this row belongs to
+  updated_at             text timestamp, when the row was last written
+  source_sort_order      integer, the Tracker's own report order
+
+business_units - the units this reader can see
+  id, name, sort_order
+
+project_updates - the saved activity updates, many per project
+  id, project_id (-> projects.id), reporting_period 'YYYY-MM-DD',
+  current_summary (the update text), previous_summary, author_name, created_at
+  A project's own current_update column repeats its most recent entry, so a
+  question about "the latest update" can usually be answered from projects alone.
+
+project_photos - photographs, many per project, deleted ones already excluded
+  id, project_id (-> projects.id), kind, reporting_period, caption, date_taken,
+  taken_by, area, category, include_in_report, notes, photo_number, created_at
+  There may be no photographs at all. "No photos" is a real answer.
+
+development_details - extra detail for Development projects, at most one row per project
+  project_id (-> projects.id), request_date, requestor, deliverable_due_date,
+  consultants, food_service_design, design_capp, subsidiary_expense_total,
+  original_estimate, original_estimate_date, current_estimate, current_estimate_date
+
+Relationships: project_updates, project_photos and development_details each join
+to projects on project_id. projects.business_unit is already the unit's name, so
+you do not need to join business_units to filter or group by unit.
+
+Dates are plain 'YYYY-MM-DD' text and compare correctly with < > BETWEEN. Today
+is ${today}. Work out any relative period from that date, never from anything else.
+
+There is no table of people, roles or permissions, no contractor or vendor table,
+no approvals table, and no change log. A question that needs one of those cannot
+be answered from this database.${role ? `\n\nThe reader's role is ${role}. It does not change what the SQL may read.` : ""}`;
+}

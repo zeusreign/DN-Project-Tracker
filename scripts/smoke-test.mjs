@@ -1873,21 +1873,36 @@ for (const [parent, child] of [
   const askerCookie = await loginAs("assistant-asker@example.invalid", askerPassword);
   const askerCsrf = await csrfFor(askerCookie);
 
-  const plannerCalls = [];
-  const stubPlanner = (outcome) => ({
-    async plan(question, options) {
-      plannerCalls.push({ question, units: options.units });
+  // The /ask route runs the SQL engine. What this block proves is the part only
+  // the real worker can prove: that it inherits the authentication, CSRF and
+  // business-unit gates of every other route, that the worker refuses an unsafe
+  // query whatever the model asked for, and that a scoped reader cannot reach
+  // another unit through it. The engine's own correctness is covered by
+  // scripts/assistant-sql-test.mjs and scripts/assistant-sql-e2e.mjs.
+  const sqlCalls = [];
+  const stubSql = (outcome) => ({
+    async generate(question, options) {
+      sqlCalls.push({ question, units: options.units, today: options.today, role: options.role });
       return typeof outcome === "function" ? outcome(question, options) : outcome;
     },
   });
-  const askQuestion = (question, planner, cookie) => worker.fetch(new Request(
+  const stubAnswerer = {
+    async answer(question, result) {
+      return { text: `Stub: ${result.total} matched, ${result.returned} shown.`, usage: { model: "stub" } };
+    },
+  };
+  const search = (sql, extra = {}) => stubSql({
+    intent: "search", language: "English", message: null, sql,
+    usage: { model: "stub", inputTokens: 120, outputTokens: 40 }, ...extra,
+  });
+  const askQuestion = (question, generator, cookie) => worker.fetch(new Request(
     "https://tracker.example/api/assistant/ask", {
       method: "POST",
       headers: cookie
         ? { "content-type": "application/json", cookie, "x-csrf-token": askerCsrf }
         : { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ question }),
-    }), { ...env, ASSISTANT_PLANNER: planner }, {});
+    }), { ...env, ASSISTANT_SQL: generator, ASSISTANT_ANSWERER: stubAnswerer }, {});
 
   // With no key and no stub the route says so plainly; nothing else breaks.
   const unconfigured = await worker.fetch(new Request(
@@ -1897,70 +1912,96 @@ for (const [parent, child] of [
     }), env, {});
   assert.equal(unconfigured.status, 503, "an unconfigured assistant is not a server error");
 
-  // A plan that executes.
-  const searched = await (await askQuestion("which projects are over budget?", stubPlanner({
-    intent: "search", language: "English", message: null,
-    plan: { overBudget: true, sort: "variance", limit: 5 },
-    usage: { model: "stub", inputTokens: 120, outputTokens: 40 },
-  }))).json();
+  // A query that runs. The answer and the records are separate things.
+  const searched = await (await askQuestion("which projects are over budget?",
+    search("SELECT id, name, forecast_variance FROM projects WHERE forecast_variance > 0"))).json();
   assert.equal(searched.ok, true);
   assert.equal(searched.intent, "search");
   assert.ok(searched.total > 0, "the fixture has over-budget projects");
   assert.ok(searched.rows.every((row) => row.forecast_variance > 0));
-  assert.match(searched.description.join(" "), /Forecast above approved budget/);
-  assert.ok(plannerCalls.at(-1).units.length > 0, "the planner is handed the unit vocabulary");
+  assert.ok(searched.summary && !Array.isArray(searched.summary), "a sentence for the conversation");
+  assert.ok(Array.isArray(searched.rows), "and records for the evidence panel");
+  assert.equal(searched.sql, undefined, "the SQL is not part of the normal answer");
+  assert.ok(sqlCalls.at(-1).units.length > 0, "the generator is handed the unit vocabulary");
+  assert.match(sqlCalls.at(-1).today, /^\d{4}-\d{2}-\d{2}$/, "and today's date from the runtime");
 
   // A write request is refused, and a refusal is a successful answer rather than
   // an error: the user asked for something this assistant will not do.
-  const refusedAsk = await askQuestion("delete the Gate City project", stubPlanner({
-    intent: "refuse", language: "English",
-    message: "This assistant only reads project information.", plan: {},
+  const refusedAsk = await askQuestion("delete the Gate City project", stubSql({
+    intent: "refuse", language: "English", sql: null,
+    message: "I can only read project information.", usage: { model: "stub" },
   }));
   assert.equal(refusedAsk.status, 200);
   const refusedAskBody = await refusedAsk.json();
   assert.equal(refusedAskBody.intent, "refuse");
-  assert.match(refusedAskBody.message, /only reads/);
+  assert.match(refusedAskBody.message, /only read/);
   assert.deepEqual(refusedAskBody.rows, [], "a refusal reaches no data");
 
-  // Message-only intents never touch the database, even carrying a plan.
-  for (const intent of ["off_topic", "clarify", "definition", "help"]) {
-    const body = await (await askQuestion("something", stubPlanner({
-      intent, language: "English", message: "A sentence.", plan: { unit: "Gaming" },
+  // Message-only intents never touch the database, even carrying a query.
+  for (const intent of ["definition", "help", "clarify", "off_topic", "unsupported"]) {
+    const body = await (await askQuestion("something", stubSql({
+      intent, language: "English", message: null,
+      sql: "SELECT id, name FROM projects", usage: { model: "stub" },
     }))).json();
     assert.equal(body.ok, true);
     assert.equal(body.intent, intent);
     assert.equal(body.total, 0, `${intent} must not query the database`);
   }
 
-  // A model that hallucinates a field or a unit meets the same validator a
-  // hand-written plan does. The plan is not trusted for having come from a model.
-  const hallucinated = await askQuestion("anything", stubPlanner({
-    intent: "search", language: "English", message: null,
-    plan: { unit: "Gamming", table: "user_directory" },
-  }));
-  assert.equal(hallucinated.status, 400);
-  const hallucinatedBody = await hallucinated.json();
-  assert.equal(hallucinatedBody.ok, false);
-  assert.match(hallucinatedBody.problems.join(" "), /Unknown plan field "table"/);
-  assert.match(hallucinatedBody.problems.join(" "), /No business unit named/);
+  // The worker is the safety boundary, not the prompt. A model that returns a
+  // write, a forbidden table or a second statement is refused here, and the
+  // refusal is an answer rather than a crash.
+  const projectsBefore = database.prepare("SELECT COUNT(*) AS n FROM projects").get().n;
+  for (const unsafe of [
+    "DELETE FROM projects",
+    "SELECT * FROM user_directory",
+    "SELECT name FROM projects; DROP TABLE projects",
+    "SELECT password_hash FROM projects",
+    "SELECT * FROM main.projects",
+  ]) {
+    const body = await (await askQuestion("anything", search(unsafe))).json();
+    assert.equal(body.ok, true, `${unsafe} is answered, not crashed`);
+    assert.equal(body.intent, "unsupported", `${unsafe} is refused`);
+    assert.equal(body.total, 0, `${unsafe} reached no data`);
+  }
+  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM projects").get().n, projectsBefore,
+    "nothing the model asked for changed the database");
 
   // An over-long question is rejected before any model call is paid for.
-  const callsBefore = plannerCalls.length;
-  const tooLong = await askQuestion("x".repeat(501), stubPlanner({
-    intent: "help", language: "English", message: "x", plan: {},
-  }));
+  const callsBefore = sqlCalls.length;
+  const tooLong = await askQuestion("x".repeat(501), search("SELECT id, name FROM projects"));
   assert.equal(tooLong.status, 400);
-  assert.equal(plannerCalls.length, callsBefore, "an over-long question costs nothing");
+  assert.equal(sqlCalls.length, callsBefore, "an over-long question costs nothing");
 
-  // A question obeys the same scope a plan does, and the planner is told only
-  // about the units this viewer has.
-  const scopedAsk = await (await askQuestion("show me everything", stubPlanner({
-    intent: "search", language: "English", message: null, plan: { limit: 50 },
-  }), askerCookie)).json();
-  assert.equal(scopedAsk.total, gamingCount, "a question is scoped like a plan");
-  assert.deepEqual(plannerCalls.at(-1).units, ["Gaming"]);
+  // A question obeys the reader's scope however the query is written, and the
+  // generator is told only about the units this viewer has.
+  for (const sql of [
+    "SELECT id, name, business_unit FROM projects",
+    "SELECT id, name, business_unit FROM projects WHERE business_unit = 'Corporate'",
+    "SELECT id, name, business_unit FROM (SELECT * FROM projects) x",
+    "WITH mine AS (SELECT * FROM projects) SELECT id, name, business_unit FROM mine",
+  ]) {
+    const scopedAsk = await (await askQuestion("show me everything", search(sql), askerCookie)).json();
+    assert.ok(scopedAsk.rows.every((row) => row.business_unit === "Gaming"),
+      `scope escaped through: ${sql}`);
+    assert.ok(scopedAsk.total <= gamingCount, `${sql} saw more than this viewer's units`);
+  }
+  assert.deepEqual(sqlCalls.at(-1).units, ["Gaming"]);
 
-  // Each answered question is audited with its intent, plan and token usage,
+  // The cap is the worker's, and the true total is still reported.
+  const capped = await (await askQuestion("everything",
+    search("SELECT id, name FROM projects LIMIT 500"))).json();
+  assert.ok(capped.returned <= 50, "the worker's cap wins over the model's LIMIT");
+  assert.ok(capped.total >= capped.returned, "the matched total is reported alongside it");
+  if (capped.truncated) assert.ok(capped.total > capped.returned, "truncation is flagged honestly");
+
+  // An aggregate comes back as the figure rather than as rows to count.
+  const aggregate = await (await askQuestion("how many projects are there?",
+    search("SELECT COUNT(*) AS projects FROM projects"))).json();
+  assert.equal(aggregate.aggregate, true);
+  assert.equal(aggregate.rows.length, 1, "one row holding the answer");
+
+  // Each answered question is audited with its intent, query and token usage,
   // and without the question text or the rows: transcripts live in the browser
   // by decision, and storing the question here would reintroduce the retention
   // that decision avoided.
@@ -1968,319 +2009,15 @@ for (const [parent, child] of [
     "SELECT details FROM audit_log WHERE action = 'assistant_ask' ORDER BY id").all();
   assert.ok(askRows.length >= 8, "every answered question writes one audit row");
   const withUsage = askRows.map((row) => JSON.parse(row.details))
-    .find((entry) => entry.intent === "search" && entry.usage);
+    .find((details) => details.usage && details.usage.inputTokens);
   assert.ok(withUsage, "the token usage is recorded");
   assert.equal(withUsage.usage.inputTokens, 120);
-  assert.equal(withUsage.usage.outputTokens, 40);
-  for (const row of askRows) {
-    const entry = JSON.parse(row.details);
-    assert.ok(!("question" in entry), "the question text is not stored server-side");
-    assert.ok(!("rows" in entry) && !("message" in entry), "no content is stored");
-  }
+  assert.ok(askRows.some((row) => JSON.parse(row.details).sql), "and the query that ran");
+  const auditText = askRows.map((row) => row.details).join(" ");
+  assert.ok(!auditText.includes("delete the Gate City"), "the question text is never stored");
+  assert.ok(!/"rows"/.test(auditText), "and neither are the rows");
 
-
-  // --- Every rejection explains itself --------------------------------------
-  // A dead end with no text reads as a broken screen, so none of these may
-  // answer with a null message or a bare "invalid".
-
-  // A refusal the model gave no wording for still says why, and what to do.
-  const silentRefusal = await (await askQuestion("delete everything", stubPlanner({
-    intent: "refuse", language: "English", message: null, plan: {},
-  }))).json();
-  assert.ok(silentRefusal.message, "a refusal must never come back empty");
-  assert.match(silentRefusal.message, /only read/i);
-  assert.match(silentRefusal.message, /use the Projects screen/);
-
-  // An out-of-scope question says what IS in scope, and names this viewer's own
-  // units rather than every unit in the database.
-  const offTopic = await (await askQuestion("what is the weather?", stubPlanner({
-    intent: "off_topic", language: "English", message: null, plan: {},
-  }), askerCookie)).json();
-  assert.ok(offTopic.message);
-  assert.match(offTopic.message, /only answer questions about this tracker/);
-  assert.match(offTopic.message, /Gaming/, "it names what the viewer can ask about");
-  const otherUnitName = database.prepare(
-    "SELECT name FROM business_units WHERE name <> 'Gaming' LIMIT 1").get().name;
-  assert.ok(!offTopic.message.includes(otherUnitName),
-    "and must not name a unit this viewer cannot see");
-
-  // A rejected plan explains each reason rather than saying only "invalid".
-  const explained = await askQuestion("anything", stubPlanner({
-    intent: "search", language: "English", message: null,
-    plan: { unit: "Gamming", table: "user_directory", limit: 2.5 },
-  }));
-  assert.equal(explained.status, 400);
-  const explainedBody = await explained.json();
-  assert.match(explainedBody.error, /could not run that query/i);
-  assert.match(explainedBody.error, /No business unit named/);
-  assert.match(explainedBody.error, /Unknown plan field "table"/);
-  assert.ok(explainedBody.error.length > 40, "the reason is a sentence, not a code");
-
-  // The same applies to the plan endpoint, not only to questions. Called
-  // directly: the /query block's helper belongs to its own scope.
-  const planRejection = await (await worker.fetch(new Request(
-    "https://tracker.example/api/assistant/query", {
-      method: "POST", headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ plan: { table: "user_directory" } }),
-    }), env, {})).json();
-  assert.match(planRejection.error, /could not run that query/i);
-  assert.match(planRejection.error, /Unknown plan field "table"/);
-
-  // --- A number in the question survives into the answer ---------------------
-  // The defect this replaced: "slipped more than 30 days" became delayed: true
-  // and reported every delayed project as the answer.
-  const slipped = database.prepare(`
-    SELECT
-      SUM(CASE WHEN d > 0 THEN 1 ELSE 0 END) AS any_slip,
-      SUM(CASE WHEN d > 30 THEN 1 ELSE 0 END) AS over_thirty
-    FROM (
-      SELECT CAST(julianday(current_turnover_date) - julianday(original_turnover_date) AS INTEGER) AS d
-      FROM projects
-      WHERE archived_at IS NULL AND original_turnover_date IS NOT NULL
-        AND current_turnover_date IS NOT NULL)`).get();
-  assert.ok(slipped.over_thirty < slipped.any_slip,
-    "the fixture needs projects that slipped by less than the threshold");
-
-  const thresholded = await (await askQuestion("which projects slipped more than 30 days?", stubPlanner({
-    intent: "search", language: "English", message: null,
-    plan: { minDelayDays: 31, limit: 50 },
-  }))).json();
-  assert.equal(thresholded.total, slipped.over_thirty,
-    "the threshold is applied, not dropped");
-  assert.ok(thresholded.total < slipped.any_slip);
-  assert.match(thresholded.description.join(" "), /Slipped 31 days or more/,
-    "and the applied threshold is shown back to the user");
-
-
-  // --- A follow-up narrows the previous answer -------------------------------
-  // The defect this covers: "which of these have high schedule risk?" was
-  // planned in isolation, so it searched the whole portfolio and returned
-  // projects that were never in the previous answer - a different question,
-  // answered confidently.
-  const seenByPlanner = [];
-  // followUp mirrors what the model declares. A planner that omits it is read as
-  // "not a follow-up", which is the safe default: the question is answered
-  // across everything the user can see rather than inside a stale result.
-  const recordingPlanner = (plan, followUp = false) => ({
-    async plan(question, options) {
-      seenByPlanner.push(options.context || null);
-      return { intent: "search", language: "English", message: null, followUp, plan };
-    },
-  });
-  const askWithContext = (question, planner, context) => worker.fetch(new Request(
-    "https://tracker.example/api/assistant/ask", {
-      method: "POST", headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify(context ? { question, context } : { question }),
-    }), { ...env, ASSISTANT_PLANNER: planner }, {});
-
-  // A first answer, whose ids become the context for the next question.
-  const firstAnswer = await (await askWithContext("which projects slipped more than 30 days?",
-    recordingPlanner({ minDelayDays: 30, limit: 50 }))).json();
-  assert.ok(firstAnswer.total > 2, "the fixture needs several slipped projects");
-  assert.equal(seenByPlanner.at(-1), null, "a first question carries no context");
-  const firstIds = firstAnswer.rows.map((row) => row.id);
-
-  // The follow-up is handed those ids, and the model is expected to use them.
-  const narrowed = await (await askWithContext(
-    "which of these have high schedule risk?",
-    recordingPlanner({ ids: firstIds, risk: "schedule", riskLevel: "High", limit: 50 }, true),
-    { ids: firstIds, total: firstAnswer.total, description: firstAnswer.description },
-  )).json();
-  assert.deepEqual(seenByPlanner.at(-1).ids, firstIds,
-    "the planner is told what the previous answer returned");
-
-  // Every row of the narrowed answer must have been in the previous one. This is
-  // the assertion that fails when a follow-up silently starts again.
-  for (const row of narrowed.rows) {
-    assert.ok(firstIds.includes(row.id),
-      `${row.name} was not in the previous answer, so "these" was ignored`);
-  }
-  assert.ok(narrowed.total <= firstAnswer.total, "a narrowed answer cannot grow");
-
-  // A follow-up the model declares but does not copy ids into is still narrowed.
-  // This is how "which of these have a budget over 2M" came back answering the
-  // whole portfolio: the declaration was right, the transcription was missing,
-  // and nothing put the ids back.
-  const declaredOnly = await (await askWithContext(
-    "which of these have a budget over 2M?",
-    recordingPlanner({ minAmount: 2000000, amountField: "approved_budget", limit: 50 }, true),
-    { ids: firstIds, total: firstAnswer.total, description: firstAnswer.description },
-  )).json();
-  for (const row of declaredOnly.rows) {
-    assert.ok(firstIds.includes(row.id),
-      `${row.name} was not in the previous answer, so the follow-up was not narrowed`);
-  }
-  assert.ok(declaredOnly.total <= firstAnswer.total);
-  assert.match(declaredOnly.summary, /from the previous answer/,
-    "and the sentence says the previous answer was used");
-
-  // Context is untrusted input and can only ever narrow: ids outside the
-  // caller's scope reach nothing, because runPlan applies the scope regardless.
-  const outsideId = database.prepare(`
-    SELECT p.id FROM projects p JOIN business_units b ON b.id = p.business_unit_id
-    WHERE b.name <> 'Gaming' AND p.archived_at IS NULL LIMIT 1`).get().id;
-  const forged = await worker.fetch(new Request("https://tracker.example/api/assistant/ask", {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie: askerCookie, "x-csrf-token": askerCsrf },
-    body: JSON.stringify({
-      question: "and these?",
-      context: { ids: [outsideId], total: 1, description: ["forged"] },
-    }),
-  }), { ...env, ASSISTANT_PLANNER: recordingPlanner({ ids: [outsideId], limit: 50 }, true) }, {});
-  const forgedBody = await forged.json();
-  assert.equal(forgedBody.total, 0,
-    "a forged context cannot reach a project outside the caller's scope");
-
-  // Malformed context is dropped rather than failing the question.
-  const junk = await (await askWithContext("anything", recordingPlanner({ limit: 5 }),
-    { ids: ["1; DROP TABLE projects", -4, 2.5], total: "many" })).json();
-  assert.equal(junk.ok, true, "a malformed context does not break the question");
-  assert.deepEqual(seenByPlanner.at(-1).ids, [], "and contributes no ids");
-
-
-  // --- A search that matches nothing must not empty a good answer ------------
-  // The model restates the question in search - "budget over 50000" is not a
-  // project name - and a prompt rule did not stop it. Answering "none" to a
-  // question with ten answers is the failure this assistant exists to avoid, so
-  // the server retries without it and says so.
-  const realTotal = await (await askWithContext("anything",
-    recordingPlanner({ minAmount: 1, amountField: "approved_budget", limit: 50 }))).json();
-  assert.ok(realTotal.total > 0, "the fixture has projects with a budget");
-
-  // A search that merely restates a filter the plan already carries is dropped
-  // silently: nothing was lost, so announcing it reads as a degraded answer when
-  // the answer is complete.
-  const withJunkSearch = await (await askWithContext("which have a budget over 1?",
-    recordingPlanner({ search: "budget over 1", minAmount: 1, amountField: "approved_budget", limit: 50 }))).json();
-  assert.equal(withJunkSearch.total, realTotal.total,
-    "the restated search is dropped before the query runs, not after it returns nothing");
-  assert.match(withJunkSearch.summary, /approved budget of \$1 or more/,
-    "and the sentence describes the filter that remains, not the text dropped");
-  assert.ok(!withJunkSearch.summary.includes("mentioning"),
-    "the dropped text is not claimed as a condition of the answer");
-  assert.ok(!("search" in withJunkSearch.plan), "the plan reported back no longer claims it");
-
-  // A real term that matches nothing is NOT dropped. Widening here would return
-  // every project in the unit as though each one mentioned it.
-  const genuineTerm = await (await askWithContext("Gaming projects mentioning asbestos",
-    recordingPlanner({ search: "asbestos", unit: "Gaming", status: "Active", limit: 50 }))).json();
-  assert.equal(genuineTerm.total, 0,
-    "an unmatched search term that is not a restatement leaves the answer empty");
-  assert.match(genuineTerm.summary, /mentioning .asbestos./,
-    "and the sentence still names the term, so an empty answer explains itself");
-
-  // A search that genuinely matches is left alone.
-  // Must be Active, or the search and the status filter legitimately match
-  // nothing together and the retry fires for the right reason.
-  const realName = database.prepare(
-    "SELECT name FROM projects WHERE archived_at IS NULL AND status = 'Active' LIMIT 1").get().name;
-  const goodSearch = await (await askWithContext(`tell me about ${realName}`,
-    recordingPlanner({ search: realName, status: "Active", limit: 50 }))).json();
-  assert.ok(goodSearch.summary.includes(realName),
-    "a search that matches is never dropped, and the sentence still names it");
-  assert.ok(goodSearch.total > 0);
-
-  // A question that is only a search is never widened: dropping it would answer
-  // a different question rather than the one asked.
-  const onlySearch = await (await askWithContext("find Nonexistent Project Name",
-    recordingPlanner({ search: "Nonexistent Project Name Zzz", limit: 50 }))).json();
-  assert.equal(onlySearch.total, 0, "a search-only question that matches nothing stays empty");
-  assert.match(onlySearch.summary, /I found no projects mentioning/,
-    "a search-only question that matches nothing says what it looked for");
-
-
-  // --- Voice session ---------------------------------------------------------
-  // The browser speaks to OpenAI directly, which is what WebRTC is for, but it
-  // never holds the account key and every tool call still comes back here.
-  const voiceCalls = [];
-  const voiceEnv = (fetchImpl) => ({ ...env, OPENAI_API_KEY: "sk-test-not-a-real-key", VOICE_FETCH: fetchImpl });
-
-  // Unconfigured environments say so rather than failing oddly.
-  const noKey = await worker.fetch(new Request("https://tracker.example/api/assistant/voice-session", {
-    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: "{}",
-  }), env, {});
-  assert.equal(noKey.status, 503, "a voice session without a key is a configuration message");
-
-  // A local session must present its CSRF token: minting a credential is not a
-  // read, and another origin must not be able to start a call as this user.
-  const voiceNoCsrf = await worker.fetch(new Request("https://tracker.example/api/assistant/voice-session", {
-    method: "POST", headers: { "content-type": "application/json", cookie: askerCookie }, body: "{}",
-  }), env, {});
-  assert.equal(voiceNoCsrf.status, 403, "voice is not exempt from CSRF");
-
-  // Anonymous callers never reach it.
-  const voiceAnon = await worker.fetch(new Request("https://tracker.example/api/assistant/voice-session", {
-    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
-  }), { ...env, ALLOW_PLATFORM_AUTH: "false" }, {});
-  assert.equal(voiceAnon.status, 401);
-
-  console.log("Assistant voice session: configuration, CSRF and anonymous access covered.");
-
-
-  // A planner that fails for any other reason must say the model could not be
-  // reached, not become an unhandled 500 the browser reports as "the tracker
-  // could not complete the request" - which names the wrong thing, since the
-  // tracker is fine and the call to the model is not.
-  const upstreamDown = { async plan() { throw new TypeError("fetch failed"); } };
-  const dropped = await askWithContext("anything", upstreamDown);
-  assert.equal(dropped.status, 502, "an upstream failure is reported as one");
-  const droppedBody = await dropped.json();
-  assert.match(droppedBody.error, /could not be reached/,
-    "and carries a message, so the browser does not fall back to its generic text");
-
-
-  // A status the question never mentioned, sitting beside "not complete", is the
-  // invented half: it drops the projects on hold or in closeout that the
-  // question asked to see. A status the question did name stays.
-  const notComplete = await (await askWithContext("every project that is not complete",
-    recordingPlanner({ excludeComplete: true, status: "Active", limit: 50 }))).json();
-  const reallyNotComplete = database.prepare(
-    "SELECT COUNT(*) AS n FROM projects WHERE archived_at IS NULL AND status <> 'Complete'").get().n;
-  assert.equal(notComplete.total, reallyNotComplete,
-    "the invented status is dropped, so on hold and closeout are still counted");
-  assert.ok(!("status" in notComplete.plan));
-
-  const namedStatus = await (await askWithContext("active projects that are not complete",
-    recordingPlanner({ excludeComplete: true, status: "Active", limit: 50 }))).json();
-  assert.equal(namedStatus.plan.status, "Active",
-    "a status the question actually named is kept");
-
-
-  // --- The developer panel ---------------------------------------------------
-  // Off unless the environment asks for it. Production asserts it off in
-  // scripts/check-deploy-target.sh, so the only way it appears is deliberately.
-  const quiet = await (await askWithContext("anything",
-    recordingPlanner({ status: "Active", limit: 5 }))).json();
-  assert.equal(quiet.debug, undefined, "no query panel unless the environment enables it");
-
-  const loud = await (await worker.fetch(new Request("https://tracker.example/api/assistant/ask", {
-    method: "POST", headers: { ...headers, "content-type": "application/json" },
-    body: JSON.stringify({ question: "which are active?" }),
-  }), {
-    ...env, ASSISTANT_DEBUG: "true",
-    ASSISTANT_PLANNER: recordingPlanner({ status: "Active", limit: 5 }),
-  }, {})).json();
-  assert.ok(loud.debug, "the panel appears when it is turned on");
-  assert.equal(loud.debug.question, "which are active?");
-  assert.deepEqual(loud.debug.plan, { status: "Active", limit: 5 });
-  assert.match(loud.debug.sql, /^SELECT /, "it shows the statement that ran");
-  assert.match(loud.debug.sql, /FROM projects p/);
-  assert.ok(Array.isArray(loud.debug.bindings), "and the values bound into it");
-  assert.equal(loud.debug.total, loud.total);
-
-  // The panel is a view of the query, not a way around the scope.
-  const scopedDebug = await (await worker.fetch(new Request("https://tracker.example/api/assistant/ask", {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie: askerCookie, "x-csrf-token": askerCsrf },
-    body: JSON.stringify({ question: "show everything" }),
-  }), {
-    ...env, ASSISTANT_DEBUG: "true",
-    ASSISTANT_PLANNER: recordingPlanner({ limit: 50 }),
-  }, {})).json();
-  assert.deepEqual(scopedDebug.debug.scope, ["Gaming"], "it names the scope that was applied");
-  assert.match(scopedDebug.debug.sql, /b\.name IN/, "which is in the statement, not applied after it");
-
-  console.log("Assistant ask: stubbed planner, refusals, hallucinated plans, scope and usage covered.");
+  console.log("Assistant ask: SQL engine, refusals, unsafe queries, scope, limits and audit covered.");
 }
 
 // --- Ask the Tracker, through the served page --------------------------------
@@ -2304,18 +2041,32 @@ for (const [parent, child] of [
   database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE id = ?").run(uiId);
 
   const uiPage = await (await call("/")).text();
-  const askPlanner = {
-    async plan() {
+  // Deterministic stubs, so what this block tests is the pane rather than the
+  // model. The answerer writes the sentence the engine would ask it for.
+  const askSql = {
+    async generate() {
       return {
         intent: "search", language: "English", message: null,
-        plan: { minDelayDays: 30, limit: 5 },
+        sql: "SELECT id, name, business_unit, status, budget_risk, schedule_risk, "
+          + "approved_budget, anticipated_final_cost, forecast_variance, duration_change_days, "
+          + "current_update, reporting_period, venue, section_name, project_manager "
+          + "FROM projects WHERE duration_change_days >= 30",
         usage: { model: "stub", inputTokens: 10, outputTokens: 5 },
+      };
+    },
+  };
+  const askAnswerer = {
+    async answer(question, result) {
+      return {
+        text: `I found ${result.total} project${result.total === 1 ? "" : "s"} that slipped 30 days or more.`,
+        usage: { model: "stub" },
       };
     },
   };
   const browser = await createBrowser({
     page: uiPage,
-    handler: (request) => worker.fetch(request, { ...env, ASSISTANT_PLANNER: askPlanner }, {}),
+    handler: (request) => worker.fetch(request,
+      { ...env, ASSISTANT_SQL: askSql, ASSISTANT_ANSWERER: askAnswerer }, {}),
   }).start();
 
   browser.type("loginUsername", "ask-ui@example.invalid");

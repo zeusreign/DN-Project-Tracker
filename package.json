@@ -21,11 +21,12 @@
     "workbook:apply": "node scripts/apply-workbook-import.mjs",
     "workbook:apply:test": "node scripts/apply-test.mjs",
     "validate": "node scripts/validate-artifact.mjs",
-    "test": "npm run build && npm run validate && node scripts/smoke-test.mjs && node scripts/assistant-api-test.mjs && node scripts/ask-ui-test.mjs && node scripts/legacy/assistant-plan-test.mjs",
+    "test": "npm run build && npm run validate && node scripts/smoke-test.mjs && node scripts/assistant-api-test.mjs && node scripts/assistant-sql-test.mjs && node scripts/ask-ui-test.mjs && node scripts/legacy/assistant-plan-test.mjs",
     "test:enhanced": "npm run build && node scripts/enhanced-workflows-test.mjs",
-    "test:assistant": "node scripts/assistant-api-test.mjs && node scripts/ask-ui-test.mjs && node scripts/legacy/assistant-plan-test.mjs",
+    "test:assistant": "node scripts/assistant-api-test.mjs && node scripts/assistant-sql-test.mjs && node scripts/ask-ui-test.mjs && node scripts/legacy/assistant-plan-test.mjs",
     "assistant": "node scripts/assistant-demo.mjs",
-    "assistant:e2e": "node scripts/assistant-e2e.mjs"
+    "assistant:e2e": "node scripts/assistant-e2e.mjs",
+    "assistant:sql-e2e": "npm run build && node scripts/assistant-sql-e2e.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.4",

@@ -1722,12 +1722,16 @@ async function submitAsk(question){
       var prior=askTurns[i];
       if(prior.state==="done"&&prior.answer&&prior.answer.rows&&prior.answer.rows.length){
         context={
-          ids:prior.answer.rows.map(function(row){return row.id}),
+          ids:prior.answer.rows.map(function(row){return row.id}).filter(function(id){
+            return typeof id==="number"}),
           total:prior.answer.total,
           description:prior.answer.description||[],
-          // The conditions, so "what about Patina?" can ask the same question
-          // about somewhere else rather than starting from nothing.
-          plan:prior.answer.plan||null
+          // The query behind the previous answer, so "what about Patina?" can
+          // ask the same question about somewhere else rather than starting
+          // from nothing. Present only while developing: the worker withholds
+          // it otherwise, and a follow-up then narrows by the ids and the
+          // question history instead.
+          sql:(prior.answer.debug&&prior.answer.debug.generated)||null
         };
         break;
       }
@@ -1743,7 +1747,7 @@ async function submitAsk(question){
         question:prior.question,
         intent:prior.answer.intent,
         total:typeof prior.answer.total==="number"?prior.answer.total:undefined,
-        plan:prior.answer.plan||undefined
+        sql:(prior.answer.debug&&prior.answer.debug.generated)||undefined
       };
     });
     var payload={question:text};

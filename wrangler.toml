@@ -73,6 +73,13 @@ ASSISTANT_DEBUG = "false"
 # are unaffected.
 ASSISTANT_LEGACY_PLANNER = "false"
 
+# The two model calls the query engine makes. Both default to gpt-4o-mini in
+# worker/assistant-model.js; set either here to point it somewhere else. The
+# generator writes a read-only SELECT and the answerer turns the result into a
+# sentence. Neither is a security boundary: worker/assistant-sql.js is.
+# ASSISTANT_SQL_MODEL = "gpt-4o-mini"
+# ASSISTANT_ANSWER_MODEL = "gpt-4o-mini"
+
 # TODO(config): optional comma-separated list granting the `admin` role by email.
 # Intentionally left empty — it does NOT create a login account (it only applies
 # to the platform-auth fallback above and to role lookup). The first real

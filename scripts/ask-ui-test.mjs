@@ -25,17 +25,29 @@ await worker.fetch(new Request("https://t/api/admin/users",{method:"POST",header
 database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE lower(username)=?").run("ui@example.invalid");
 
 // Plans are chosen by what the question says, so each question yields its own set.
+// Deterministic SQL per question, so each one yields its own result set and the
+// pane is what is under test rather than the model.
+const COLUMNS="id, name, business_unit, venue, section_name, status, phase, project_manager, "
+  +"development_lead, budget_risk, schedule_risk, approved_budget, anticipated_final_cost, "
+  +"forecast_variance, original_turnover_date, current_turnover_date, duration_change_days, "
+  +"scope_description, current_update, previous_update, reporting_period, project_type, capp_number";
 let failNext=false;
-const planner={async plan(question){
+const sqlFor=(q)=>{
+  if(q.includes("nothing"))return `SELECT ${COLUMNS} FROM projects WHERE name LIKE '%zzzz-no-such-project%'`;
+  if(q.includes("high schedule risk"))return `SELECT ${COLUMNS} FROM projects WHERE schedule_risk = 'High'`;
+  if(q.includes("over budget"))return `SELECT ${COLUMNS} FROM projects WHERE forecast_variance > 0`;
+  return `SELECT ${COLUMNS} FROM projects WHERE business_unit = 'Gaming'`;
+};
+const planner={async generate(question){
   if(failNext)throw new Error("boom");
-  const q=String(question).toLowerCase();
-  if(q.includes("nothing"))return {intent:"search",language:"English",message:null,plan:{search:"zzzz-no-such-project"},usage:{model:"stub"}};
-  if(q.includes("high schedule risk"))return {intent:"search",language:"English",message:null,plan:{risk:"schedule",riskLevel:"High"},usage:{model:"stub"}};
-  if(q.includes("over budget"))return {intent:"search",language:"English",message:null,plan:{overBudget:true},usage:{model:"stub"}};
-  return {intent:"search",language:"English",message:null,plan:{unit:"Gaming"},usage:{model:"stub"}};
+  return {intent:"search",language:"English",message:null,sql:sqlFor(String(question).toLowerCase()),usage:{model:"stub"}};
+}};
+const answerer={async answer(question,result){
+  return {text:result.total?`I found ${result.total} project${result.total===1?"":"s"}.`
+    :"No records matched that question.",usage:{model:"stub"}};
 }};
 const page=await (await worker.fetch(new Request("https://t/",{headers:{cookie:""}}),base,{})).text();
-const browser=await createBrowser({page,handler:(r)=>worker.fetch(r,{...base,ASSISTANT_PLANNER:planner},{})}).start();
+const browser=await createBrowser({page,handler:(r)=>worker.fetch(r,{...base,ASSISTANT_SQL:planner,ASSISTANT_ANSWERER:answerer},{})}).start();
 browser.type("loginUsername","ui@example.invalid");browser.type("loginPassword",pw);
 await browser.fire("loginForm","submit").results; await browser.settle();
 

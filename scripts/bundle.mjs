@@ -39,6 +39,7 @@ const enhancedApi = await readFile(resolve(workerRoot, "enhanced-api.js"), "utf8
 const assistantFiles = [
   "assistant-schema.js",
   "assistant-prompt.js",
+  "assistant-sql.js",
   "assistant-model.js",
   "legacy/assistant-plan.js",
   "legacy/assistant-plan-prompt.js",

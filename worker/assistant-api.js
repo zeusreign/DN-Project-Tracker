@@ -13,8 +13,9 @@
 // built.
 
 import { availableUnits } from "./assistant-schema.js";
-import { mintVoiceSession, PlannerError } from "./assistant-model.js";
-import { voiceInstructions, VOICE_TOOLS } from "./assistant-prompt.js";
+import { mintVoiceSession, PlannerError, sqlGeneratorFor, answererFor } from "./assistant-model.js";
+import { voiceInstructions, VOICE_TOOLS, messageFor } from "./assistant-prompt.js";
+import { runSql, hydrateProjects, SqlRejected } from "./assistant-sql.js";
 import { legacyPlanRoutes } from "./legacy/assistant-plan-route.js";
 
 const BACK_REFERENCE = /\b(these|those|them|they|their|theirs|it|its|that|this|same|ones|above|previous|earlier|instead|also|narrow|exclude|just those|of the above)\b/i;
@@ -79,23 +80,44 @@ export function whereOf(sql) {
 // the plan the model produced, the SQL it became, and the values bound into it.
 // Off unless the environment asks for it, and asserted off for production by
 // scripts/check-deploy-target.sh.
-function debugFor(env, { plan, scope, result, outcome, question }) {
+// The developer's view of what ran. Off unless ASSISTANT_DEBUG is "true", which
+// production asserts it is not: the queries carry no secrets and the scope
+// applies either way, but handing every reader the shape of the database
+// invites probing at it.
+//
+// Both engines pass through here. The SQL engine supplies its own statement,
+// already wrapped in the scoped views; the planner supplies a plan and builds
+// one, which is why that branch takes a builder rather than importing it -
+// nothing on the active path may reach into legacy.
+function debugFor(env, { plan, scope, result, outcome, question, sql, inner, rejected, planQueries }) {
   if (env.ASSISTANT_DEBUG !== "true") return undefined;
-  const { rows, count } = planQueries(plan, scope);
+  let statement = sql || null, bindings, countSql;
+  if (!statement && plan && typeof planQueries === "function") {
+    const built = planQueries(plan, scope);
+    statement = built.rows.sql;
+    bindings = built.rows.bindings;
+    countSql = formatSql(built.count.sql);
+  }
   return {
     question,
     intent: outcome ? outcome.intent : "plan",
     followUp: outcome ? outcome.followUp : undefined,
     language: outcome ? outcome.language : undefined,
-    plan,
+    plan: plan || undefined,
+    // What the model wrote, before the worker wrapped it. This is the line a
+    // developer reads first: the rest is the scoping the worker added.
+    generated: inner ? formatSql(inner) : undefined,
+    rejected: rejected || undefined,
     scope: scope || "unrestricted",
-    where: whereOf(rows.sql),
-    sql: formatSql(rows.sql),
-    bindings: rows.bindings,
-    countSql: formatSql(count.sql),
+    where: statement ? whereOf(statement) : undefined,
+    sql: statement ? formatSql(statement) : undefined,
+    bindings,
+    countSql,
     total: result ? result.total : 0,
     returned: result ? result.returned : 0,
-    loosened: result ? result.loosened : false,
+    truncated: result ? result.truncated : false,
+    aggregate: result ? result.aggregate : undefined,
+    tables: result ? result.tables : undefined,
     usage: outcome ? outcome.usage : undefined,
   };
 }
@@ -106,7 +128,6 @@ function debugFor(env, { plan, scope, result, outcome, question }) {
 // on. Production leaves it off, so an environment without a query engine says
 // so plainly rather than answering from a planner nobody meant to ship.
 const QUERY_PATHS = new Set([
-  "/api/assistant/ask",
   "/api/assistant/query",
   "/api/assistant/schema",
 ]);
@@ -141,9 +162,15 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     }
   }
 
+  if (url.pathname === "/api/assistant/ask") {
+    return askWithSql(request, env, user, role, scope, helpers);
+  }
+
+  // The planner's own routes, for as long as it is switched on. It is not the
+  // active path: /ask above never reaches it.
   if (QUERY_PATHS.has(url.pathname)) {
     if (!legacyPlannerEnabled(env)) {
-      return error("The assistant's query engine is not available on this environment.", 503);
+      return error("That endpoint belonged to the previous query engine and is no longer served.", 410);
     }
     // The shared parts are handed over rather than imported back, so the
     // dependency runs one way: legacy knows nothing about this file.
@@ -154,6 +181,203 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
   }
 
   return error("Not found.", 404);
+}
+
+// --- The query engine --------------------------------------------------------
+// Question in, answer out. The model writes a SELECT; the worker checks it,
+// binds it to this reader's scoped views, caps it, runs it, and then asks the
+// model to put the result into words. The model never touches D1 and never
+// decides what the reader may see.
+async function askWithSql(request, env, user, role, scope, helpers) {
+  const { json, error } = helpers;
+  if (request.method !== "POST") return error("Method not allowed.", 405);
+  const body = await request.json().catch(() => null);
+  const question = typeof body?.question === "string" ? body.question.trim() : "";
+  if (!question) return error("A question is required.");
+  if (question.length > 500) return error("That question is too long. Keep it under 500 characters.");
+
+  const generator = sqlGeneratorFor(env);
+  if (!generator) return error("The assistant is not configured on this environment.", 503);
+
+  // What the previous answer returned and what was asked before it. Both come
+  // from the browser and are therefore untrusted, but neither can widen what
+  // this reader sees: the scoped views are applied to whatever query comes
+  // back, so a forged id reaches nothing they could not already open.
+  const raw = body.context && typeof body.context === "object" ? body.context : null;
+  const context = raw
+    ? {
+      ids: Array.isArray(raw.ids)
+        ? raw.ids.filter((id) => Number.isInteger(id) && id > 0).slice(0, 50) : [],
+      total: Number.isInteger(raw.total) ? raw.total : undefined,
+      sql: typeof raw.sql === "string" ? raw.sql.slice(0, 2000) : undefined,
+    }
+    : null;
+  const history = Array.isArray(body.history)
+    ? body.history.slice(-6)
+      .filter((turn) => turn && typeof turn.question === "string" && turn.question.trim())
+      .map((turn) => ({
+        question: turn.question.trim().slice(0, 300),
+        intent: typeof turn.intent === "string" ? turn.intent.slice(0, 20) : undefined,
+        total: Number.isInteger(turn.total) ? turn.total : undefined,
+        sql: typeof turn.sql === "string" ? turn.sql.slice(0, 1000) : undefined,
+      }))
+    : [];
+
+  const units = await availableUnits(env.DB, scope);
+  // The date comes from the runtime, never from the model. Without it "this
+  // year" resolved to the model's training data and every relative date in the
+  // audit came back wrong.
+  const today = new Date().toISOString().slice(0, 10);
+
+  let outcome;
+  try {
+    outcome = await generator.generate(question, { units, today, role, context, history });
+  } catch (problem) {
+    if (problem instanceof PlannerError) return error(problem.message, problem.status);
+    console.log(`assistant sql generation failed: ${problem && problem.message}`);
+    return error("The assistant could not be reached just now. Try that again.", 502);
+  }
+
+  // Intents answered from the message alone never reach the database.
+  if (outcome.intent !== "search" && outcome.intent !== "report") {
+    await recordAsk(env, user, { ...outcome, plan: null }, null, scope);
+    return json({
+      ok: true, intent: outcome.intent, language: outcome.language,
+      message: messageFor(outcome.intent, outcome.message, units),
+      rows: [], sources: [], total: 0,
+      debug: debugFor(env, { plan: null, scope, result: null, outcome, question }),
+    });
+  }
+  if (!outcome.sql) {
+    return json({
+      ok: true, intent: "unsupported", language: outcome.language,
+      message: messageFor("unsupported", outcome.message, units),
+      rows: [], sources: [], total: 0,
+    });
+  }
+
+  // The worker is the boundary. A refused query is handed back to the model
+  // once with the reason: it usually wrote something expressible a different
+  // way, and a second attempt is cheaper than a dead end. A query refused
+  // twice is reported rather than run.
+  let result = null, rejected = null, sql = outcome.sql;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      result = await runSql(env.DB, sql, scope, { limit: body.limit });
+      rejected = null;
+      break;
+    } catch (problem) {
+      if (!(problem instanceof SqlRejected)) {
+        console.log(`assistant query failed: ${problem && problem.message}`);
+        return error("That question could not be answered against the Tracker's records.", 502);
+      }
+      rejected = problem;
+      if (attempt === 1) break;
+      try {
+        const retry = await generator.generate(question, {
+          units, today, role, context, history, retryReason: problem.message,
+        });
+        if (retry.intent !== "search" && retry.intent !== "report") {
+          await recordAsk(env, user, { ...retry, plan: null }, null, scope);
+          return json({
+            ok: true, intent: retry.intent, language: retry.language,
+            message: messageFor(retry.intent, retry.message, units),
+            rows: [], sources: [], total: 0,
+          });
+        }
+        if (!retry.sql) break;
+        sql = retry.sql;
+        outcome = { ...retry, usage: outcome.usage };
+      } catch {
+        break;
+      }
+    }
+  }
+  if (!result) {
+    await recordAsk(env, user, { ...outcome, plan: null }, null, scope);
+    return json({
+      ok: true, intent: "unsupported", language: outcome.language,
+      message: "That question cannot be answered from the records this assistant can read."
+        + (rejected ? ` ${rejected.message}` : ""),
+      rows: [], sources: [], total: 0,
+      debug: debugFor(env, { plan: null, scope, result: null, outcome, question, sql, rejected: rejected && rejected.message }),
+    });
+  }
+
+  // The records for the evidence panel, which are not the same thing as the
+  // rows the query returned: the model selects what answers the question, the
+  // panel needs the whole project. Read back through the same scoped views, so
+  // this can only ever show what the query was already allowed to find.
+  const records = result.aggregate ? [] : await hydrateProjects(env.DB, result.rows, scope);
+
+  // The result goes back to the model for a sentence. If that call fails the
+  // answer is still correct - the rows and the counts are already in hand - so
+  // a plain sentence is written here rather than failing the whole question.
+  const answerer = answererFor(env);
+  let summary = fallbackSummary(result), answerUsage = null;
+  if (answerer) {
+    try {
+      const spoken = await answerer.answer(question, result, { language: outcome.language, today });
+      if (spoken.text) { summary = spoken.text; answerUsage = spoken.usage; }
+    } catch (problem) {
+      console.log(`assistant answer failed: ${problem && problem.message}`);
+    }
+  }
+
+  await recordAsk(env, user, { ...outcome, plan: null, answerUsage }, result, scope);
+
+  // Two separate things: the sentence for the conversation, and the records for
+  // the evidence panel. A list of rows does not belong in the sentence.
+  return json({
+    ok: true,
+    intent: outcome.intent,
+    language: outcome.language,
+    followUp: outcome.followUp,
+    summary,
+    total: result.total,
+    returned: result.returned,
+    truncated: result.truncated,
+    limit: result.limit,
+    aggregate: result.aggregate,
+    // The structured records the UI builds its cards from. When a question is
+    // not about projects at all - a count, a group, a list of updates - there
+    // are none, and the answer stands on its own.
+    rows: records.length ? records : result.rows,
+    // What the query itself returned, kept separate so a developer can see the
+    // difference between what was asked for and what the panel was given.
+    data: result.rows,
+    sources: records.map((row) => ({ id: row.id, name: row.name, date: row.reporting_period })),
+    // What was searched for, in words, so a misread question is visible beside
+    // the answer rather than hidden behind a confident sentence.
+    description: describeResult(result, question),
+    sql: undefined,
+    debug: debugFor(env, { plan: null, scope, result, outcome, question, sql: result.sql, inner: result.inner }),
+  });
+}
+
+// Used when the answering call cannot be made. Correct, if plainer.
+function fallbackSummary(result) {
+  if (result.aggregate && result.rows.length === 1) {
+    const values = Object.entries(result.rows[0])
+      .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value === null ? "not recorded" : value}`);
+    return values.join(", ") + ".";
+  }
+  if (!result.total) return "No records matched that question.";
+  return result.truncated
+    ? `${result.total} records match. The first ${result.returned} are listed.`
+    : `${result.total} record${result.total === 1 ? "" : "s"} matched.`;
+}
+
+// A short statement of what the query actually covered, built from its own
+// shape rather than from the question, so the two can be compared.
+function describeResult(result, question) {
+  const parts = [];
+  if (result.aggregate) parts.push("A single figure");
+  else parts.push(`${result.total} matching record${result.total === 1 ? "" : "s"}`);
+  if (result.truncated) parts.push(`showing the first ${result.returned}`);
+  const tables = (result.tables || []).filter((t) => t !== "projects");
+  if (tables.length) parts.push("including " + tables.join(" and ").replace(/_/g, " "));
+  return parts;
 }
 
 // One audit row per question. It records the intent, the language, the plan,
@@ -172,11 +396,18 @@ async function recordAsk(env, user, outcome, result, scope) {
       JSON.stringify({
         intent: outcome.intent,
         language: outcome.language,
-        plan: outcome.plan,
+        // The plan for the legacy planner, the query for the SQL engine. The
+        // query is what makes an answer reproducible after the fact, which is
+        // the whole reason this row exists; the rows it returned are still
+        // never recorded.
+        plan: outcome.plan || null,
+        sql: outcome.sql || null,
         total: result ? result.total : null,
         returned: result ? result.returned : null,
+        truncated: result ? result.truncated : null,
         scoped: scope !== null,
         usage: outcome.usage || null,
+        answerUsage: outcome.answerUsage || null,
       }),
     ).run();
   } catch {

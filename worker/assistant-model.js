@@ -107,3 +107,145 @@ export async function mintVoiceSession(env, { instructions, tools, model, fetchI
     model: body.session?.model || model || env.ASSISTANT_VOICE_MODEL || DEFAULT_VOICE_MODEL,
   };
 }
+
+// =============================================================================
+// The SQL engine's model calls
+// =============================================================================
+// Phase 3. Two adapters, built the way the planner's was: temperature 0 because
+// the same question should produce the same query, a strict json_schema so the
+// shape cannot drift, and the shared error mapping above. Both are resolved
+// from env, so a test or a preview can supply a stub and exercise the whole
+// path - validation, scope, limits, audit - with no network and no key.
+
+import {
+  sqlSystemPrompt, sqlResponseSchema, sqlHistoryNote, sqlContextNote, ANSWER_RULES, INTENTS,
+} from "./assistant-prompt.js";
+
+export const DEFAULT_SQL_MODEL = "gpt-4o-mini";
+export const DEFAULT_ANSWER_MODEL = "gpt-4o-mini";
+
+function readSqlOutput(parsed) {
+  if (!parsed || typeof parsed !== "object") throw new PlannerError("The assistant returned nothing.");
+  const intent = INTENTS.includes(parsed.intent) ? parsed.intent : null;
+  if (!intent) throw new PlannerError(`The assistant returned an unknown intent "${parsed.intent}".`);
+  return {
+    intent,
+    followUp: parsed.followUp === true,
+    language: typeof parsed.language === "string" ? parsed.language.slice(0, 40) : "English",
+    message: typeof parsed.message === "string" && parsed.message.trim() ? parsed.message.trim() : null,
+    sql: typeof parsed.sql === "string" && parsed.sql.trim() ? parsed.sql.trim() : null,
+  };
+}
+
+async function callModel(apiKey, call, body, what) {
+  const response = await call(RESPONSES_ENDPOINT, {
+    method: "POST",
+    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw openAiFailure(response.status, await response.text().catch(() => ""), what);
+  }
+  const payload = await response.json();
+  const text = typeof payload.output_text === "string" && payload.output_text
+    ? payload.output_text
+    : (payload.output || [])
+      .flatMap((item) => item.content || [])
+      .map((part) => part.text)
+      .filter(Boolean)
+      .join("");
+  return { text, usage: payload.usage || null };
+}
+
+// Question in, one SELECT out. The query is not run here and is not trusted
+// here: assistant-sql.js checks it before anything reaches D1.
+export function openAiSqlGenerator({ apiKey, model = DEFAULT_SQL_MODEL, fetchImpl }) {
+  if (!apiKey) throw new PlannerError("No OpenAI API key is configured.", 503);
+  const call = fetchImpl || fetch;
+  return {
+    model,
+    async generate(question, { units, today, role, context, history, retryReason } = {}) {
+      const notes = [sqlHistoryNote(history), sqlContextNote(context)].filter(Boolean);
+      // A rejected query is handed back with the reason, once. The model wrote
+      // something the worker would not run, and the reason is usually enough
+      // for it to write the same question a way that is allowed.
+      if (retryReason) {
+        notes.push(`Your previous query was refused by the worker: ${retryReason}\n`
+          + "Write the query again without whatever caused that. If the question cannot be"
+          + ' answered within the schema you were given, use intent "unsupported" and say so.');
+      }
+      const { text, usage } = await callModel(apiKey, call, {
+        model,
+        temperature: 0,
+        max_output_tokens: 900,
+        input: [
+          { role: "system", content: sqlSystemPrompt({ units, today, role }) },
+          ...notes.map((content) => ({ role: "system", content })),
+          { role: "user", content: question },
+        ],
+        text: {
+          format: { type: "json_schema", name: "tracker_sql", strict: true, schema: sqlResponseSchema() },
+        },
+      }, "sql generator");
+      let parsed;
+      try { parsed = JSON.parse(text); } catch {
+        throw new PlannerError("The assistant's reply was not valid JSON.");
+      }
+      return {
+        ...readSqlOutput(parsed),
+        usage: { model, inputTokens: usage?.input_tokens ?? null, outputTokens: usage?.output_tokens ?? null },
+      };
+    },
+  };
+}
+
+// Result in, sentence out. The rows are already capped and already scoped, so
+// this call sees exactly what the reader is allowed to see and nothing more.
+export function openAiAnswerer({ apiKey, model = DEFAULT_ANSWER_MODEL, fetchImpl }) {
+  if (!apiKey) throw new PlannerError("No OpenAI API key is configured.", 503);
+  const call = fetchImpl || fetch;
+  return {
+    model,
+    async answer(question, result, { language, today } = {}) {
+      const payload = {
+        question,
+        language: language || "English",
+        today,
+        matched_rows: result.total,
+        returned_rows: result.returned,
+        truncated: result.truncated,
+        is_single_figure: !!result.aggregate,
+        result: result.rows,
+      };
+      const { text, usage } = await callModel(apiKey, call, {
+        model,
+        temperature: 0,
+        max_output_tokens: 400,
+        input: [
+          { role: "system", content: ANSWER_RULES },
+          { role: "user", content: JSON.stringify(payload) },
+        ],
+      }, "answer");
+      return {
+        text: String(text || "").trim(),
+        usage: { model, inputTokens: usage?.input_tokens ?? null, outputTokens: usage?.output_tokens ?? null },
+      };
+    },
+  };
+}
+
+// Resolution order, as for the planner: an injected adapter first so tests and
+// previews need no key, then a real one built from the secret.
+export function sqlGeneratorFor(env) {
+  if (env.ASSISTANT_SQL && typeof env.ASSISTANT_SQL.generate === "function") return env.ASSISTANT_SQL;
+  if (!env.OPENAI_API_KEY) return null;
+  return openAiSqlGenerator({ apiKey: env.OPENAI_API_KEY, model: env.ASSISTANT_SQL_MODEL || DEFAULT_SQL_MODEL });
+}
+
+export function answererFor(env) {
+  if (env.ASSISTANT_ANSWERER && typeof env.ASSISTANT_ANSWERER.answer === "function") return env.ASSISTANT_ANSWERER;
+  if (!env.OPENAI_API_KEY) return null;
+  return openAiAnswerer({ apiKey: env.OPENAI_API_KEY, model: env.ASSISTANT_ANSWER_MODEL || DEFAULT_ANSWER_MODEL });
+}
+
+export { readSqlOutput };

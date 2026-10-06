@@ -159,3 +159,176 @@ export const VOICE_TOOLS = [{
     },
   },
 }];
+
+// =============================================================================
+// The SQL engine's prompts
+// =============================================================================
+// Phase 3. Two calls: one turns a question into a SELECT, the other turns what
+// that SELECT returned into a sentence. Neither is a security boundary -
+// assistant-sql.js is - so these are about getting the right answer, not about
+// stopping the wrong one.
+
+import { schemaPrompt, QUERY_TABLES } from "./assistant-schema.js";
+
+const SQL_RULES = `
+Writing the query:
+- Produce one SQLite SELECT statement. No semicolon, no comments, no parameters,
+  no second statement.
+- Write only what the question asks. Do not add a condition it did not ask for:
+  a filter nobody asked for answers a narrower question while looking like an
+  answer to this one.
+- Never write a business-unit permission condition. The tables are already
+  limited to what this reader may see. Filter by business_unit only when the
+  question names a unit.
+- Select the columns an answer needs, and include projects.id and projects.name
+  whenever the result is a list of projects, because the records panel is built
+  from them. For a figure, select the figure.
+- A question that asks "how many", "what is the total", "the average", "the
+  highest" or "the lowest" wants one number: use COUNT, SUM, AVG, MAX or MIN
+  rather than returning rows for someone to count.
+- A question about each or per something is a GROUP BY.
+- Use ORDER BY for "largest", "earliest", "most recent", with LIMIT 1 when the
+  question asks for a single one.
+- SQLite sorts NULL FIRST on an ascending ORDER BY and LAST on a descending
+  one. A project with no turnover date is not the earliest one, and a project
+  with no budget is not the smallest. Whenever you order by a column that can
+  be missing, exclude the missing rows or push them to the end:
+    ORDER BY current_turnover_date IS NULL, current_turnover_date ASC
+    WHERE approved_budget IS NOT NULL ORDER BY approved_budget DESC
+  Getting this wrong returns a row with no value in it as the answer, which is
+  worse than returning nothing.
+- Use forecast_variance and duration_change_days as they are. Do not recompute
+  them from the underlying columns.
+- "Not", "except", "other than", "outside" and "without" are <> or NOT IN or
+  NOT EXISTS. Answering the positive instead inverts the question.
+- "No", "missing" and "not recorded" are IS NULL. For a child table it is
+  NOT EXISTS, since a project with no updates has no row to be null.
+- Dates are 'YYYY-MM-DD' text. Compare them directly. Work out a month, quarter
+  or year from today's date, which you are given.
+- Match a name, venue or number with LIKE and % around the words. A project
+  named in the question is usually the subject, not a filter on everything else.
+- Keep LIMIT off unless the question asks for a specific number. The worker caps
+  the rows either way and reports the true total.`;
+
+const INTENT_FOR_SQL = `
+When not to write a query:
+- intent "search" with a query is the normal case, including for a single figure.
+- intent "unsupported", with no query, when the answer would need something this
+  database does not hold: who approved something, who has access, a contractor
+  or vendor, a change log, anything about people as records rather than as names
+  on a project. Say plainly what is missing. Never answer with the nearest thing
+  you can query instead.
+- intent "definition" when asked what a column or term means.
+- intent "help" when asked what you can do.
+- intent "clarify" when the question names a business unit you were not given,
+  or cannot be turned into any sensible query.
+- intent "refuse" when asked to change, add, delete or approve anything.
+- intent "off_topic" when the question is not about this tracker at all.`;
+
+export function sqlSystemPrompt({ units, today, role } = {}) {
+  return [
+    "You answer questions about Delaware North's Design & Construction project",
+    "tracker by writing one read-only SQLite query against the schema below.",
+    "You never see the data, only the schema; the worker runs your query and",
+    "then asks you to put the result into words.",
+    "",
+    schemaPrompt({ units, today, role }),
+    "",
+    GLOSSARY.trim(),
+    "",
+    SQL_RULES.trim(),
+    "",
+    INTENT_FOR_SQL.trim(),
+    "",
+    INTENT_RULES.trim(),
+    "",
+    FOLLOW_UP_RULES.trim(),
+  ].join("\n");
+}
+
+export function sqlResponseSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["language", "intent", "followUp", "message", "sql"],
+    properties: {
+      language: { type: "string", description: "The language the question was asked in." },
+      intent: { type: "string", enum: INTENTS },
+      followUp: {
+        type: "boolean",
+        description: "True when this question depends on the previous answer to mean anything.",
+      },
+      message: {
+        type: ["string", "null"],
+        description: "For every intent except search: what to tell the reader, in their language.",
+      },
+      sql: {
+        type: ["string", "null"],
+        description: "For intent search: one SQLite SELECT. Null for every other intent.",
+      },
+    },
+  };
+}
+
+// What the previous turns were, for a follow-up. The query is included as well
+// as the ids: "which of those have the largest budget" needs the conditions the
+// last question established, and prose cannot carry them.
+export function sqlHistoryNote(history) {
+  if (!Array.isArray(history) || !history.length) return "";
+  const lines = history.slice(-6).map((turn, index) => {
+    const parts = [`${index + 1}. They asked: "${String(turn.question).slice(0, 200)}"`];
+    if (turn.sql) parts.push(`   You queried: ${String(turn.sql).slice(0, 400)}`);
+    if (typeof turn.total === "number") parts.push(`   That matched ${turn.total} row(s).`);
+    else if (turn.intent) parts.push(`   You answered with intent "${turn.intent}".`);
+    return parts.join("\n");
+  });
+  return ["The conversation so far, oldest first:", ...lines].join("\n");
+}
+
+export function sqlContextNote(context) {
+  if (!context) return "";
+  const lines = [];
+  if (Array.isArray(context.ids) && context.ids.length) {
+    lines.push(`The previous answer returned ${context.total ?? context.ids.length} row(s).`);
+    lines.push(`The project ids it returned are: ${context.ids.slice(0, 50).join(", ")}.`);
+    if (context.total && context.total > context.ids.length) {
+      lines.push(`Only the first ${context.ids.length} are listed. To ask about the whole matched`
+        + ` set rather than those, repeat the previous query's conditions instead of using the ids.`);
+    }
+  }
+  if (context.sql) {
+    lines.push(`The query that produced it was:\n${String(context.sql).slice(0, 800)}`);
+    lines.push("To narrow that answer, add a condition to those conditions. To ask the same"
+      + " question about something else, keep the conditions and change only what the question"
+      + " changes. To start a new subject, write a fresh query and ignore the above.");
+  }
+  if (!lines.length) return "";
+  lines.push('Set followUp true only when this question depends on the previous answer.'
+    + ' A question naming a new business unit, a new project, or saying "all projects" or'
+    + ' "now show me" is a new subject: write it without the previous conditions.');
+  return lines.join("\n");
+}
+
+// The second call. The model is given what the query returned and asked for a
+// sentence - not for an interpretation, and not for anything the rows do not
+// say. The numbers in the result are the only numbers it may use.
+export const ANSWER_RULES = `You are answering a question about Delaware North's Design & Construction
+project tracker. The query has already run. You are given the question, what
+the query returned, and how much of the matched set that was.
+
+Write a short, direct answer in the reader's language. Rules:
+- Answer the question that was asked, in one or two sentences. Three at most.
+- Use the figures exactly as given. Never calculate a new one, never round a
+  total into a different number, and never state a figure that is not in the
+  result.
+- When the result was truncated, say how many matched and how many are shown:
+  "74 projects match; the 20 most recent are listed." Never imply the shown
+  rows are all of them.
+- When a figure is null or missing, say it is not recorded. Do not treat a
+  missing value as zero.
+- When nothing matched, say so plainly and do not speculate about why.
+- Do not list more than about five projects by name. The records are shown
+  beside your answer, so naming them all repeats what the reader can already see.
+- Do not mention SQL, queries, tables or columns. Talk about projects, budgets,
+  risk ratings and dates.
+- Do not add advice, next steps, or an offer to help further.`;
