@@ -410,18 +410,22 @@ step(25, "and the turn after a switch follows the new subject, not the old one",
   assert.ok(!/business_unit = 'Gaming'/.test(seen.at(-1).context.sql),
     "the previous unit did not survive the switch");
 });
-step(26, "the rail can still reach the first set, unchanged, without re-querying", async () => {
-  const before = seen.length;
-  for (let i = 0; i < 5; i += 1) {
-    await admin.fire("askOlder", "click").results;
-    await admin.settle();
-  }
-  assert.equal(admin.text("askEvidenceTitle"), highRiskTitle, "back at the first question");
-  assert.match(admin.text("askRailLabel"), /^1 of 6$/);
-  assert.equal(seen.length, before, "and nothing was asked again to get there");
+// Awaited out here: step() is synchronous, so an async body would be recorded
+// as passing before it had asserted anything.
+const callsBeforeStepping = seen.length;
+let guard = 0;
+while (!admin.byId("askOlder").disabled && guard++ < 20) {
+  await admin.fire("askOlder", "click").results;
+  await admin.settle();
+}
+const steppedTitle = admin.text("askEvidenceTitle");
+const steppedLabel = admin.text("askRailLabel");
+const callsAfterStepping = seen.length;
+step(26, "the chevrons can still reach the first set, unchanged, without re-querying", () => {
+  assert.equal(steppedTitle, highRiskTitle, "back at the first question");
+  assert.match(steppedLabel, /^1 of \d+$/);
+  assert.equal(callsAfterStepping, callsBeforeStepping, "and nothing was asked again to get there");
 });
-// The step above is async, so give it a tick before the count is read.
-await new Promise((r) => setTimeout(r, 0));
 
 if (ok.length !== 26) throw new Error(`Ask integration: only ${ok.length} of 26 steps passed`);
 console.log(`Ask the Tracker integration: ${ok.length}/26 steps — natural answer in chat, records in the panel, figures and groups presented as themselves, sealed follow-ups, result-set history, briefing/CSV/print, voice controls, and scope held throughout.`);

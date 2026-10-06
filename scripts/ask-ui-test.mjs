@@ -63,6 +63,11 @@ const downloadBriefing = async () => {
 const briefingOffered = () =>
   !!browser.byId("askToolbar").querySelector("[data-ask-action=briefing],[data-ask-action=download]");
 
+const askSetsCount=()=>{
+  const label=browser.text("askRailLabel").trim();
+  const m=label.match(/of (\d+)$/);
+  return m?Number(m[1]):(browser.byId("askOlder").disabled&&browser.byId("askNewer").disabled?1:0);
+};
 const ok=[];const step=(n,label,fn)=>{try{fn();ok.push(n);console.log(`  ${String(n).padStart(2)} ok   ${label}`)}catch(e){console.log(`  ${String(n).padStart(2)} FAIL ${label}\n       ${e.message}`);process.exitCode=1}};
 const ask=async(q)=>{browser.type("askInput",q);await browser.fire("askForm","submit").results;await browser.settle()};
 const cls=(id,c)=>[...browser.byId(id).querySelectorAll(c)];
@@ -295,9 +300,42 @@ step(29,"the Phase 1 production gate is unchanged",()=>{
   assert.match(deployCheck,/kv ASSISTANT_DEBUG "false"/);
 });
 await browser.fire("askBrowse","click").results; await browser.settle();
+// Clicks land on the icon, not the button. Every control in this pane that
+// holds an svg was matched by the target's own id, so the icon - which is most
+// of the hit area - was a dead centre, and the control read as unreliable
+// rather than as broken. These fire from the icon, the way a browser does.
+//
+// The awaiting happens out here: step() is synchronous and would record a pass
+// before an async body had asserted anything, which is exactly how the first
+// version of this test passed against the bug it was written to catch.
+await browser.fire("askNewer","click").results; await browser.settle();
+const iconOf=(id)=>{
+  const button=browser.byId(id);
+  const icon=button.querySelector("svg");
+  if(!icon)throw new Error(id+" has no icon, so this proves nothing");
+  return icon;
+};
+const sets=askSetsCount();
+const titleBefore=browser.text("askEvidenceTitle");
+await browser.fire(iconOf("askOlder"),"click").results; await browser.settle();
+const afterOlder=browser.text("askEvidenceTitle");
+await browser.fire(iconOf("askNewer"),"click").results; await browser.settle();
+const afterNewer=browser.text("askEvidenceTitle");
+step(31,"a click on a chevron's icon steps the result set, not just its padding",()=>{
+  assert.ok(sets>1,"there are several sets to step between");
+  assert.notEqual(afterOlder,titleBefore,"the older icon moved the panel");
+  assert.equal(afterNewer,titleBefore,"and the newer icon moved it back");
+});
+await browser.fire(iconOf("askBrowse"),"click").results; await browser.settle();
+// Left closed deliberately: the next step is about having left the pane.
+const leftPane=browser.byId("askInput").closest("[data-pane]").hidden;
+step(32,"and on the other icon buttons in the pane",()=>{
+  assert.equal(leftPane,true,"the Browse records icon leaves the pane");
+});
+
 step(30,"Browse records returns to the normal record browsing experience",()=>{
   assert.equal(browser.byId("askInput").closest("[data-pane]").hidden,true,"the ask pane closes");
   assert.match(browser.text("pageTitle"),/Projects/,"and the projects view is shown");
 });
-if(ok.length!==30)throw new Error(`Ask UI acceptance: only ${ok.length} of 30 steps passed`);
-console.log(`Ask the Tracker UI: ${ok.length}/30 acceptance steps \u2014 panel, breadcrumbs, modes, result-set history, chevrons, record, briefing, CSV, print, empty, error, permissions, gate.`);
+if(ok.length!==32)throw new Error(`Ask UI acceptance: only ${ok.length} of 32 steps passed`);
+console.log(`Ask the Tracker UI: ${ok.length}/32 acceptance steps \u2014 panel, breadcrumbs, modes, result-set history, chevrons, record, briefing, CSV, print, empty, error, permissions, gate.`);

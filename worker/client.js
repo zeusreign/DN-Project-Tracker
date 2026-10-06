@@ -2062,17 +2062,20 @@ document.addEventListener("click",function(event){
     renderEvidence();
     return;
   }
-  if(event.target&&event.target.id==="askBrowse"){setView("projects");return}
-  if(event.target&&event.target.id==="askOlder"){showSet(askIndex-1);return}
-  if(event.target&&event.target.id==="askNewer"){showSet(askIndex+1);return}
-  if(event.target&&event.target.id==="askDownload"){askAction("download");return}
+  // Matched with closest, not by the target's own id. Each of these buttons
+  // holds an icon, and a click on the icon makes the svg the target - so the id
+  // never matched and only the few pixels of padding around the icon worked.
+  // That read as the control being unreliable rather than as a dead centre.
+  if(closest("#askBrowse")){setView("projects");return}
+  if(closest("#askOlder")){showSet(askIndex-1);return}
+  if(closest("#askNewer")){showSet(askIndex+1);return}
   if(event.target&&event.target.id==="askClear"){
     askTurns=[];askSets=[];askIndex=-1;askSave();renderAsk();return;
   }
   // One control starts and ends the call, and says which it will do.
   var call=closest("#askVoiceBtn");
   if(call){startVoice();return}
-  if(event.target&&event.target.id==="askStopBtn"){stopSpeaking();return}
+  if(closest("#askStopBtn")){stopSpeaking();return}
   var mute=closest("#askMuteBtn");
   if(mute){setVoiceMuted(!voice.muted);return}
   if(event.target&&event.target.id==="askQuietMode"){setAskMode("quiet");return}
