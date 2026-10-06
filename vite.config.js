@@ -1,3 +1,19 @@
+// Node's happy-eyeballs, off.
+//
+// Node 20 turns on autoSelectFamily by default: given a hostname it races the
+// IPv6 and IPv4 addresses with a 250ms head start for IPv6. On a host that has
+// AAAA records for a service but no working IPv6 route - which is this one for
+// api.openai.com - the IPv6 attempt is refused at about 300ms, after that
+// window has closed, and the race ends in ETIMEDOUT rather than falling back
+// to the IPv4 address that works. Every call the assistant makes then throws,
+// and /api/assistant/ask answers 502.
+//
+// This is a Node problem and belongs to the places Node runs the worker: the
+// dev server and the test harnesses. Deployed, the worker runs on Cloudflare,
+// whose fetch has no such path, so nothing in worker/ knows about this.
+import net from "node:net";
+if (typeof net.setDefaultAutoSelectFamily === "function") net.setDefaultAutoSelectFamily(false);
+
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";

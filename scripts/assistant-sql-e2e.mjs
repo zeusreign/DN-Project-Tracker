@@ -8,6 +8,12 @@
 //
 //   npm run assistant:sql-e2e
 
+// Node's happy-eyeballs, off: this host has AAAA records for api.openai.com
+// but no route to them, and Node's default family race ends in ETIMEDOUT
+// instead of falling back to IPv4. See the note in vite.config.js.
+import net from "node:net";
+if (typeof net.setDefaultAutoSelectFamily === "function") net.setDefaultAutoSelectFamily(false);
+
 import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
 
