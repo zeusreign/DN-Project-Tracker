@@ -22,27 +22,25 @@
 
 // Variance: forecast minus approved, positive meaning over budget. Identical to
 // the expression served by /api/projects (worker/index.js:814).
-const FORECAST_VARIANCE_SQL = `
-  CASE
-    WHEN p.approved_budget IS NOT NULL AND p.anticipated_final_cost IS NOT NULL
-    THEN p.anticipated_final_cost - p.approved_budget
-    ELSE NULL
-  END`;
 
-// Day variance: current turnover minus original, in whole days. Computed from
-// the two dates rather than read from projects.duration_change_days, because
-// that stored column is only recalculated when a turnover date is written — 24
-// production rows still hold their imported value (docs/VERSIONS.md §5). The
-// pilot's dayVariance() subtracts the dates for the same reason.
-const DAY_VARIANCE_SQL = `
-  CASE
-    WHEN p.original_turnover_date IS NULL OR p.current_turnover_date IS NULL
-      OR trim(p.original_turnover_date) = '' OR trim(p.current_turnover_date) = ''
-      OR julianday(p.original_turnover_date) IS NULL
-      OR julianday(p.current_turnover_date) IS NULL
-    THEN NULL
-    ELSE CAST(julianday(p.current_turnover_date) - julianday(p.original_turnover_date) AS INTEGER)
-  END`;
+// LEGACY. This is the closed 31-field structured planner, kept as a
+// development-only fallback so /api/assistant/ask keeps answering while the
+// SQL-generating architecture is built. It is not part of that architecture and
+// should not be extended: the audit at e50f3f9 records what it cannot express
+// (negation beyond the two risk fields, aggregation, ordering beyond two
+// derived values, null tests, OR across fields).
+//
+// The business rules it used to own now live in ../assistant-schema.js, which
+// the new engine reads too, so the two cannot disagree about what a variance is.
+
+import {
+  FORECAST_VARIANCE_SQL, DAY_VARIANCE_SQL, PROJECT_COLUMNS, PROJECT_FROM_SQL,
+  LIVE_PROJECT_SQL, LIVE_PHOTO_SQL, RESULT_LIMIT_DEFAULT, RESULT_LIMIT_MAX,
+  scopePredicate, availableUnits,
+} from "../assistant-schema.js";
+
+export { availableUnits };
+
 
 // --- Plan schema -------------------------------------------------------------
 // One declaration drives validation, the human-readable description and the
@@ -185,7 +183,7 @@ export const PLAN_FIELDS = {
     describe: "Order by largest schedule slip, or largest budget overrun. Defaults to the Tracker's own report order.",
   },
   limit: {
-    type: "integer", clamp: true, min: 1, max: 50,
+    type: "integer", clamp: true, min: 1, max: RESULT_LIMIT_MAX,
     describe: "Maximum rows to return. Defaults to 20 and is capped at 50 regardless of what is asked for.",
   },
 };
@@ -193,28 +191,9 @@ export const PLAN_FIELDS = {
 // Columns the assistant may see. project_photos.object_key, every password and
 // session column, and the internal source_key / source_sheet / sort bookkeeping
 // are absent by construction rather than by instruction.
-const SELECT_COLUMNS = `
-  p.id, p.name, b.name AS business_unit, p.venue, p.section_name,
-  p.project_type, p.capp_number, p.initiative_number,
-  p.project_manager, p.development_lead, p.status, p.phase,
-  p.scope_description, p.current_update, p.previous_update,
-  p.budget_risk, p.schedule_risk,
-  p.precon_capp, p.construction_capp, p.add_capp,
-  p.approved_budget, p.anticipated_final_cost,
-  p.original_start_date, p.current_start_date,
-  p.original_turnover_date, p.current_turnover_date,
-  p.reporting_period, p.updated_at,
-  ${FORECAST_VARIANCE_SQL} AS forecast_variance,
-  ${DAY_VARIANCE_SQL} AS duration_change_days,
-  d.requestor AS development_requestor,
-  d.deliverable_due_date AS development_due_date,
-  d.consultants AS development_consultants,
-  d.original_estimate AS development_original_estimate,
-  d.current_estimate AS development_current_estimate,
-  d.request_date AS development_request_date`;
 
-export const PLAN_LIMIT_DEFAULT = 20;
-export const PLAN_LIMIT_MAX = PLAN_FIELDS.limit.max;
+export const PLAN_LIMIT_DEFAULT = RESULT_LIMIT_DEFAULT;
+export const PLAN_LIMIT_MAX = RESULT_LIMIT_MAX;
 
 // --- Validation --------------------------------------------------------------
 // Returns the cleaned plan plus a list of problems. A non-empty problems list
@@ -464,15 +443,6 @@ export function planSchemaPrompt(options = {}) {
 // from business_units rather than hardcoded, so a unit added through the admin
 // screens is immediately askable about and a renamed one stops being offered.
 
-export async function availableUnits(db, scope) {
-  const result = await db.prepare(
-    "SELECT name FROM business_units ORDER BY sort_order, name"
-  ).bind().all();
-  const names = (result.results || []).map((row) => row.name);
-  if (!scope) return names;
-  const allowed = new Set(scope.map((name) => name.toLowerCase()));
-  return names.filter((name) => allowed.has(name.toLowerCase()));
-}
 
 // --- Execution ---------------------------------------------------------------
 // scope is the array of business-unit names the signed-in user may see, or null
@@ -491,13 +461,16 @@ export function searchTerms(search, loose) {
 }
 
 function planWhere(plan, scope, loose) {
-  const clauses = ["p.archived_at IS NULL"];
+  const clauses = [LIVE_PROJECT_SQL];
   const bindings = [];
 
-  if (scope) {
-    if (!scope.length) return { sql: " WHERE 1 = 0", bindings: [] };
-    clauses.push(`b.name IN (${scope.map(() => "?").join(", ")})`);
-    bindings.push(...scope);
+  // Scope first, before anything the plan asked for. An empty scope is a
+  // contradiction, not an absent filter.
+  const scoped = scopePredicate(scope);
+  if (scoped) {
+    if (scoped.sql === "1 = 0") return { sql: " WHERE 1 = 0", bindings: [] };
+    clauses.push(scoped.sql);
+    bindings.push(...scoped.bindings);
   }
 
   if (plan.unit && plan.unit !== "All") { clauses.push("b.name = ?"); bindings.push(plan.unit); }
@@ -585,10 +558,6 @@ function planWhere(plan, scope, loose) {
   return { sql: ` WHERE ${clauses.join(" AND ")}`, bindings };
 }
 
-const FROM_SQL = `
-  FROM projects p
-  JOIN business_units b ON b.id = p.business_unit_id
-  LEFT JOIN development_details d ON d.project_id = p.id`;
 
 function orderSql(plan) {
   // NULLs last in both derived orderings: a project with no dates is not the
@@ -603,11 +572,11 @@ export function planQueries(plan, scope, loose) {
   const limit = Math.min(plan.limit || PLAN_LIMIT_DEFAULT, PLAN_LIMIT_MAX);
   return {
     rows: {
-      sql: `SELECT ${SELECT_COLUMNS}${FROM_SQL}${where.sql}${orderSql(plan)} LIMIT ?`,
+      sql: `SELECT ${PROJECT_COLUMNS}${PROJECT_FROM_SQL}${where.sql}${orderSql(plan)} LIMIT ?`,
       bindings: [...where.bindings, limit],
     },
     count: {
-      sql: `SELECT COUNT(*) AS total${FROM_SQL}${where.sql}`,
+      sql: `SELECT COUNT(*) AS total${PROJECT_FROM_SQL}${where.sql}`,
       bindings: where.bindings,
     },
     limit,
@@ -655,7 +624,7 @@ async function attachChildren(db, rows, plan) {
       SELECT id, project_id, caption, kind, reporting_period, date_taken,
              taken_by, area, category, photo_number
       FROM project_photos
-      WHERE project_id IN (${holes}) AND deleted_at IS NULL
+      WHERE project_id IN (${holes}) AND ${LIVE_PHOTO_SQL}
       ORDER BY date_taken DESC, created_at DESC
     `).bind(...ids).all();
     const byProject = new Map();

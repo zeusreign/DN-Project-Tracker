@@ -1,4 +1,13 @@
-// Assistant query-plan tests.
+// LEGACY. The unit tests of the closed 31-field planner, kept with it.
+//
+// They still pass and still describe what that planner does, which is why they
+// are preserved rather than deleted: if the fallback is switched on, this is
+// what says it still works. They are not the acceptance suite for the new
+// architecture — scripts/assistant-e2e.mjs is, because its expectations are
+// written as SQL predicates rather than as plans.
+//
+// The checks that covered code still on the active path moved to
+// scripts/assistant-api-test.mjs.
 //
 // Runs against a real SQLite database built from the production schema and seed
 // data, so the derived expressions are checked against the same shapes D1 holds
@@ -18,10 +27,11 @@ import { fileURLToPath } from "node:url";
 import {
   validatePlan, describePlan, planSchemaPrompt, planQueries, runPlan, availableUnits,
   summarisePlan, PLAN_FIELDS, PLAN_LIMIT_MAX,
-} from "../worker/assistant-plan.js";
-import { restatesThePlan, refersBack, formatSql, whereOf } from "../worker/assistant-api.js";
+} from "../../worker/legacy/assistant-plan.js";
+import { restatesThePlan } from "../../worker/legacy/assistant-plan-route.js";
+import { formatSql, whereOf } from "../../worker/assistant-api.js";
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 // --- Database ----------------------------------------------------------------
 // Schema from the migrations, rows from the seed, so this runs with no
@@ -231,7 +241,7 @@ await check("a voice session asks for the reply not to be interrupted", async ()
   // The listener speaking must not cancel an answer in progress: a figure read
   // out half way is worse than waiting. Checked on the body that is actually
   // sent, since this is a property of the session rather than of the browser.
-  const { mintVoiceSession } = await import("../worker/assistant-model.js");
+  const { mintVoiceSession } = await import("../../worker/assistant-model.js");
   let sent = null;
   await mintVoiceSession({ OPENAI_API_KEY: "sk-test" }, {
     instructions: "test",
@@ -271,21 +281,6 @@ await check("the developer's SQL is laid out so it can be read", () => {
   assert.match(where, /b\.name IN/, "the scope is visible in the conditions");
   assert.ok(!/^WHERE/i.test(where), "the keyword is the label, not part of the value");
   assert.ok(!/ORDER BY/i.test(where), "and the ordering is not dragged in with it");
-});
-
-await check("a follow-up has to be worded as one, not only declared", () => {
-  // The model declares followUp and gets it wrong often enough to matter: "give
-  // projects with high budget risks" came back as a follow-up and was answered
-  // inside eleven unrelated projects, finding none of the five that match.
-  for (const question of [
-    "which of these are in Gaming?", "and which of those have low budget risk?",
-    "filter out those whose schedule risk is also high", "show only the high risk ones",
-  ]) assert.equal(refersBack(question), true, question);
-
-  for (const question of [
-    "give projects with high budget risks", "Give details of Holiday Inn",
-    "what about Parks & Resorts?", "which projects slipped more than 30 days?",
-  ]) assert.equal(refersBack(question), false, question);
 });
 
 await check("a search duplicating a field of its own is recognised", () => {
@@ -682,4 +677,4 @@ await check("an injection attempt through search returns no rows and changes not
   const stillThere = database.prepare("SELECT COUNT(*) AS c FROM projects").get().c;
   assert.equal(stillThere, 5, "projects table intact");});
 
-console.log(`Assistant plan tests passed: ${checks} checks — validation, scope enforcement, filters, result shape, prompt schema.`);
+console.log(`LEGACY assistant plan tests passed: ${checks} checks — validation, scope enforcement, filters, result shape, prompt schema.`);

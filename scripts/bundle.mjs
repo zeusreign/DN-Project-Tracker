@@ -31,10 +31,31 @@ const [enhanced, enhancedStyles, projectImages] = await Promise.all(["enhanced.j
 
 const workflows = await readFile(resolve(workerRoot, "enhanced-workflows.js"), "utf8");
 const enhancedApi = await readFile(resolve(workerRoot, "enhanced-api.js"), "utf8");
-const assistantPlan = await readFile(resolve(workerRoot, "assistant-plan.js"), "utf8");
-const assistantPrompt = await readFile(resolve(workerRoot, "assistant-prompt.js"), "utf8");
-const assistantModel = await readFile(resolve(workerRoot, "assistant-model.js"), "utf8");
-const assistantApi = await readFile(resolve(workerRoot, "assistant-api.js"), "utf8");
+// The assistant, in dependency order. Everything here is concatenated into one
+// scope with its imports and exports stripped, so a file that reads a const
+// from another must come after it. The legacy planner is included because
+// ASSISTANT_LEGACY_PLANNER can switch it on for development; the route guard,
+// not the bundle, is what keeps it out of production.
+const assistantFiles = [
+  "assistant-schema.js",
+  "assistant-prompt.js",
+  "assistant-model.js",
+  "legacy/assistant-plan.js",
+  "legacy/assistant-plan-prompt.js",
+  "legacy/assistant-plan-model.js",
+  "legacy/assistant-plan-route.js",
+  "assistant-api.js",
+];
+// Single-line and braced multi-line imports both have to go, and a re-export
+// (export { x } or export … from) is a module boundary that does not survive
+// concatenation either.
+const flatten = (source) => source
+  .replace(/^import\s+[\s\S]*?from\s+["'][^"']+["'];\n/gm, "")
+  .replace(/^export\s*\{[^}]*\}\s*(from\s+["'][^"']+["'])?;\n/gm, "")
+  .replace(/^export /gm, "");
+const assistant = await Promise.all(
+  assistantFiles.map(async (name) => flatten(await readFile(resolve(workerRoot, name), "utf8"))),
+);
 const photoModule = await readFile(resolve(workerRoot, "enhanced-photos.js"), "utf8");
 const photoDrop = await readFile(resolve(workerRoot, "enhanced-drop.js"), "utf8");
 const bundled = [
@@ -42,10 +63,7 @@ const bundled = [
   photoModule.replace("export const PHOTO_MODULE", "const PHOTO_MODULE"),
   workflows.replace("export const ENHANCED_WORKFLOWS", "const ENHANCED_WORKFLOWS"),
   enhancedApi.replace(/^export /gm, ""),
-  assistantPlan.replace(/^export /gm, ""),
-  assistantPrompt.replace(/^import .*;\n/gm, "").replace(/^export \{[^}]*\};\n/gm, "").replace(/^export /gm, ""),
-  assistantModel.replace(/^import .*;\n/gm, "").replace(/^export \{[^}]*\};\n/gm, "").replace(/^export /gm, ""),
-  assistantApi.replace(/^import .*;\n/gm, "").replace(/^export .*from.*;\n/gm, "").replace(/^export /gm, ""),
+  ...assistant,
   projectImages.replace("export const PROJECT_IMAGES", "const PROJECT_IMAGES"),
   enhanced.replace(/^import .*;\n/gm, "").replace("export const ENHANCED_CLIENT", "const ENHANCED_CLIENT"),
   enhancedStyles.replace("export const ENHANCED_STYLES", "const ENHANCED_STYLES"),

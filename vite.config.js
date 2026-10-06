@@ -121,7 +121,11 @@ function trackerPreview(previewAdmin) {
           }), { DB, ADMIN_EMAILS: "preview@example.com", OPENAI_API_KEY: previewOpenAiKey,
             // The local preview is for developing against, so the plan and the
             // SQL behind each answer are shown. Production asserts this off.
-            ASSISTANT_DEBUG: "true" }, {});
+            ASSISTANT_DEBUG: "true",
+            // Until the SQL-generating engine lands, the preview answers
+            // questions through the legacy planner so the pane stays usable.
+            // Production asserts this off too.
+            ASSISTANT_LEGACY_PLANNER: "true" }, {});
           response.statusCode = result.status;
           result.headers.forEach((value, name) => response.setHeader(name, value));
           response.end(Buffer.from(await result.arrayBuffer()));

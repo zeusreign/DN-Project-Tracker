@@ -69,6 +69,7 @@ const env = {
   DB,
   ADMIN_EMAILS: "demo@example.invalid",
   ALLOW_PLATFORM_AUTH: "true",
+  ASSISTANT_LEGACY_PLANNER: "true",
   OPENAI_API_KEY: KEY,
   ASSISTANT_PLANNER_MODEL: process.env.ASSISTANT_PLANNER_MODEL,
 };

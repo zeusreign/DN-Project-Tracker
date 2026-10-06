@@ -42,6 +42,7 @@ const DB = {
 
 const env = {
   DB, ADMIN_EMAILS: "e2e@example.invalid", ALLOW_PLATFORM_AUTH: "true", OPENAI_API_KEY: KEY,
+  ASSISTANT_LEGACY_PLANNER: "true",
 };
 const headers = {
   "oai-authenticated-user-id": "e2e",

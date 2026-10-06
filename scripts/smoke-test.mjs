@@ -198,7 +198,10 @@ const BUCKET = {
   async get(key) { return photoObjects.has(key) ? { body: photoObjects.get(key) } : null; },
   async delete(key) { photoObjects.delete(key); },
 };
-const env = { DB, BUCKET, ADMIN_EMAILS: "owner@example.com", ALLOW_PLATFORM_AUTH: "true" };
+const env = { DB, BUCKET, ADMIN_EMAILS: "owner@example.com", ALLOW_PLATFORM_AUTH: "true",
+  // The assistant query routes are served by the legacy planner until the
+  // SQL-generating engine lands; this block tests the guards around them.
+  ASSISTANT_LEGACY_PLANNER: "true" };
 const worker = (await import("../dist/server/index.js?smoke=" + Date.now())).default;
 const headers = {
   "oai-authenticated-user-id": "owner-id",
@@ -1691,7 +1694,7 @@ for (const [parent, child] of [
 
 
 // --- Assistant query endpoint ------------------------------------------------
-// The plan module is unit-tested in scripts/assistant-plan-test.mjs. What this
+// The plan module is unit-tested in scripts/legacy/assistant-plan-test.mjs. What
 // block proves is the part only the real worker can prove: that the endpoint
 // inherits the authentication, CSRF and business-unit gates of every other
 // route, and that a scoped user cannot reach another unit's records through it.

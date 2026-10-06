@@ -102,6 +102,7 @@ fi
 # public Pages deployment: any caller could send one and arrive as an admin.
 kv ALLOW_PLATFORM_AUTH "false"
 kv ASSISTANT_DEBUG "false"
+kv ASSISTANT_LEGACY_PLANNER "false"
 
 # Binding names are fixed by the application; worker/index.js reads env.DB and
 # env.BUCKET directly. Renaming either produces a 503 at runtime, not a build error.

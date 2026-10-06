@@ -65,6 +65,14 @@ ALLOW_PLATFORM_AUTH = "false"
 # it is debugging furniture rather than something the client asked for.
 ASSISTANT_DEBUG = "false"
 
+# The closed 31-field planner, kept as a development-only fallback while the
+# SQL-generating query engine is built. Off here and asserted off by
+# scripts/check-deploy-target.sh: it is the architecture being replaced, and the
+# audit at e50f3f9 records the questions it answers wrongly without saying so.
+# With it off, the query routes answer 503 and voice, auth and every other route
+# are unaffected.
+ASSISTANT_LEGACY_PLANNER = "false"
+
 # TODO(config): optional comma-separated list granting the `admin` role by email.
 # Intentionally left empty — it does NOT create a login account (it only applies
 # to the platform-auth fallback above and to role lookup). The first real
