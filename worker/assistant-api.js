@@ -367,6 +367,7 @@ async function askWithSql(request, env, user, role, scope, helpers) {
     // wrong answer this feature exists to avoid.
     entity: result.entity,
     entityLabel: result.entityLabel,
+    fannedOut: result.fannedOut,
     projects: result.projects || undefined,
     // The structured records the UI builds its cards from. When a question is
     // not about projects at all - a count, a group, a list of updates - there

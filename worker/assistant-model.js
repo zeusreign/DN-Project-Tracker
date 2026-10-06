@@ -219,6 +219,10 @@ export function openAiAnswerer({ apiKey, model = DEFAULT_ANSWER_MODEL, fetchImpl
         returned_rows: result.returned,
         truncated: result.truncated,
         is_single_figure: !!result.aggregate,
+        more_than_one_row_per_project: !!result.fannedOut,
+        ...(result.projectsInScope !== null && result.projectsInScope !== undefined
+          ? { projects_in_scope: result.projectsInScope }
+          : {}),
         ...(result.projects && result.projects.matched !== null
           ? {
             distinct_projects_matched: result.projects.matched,

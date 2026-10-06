@@ -350,6 +350,29 @@ export async function runSql(db, sql, scope, { limit } = {}) {
     };
   }
 
+  // A join to a child table multiplies the rows: one project with three saved
+  // updates becomes three rows. The query is still driven from projects, so
+  // the entity looks like "projects" and the row count looks like a project
+  // count - and "there are 127 projects" is then simply false, because there
+  // are 74. Whenever the distinct projects and the rows disagree, say so
+  // rather than letting the larger number stand as a project count.
+  // For a single figure, how many projects this reader can see at all. A total
+  // or an average silently skips the rows where the value is not recorded, and
+  // an answer that calls the result "the average across all projects" is then
+  // wrong by however many were skipped. A rule alone did not stop the model
+  // echoing the question's wording; a number it has to reconcile does.
+  let projectsInScope = null;
+  if (validated.aggregate && validated.driving === "projects") {
+    const views = scopedViews(scope);
+    const counted = await db.prepare(`${views.sql}\nSELECT COUNT(*) AS n FROM projects`)
+      .bind(...views.bindings).first().catch(() => null);
+    if (counted && typeof counted.n === "number") projectsInScope = counted.n;
+  }
+
+  const entity = entityOf(validated);
+  const fannedOut = entity === "projects" && projects
+    && projects.matched !== null && projects.matched !== total;
+
   return {
     rows: results,
     returned: results.length,
@@ -360,8 +383,12 @@ export async function runSql(db, sql, scope, { limit } = {}) {
     grouped: validated.grouped,
     // What one row is. The answerer and the UI are both told, so neither has
     // to guess from the column names.
-    entity: entityOf(validated),
-    entityLabel: ENTITY_LABELS[entityOf(validated)] || "records",
+    entity,
+    entityLabel: fannedOut
+      ? "rows, with more than one row per project"
+      : (ENTITY_LABELS[entity] || "records"),
+    fannedOut,
+    projectsInScope,
     projects,
     projectKey: key,
     sql: query.rows.sql,

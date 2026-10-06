@@ -234,4 +234,77 @@ await check("the answerer is told what a row is, and how many projects it covers
   assert.notEqual(handed.total, handed.projects.matched);
 });
 
+// --- Phase 5 regressions ----------------------------------------------------
+
+await check("a join that multiplies the rows is not reported as a project count", async () => {
+  // Phase 5, case A1. "Show me each project together with its activity updates"
+  // produced 127 rows over 74 projects, driven from projects, and the answer
+  // read "there are 127 projects". There are 74.
+  const fanned = {
+    async generate() {
+      return { intent: "search", language: "English", message: null,
+        sql: "SELECT p.id, p.name, u.current_summary FROM projects p JOIN project_updates u ON u.project_id = p.id",
+        usage: { model: "stub" } };
+    },
+  };
+  let handed = null;
+  const watching = { async answer(question, result) { handed = result; return { text: "ok", usage: {} }; } };
+  const response = await worker.fetch(new Request("https://ctx/api/assistant/ask", {
+    method: "POST", headers, body: JSON.stringify({ question: "projects with their updates" }),
+  }), { ...env, ASSISTANT_SQL: fanned, ASSISTANT_ANSWERER: watching }, {});
+  const answer = await response.json();
+
+  const rows = database.prepare(`
+    SELECT COUNT(*) AS n FROM projects p JOIN project_updates u ON u.project_id = p.id
+    WHERE p.archived_at IS NULL`).get().n;
+  const projects = database.prepare(`
+    SELECT COUNT(DISTINCT p.id) AS n FROM projects p JOIN project_updates u ON u.project_id = p.id
+    WHERE p.archived_at IS NULL`).get().n;
+  assert.ok(rows > projects, "the fixture really does fan out, or this proves nothing");
+
+  assert.equal(answer.total, rows, "the row count is still reported truthfully");
+  assert.equal(answer.projects.matched, projects, "alongside the distinct projects");
+  assert.equal(answer.fannedOut, true, "and the two are flagged as disagreeing");
+  assert.match(answer.entityLabel, /more than one row per project/,
+    "so the label cannot be read as a project count");
+  assert.ok(!/^projects$/.test(answer.entityLabel), "it no longer says plainly 'projects'");
+  assert.equal(handed.fannedOut, true, "the answerer is told, so it leads with the project count");
+  assert.equal(handed.projects.matched, projects);
+});
+
+await check("a query with one row per project is not flagged as fanned out", async () => {
+  const plain = {
+    async generate() {
+      return { intent: "search", language: "English", message: null,
+        sql: "SELECT id, name FROM projects WHERE business_unit = 'Gaming'", usage: { model: "stub" } };
+    },
+  };
+  const answer = await (await worker.fetch(new Request("https://ctx/api/assistant/ask", {
+    method: "POST", headers, body: JSON.stringify({ question: "gaming" }),
+  }), { ...env, ASSISTANT_SQL: plain, ASSISTANT_ANSWERER: answerer }, {})).json();
+  assert.equal(answer.fannedOut, false, "no join, no fan-out");
+  assert.equal(answer.entityLabel, "projects");
+  assert.equal(answer.projects.matched, answer.total, "one row is one project");
+});
+
+await check("the answerer is told a figure covers only what is recorded", async () => {
+  // Phase 5, case C2. An average over the 49 projects that have a budget was
+  // described as "the average across all projects". There are 74.
+  const { ANSWER_RULES } = await import("../worker/assistant-prompt.js");
+  assert.match(ANSWER_RULES, /covers only the projects that\s+have that figure recorded/,
+    "the rule is stated");
+  assert.match(ANSWER_RULES, /Never\s+describe such a figure as covering "all projects"/,
+    "and names the wording that was wrong");
+  assert.match(ANSWER_RULES, /more than one row per project/,
+    "the fan-out rule is stated too");
+});
+
+await check("an unintelligible question is asked about rather than answered", async () => {
+  // Phase 5, case K4. Sixty x's followed by "projects?" returned all 74.
+  const { INTENT_RULES } = await import("../worker/assistant-prompt.js");
+  assert.match(INTENT_RULES, /mostly unintelligible/, "the rule is stated");
+  assert.match(INTENT_RULES, /Returning the whole portfolio is a confident answer/,
+    "and says why it matters");
+});
+
 console.log(`Assistant context and result-semantics tests passed: ${checks} checks — sealed continuity with ASSISTANT_DEBUG off, forged tokens ignored, subject switching, and child records counted as themselves.`);

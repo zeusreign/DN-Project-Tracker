@@ -851,6 +851,7 @@ function recordSet(question,answer){
     entity:answer.entity||"projects",
     entityLabel:answer.entityLabel||"records",
     aggregate:!!answer.aggregate,
+    fannedOut:!!answer.fannedOut,
     projects:answer.projects||null,
     filters:(answer.description||[]).slice(),
     sources:(answer.sources||[]).slice(),
@@ -956,7 +957,11 @@ function renderEvidence(){
     // once the panel has to say which one it is showing, or the rail moves and
     // nothing on screen changes its mind about what it is.
     head={title:set.question,
-      count:set.entity==="figure"?"1":String(set.total),
+      // The cards are projects, deduplicated. When a join multiplied the rows,
+      // the row count is not what is on screen and must not label it.
+      count:set.entity==="figure"?"1"
+        :set.fannedOut&&set.projects&&set.projects.matched!==null?String(set.projects.matched)
+        :String(set.total),
       crumb:set.entity==="figure"?"Figure":set.entity==="group"?"Grouped totals"
         :set.entity==="projects"?"Matching projects":askTitleCase(set.entityLabel)};
     // A briefing and a CSV are built from project records. A figure has none,
@@ -1389,7 +1394,7 @@ function askEvidenceLine(answer,turn){
   var line=esc(String(answer.total))+" "+esc(what)
     +(answer.truncated?" · showing the first "+esc(String(answer.returned)):"");
   if(answer.projects&&answer.projects.matched!==null&&answer.projects.matched!==undefined
-    &&answer.entity!=="projects"&&answer.entity!=="figure"){
+    &&(answer.fannedOut||(answer.entity!=="projects"&&answer.entity!=="figure"))){
     line+=" · across "+esc(String(answer.projects.matched))+" project"
       +(answer.projects.matched===1?"":"s");
   }
