@@ -124,7 +124,255 @@ ${ENHANCED_STYLES}
 .ask-ai-mark{width:22px;height:22px;border-radius:6px;background:#e3f3f4;color:#00767e;
   display:inline-flex;align-items:center;justify-content:center;flex:none}
 .ask-ai-mark .ai-spark{width:13px;height:13px}
-/* The assistant's record view. Deliberately not the edit form: this pane only
+
+/* --- Ask the Tracker ------------------------------------------------------ */
+/* Follows the Ask the Tracker pilot: a conversation on the left, an evidence
+   panel on the right, and a rail for moving between result sets. Every figure
+   in an answer can be traced to the record it came from rather than being taken
+   on trust, which is the whole reason the evidence panel exists. */
+.pane[data-pane="ask"]{--ask-navy:#07364b;--ask-teal:#007f86;--ask-ink:#163548;
+  --ask-muted:#586c7a;--ask-line:#dce5ea}
+
+/* Top row: the way back, where you are, and what you are looking at. */
+.ask-top{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  flex-wrap:wrap;padding:0 0 12px}
+.ask-trail{display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:0}
+.ask-back{display:inline-flex;align-items:center;gap:6px;background:#fff;color:#284e63;
+  border:1px solid #cbd9e1;border-radius:6px;padding:7px 12px 7px 9px;font-size:13px;
+  font-weight:600;cursor:pointer;white-space:nowrap}
+.ask-back:hover{background:#eaf4f6;border-color:#9ac8ca}
+.ask-back svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round}
+.ask-breadcrumb{display:flex;align-items:center;gap:0;font-size:13px;color:#486475;
+  flex-wrap:wrap;min-width:0}
+.ask-breadcrumb span{padding:0 8px;color:#9aaab5}
+.ask-crumb{background:none;border:0;padding:0;font:inherit;color:#2a6b7c;cursor:pointer}
+.ask-crumb:hover{text-decoration:underline}
+.ask-crumb-now{color:#1d4a5e;font-weight:600;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;max-width:28ch}
+.ask-top-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ask-context{font-size:12px;color:#486475;padding:6px 10px;border:1px solid #cedce5;
+  border-radius:4px;background:#f9fbfc;max-width:34ch;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+
+/* Heading row. */
+.ask-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;
+  flex-wrap:wrap;padding:4px 0 18px}
+.ask-head h2{margin:0;font-size:26px;letter-spacing:-.6px;line-height:1.2;color:#07394e}
+.ask-head p{margin:6px 0 0;color:var(--ask-muted);font-size:14px}
+.ask-scope-pick{display:flex;align-items:center;gap:8px;font-size:12px;color:#54707f}
+.ask-scope-pick select{border:1px solid #cbd9e1;border-radius:6px;padding:7px 9px;
+  font-size:13px;color:#24495c;background:#fff;max-width:17rem}
+
+/* Three columns: talk, evidence, and the rail that moves between result sets. */
+.ask-workspace{display:grid;grid-template-columns:minmax(360px,1.2fr) minmax(320px,1fr) 46px;
+  gap:18px;min-height:520px;height:calc(100vh - 330px);max-height:950px}
+.ask-conversation{background:#fff;border:1px solid var(--ask-line);border-radius:10px;
+  display:flex;flex-direction:column;min-width:0;overflow:hidden;box-shadow:0 2px 4px #17334505}
+.ask-chat-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px 16px;border-bottom:1px solid #eef3f5;flex-wrap:wrap}
+.ask-modes{display:flex;background:#edf2f5;padding:3px;border-radius:6px;flex:none}
+.ask-modes button{border:0;background:transparent;color:#536d7c;padding:6px 14px;
+  border-radius:4px;font-size:13px;cursor:pointer}
+.ask-modes button[aria-pressed=true]{background:#fff;color:#006e78;font-weight:700;
+  box-shadow:0 1px 4px #16354818}
+.ask-scope{font-size:11px;color:#728894;text-align:right;min-width:0}
+
+/* Voice. The orb is the state indicator; the phone button starts and ends a
+   call; Stop interrupts speech without ending the call. */
+.ask-voice-panel{padding:22px 20px;text-align:center;background:#f3f8fa;
+  border-bottom:1px solid var(--ask-line)}
+.ask-orb{width:92px;height:92px;border-radius:50%;margin:0 auto 14px;position:relative;
+  background:radial-gradient(circle at 50% 40%,#d9eef0,#bfe2e5);display:grid;place-items:center}
+.ask-orb-skin{width:62px;height:62px;border-radius:50%;
+  background:linear-gradient(145deg,#1aa0a8,#0b6d78);box-shadow:0 6px 18px #0b6d7833}
+.ask-orb[data-state=connecting] .ask-orb-skin{animation:askPulse 1.1s ease-in-out infinite}
+.ask-orb[data-state=listening]{background:radial-gradient(circle at 50% 40%,#d6f1ef,#a9e0dc)}
+.ask-orb[data-state=listening] .ask-orb-skin{animation:askPulse 1.9s ease-in-out infinite}
+.ask-orb[data-state=speaking] .ask-orb-skin{animation:askPulse .8s ease-in-out infinite}
+.ask-orb[data-state=error]{background:radial-gradient(circle at 50% 40%,#f7dcd6,#eabcb2)}
+.ask-orb[data-state=error] .ask-orb-skin{background:linear-gradient(145deg,#c9705c,#9a3e2b)}
+@keyframes askPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.11)}}
+.ask-orb-call{width:48px;height:48px;border-radius:50%;border:0;background:#007c83;
+  color:#fff;display:inline-grid;place-items:center;cursor:pointer}
+.ask-orb-call:hover{background:#006970}
+.ask-orb-call svg{width:22px;height:22px;fill:currentColor}
+.ask-orb-call[data-live=true]{background:#9a3e2b}
+.ask-stop{margin-left:8px;border:1px solid #cbd9e1;background:#fff;color:#284e63;
+  border-radius:6px;padding:8px 13px;font-size:13px;font-weight:600;cursor:pointer}
+.ask-stop:hover{background:#eaf4f6}
+.ask-voice-status{margin:12px auto 0;font-size:13px;color:#526f7f;max-width:40ch}
+
+/* The conversation. */
+.ask-messages{flex:1;min-height:150px;overflow:auto;padding:22px 20px 6px;
+  scroll-behavior:smooth}
+.ask-turn{margin-bottom:22px}
+.ask-turn-user{display:flex;flex-direction:column;align-items:flex-end}
+.ask-label{display:flex;align-items:center;gap:8px;color:#265569;font-size:12px;
+  font-weight:700;margin-bottom:9px}
+.ask-bubble{font-size:15px;line-height:1.62;color:#264554;overflow-wrap:anywhere}
+.ask-turn-user .ask-bubble{background:#edf3f7;border:1px solid #e0e9ef;
+  border-radius:11px 11px 3px 11px;padding:11px 14px;max-width:93%}
+.ask-bubble p{margin:8px 0 12px}
+.ask-bubble h3{font-size:21px;font-weight:600;margin:8px 0;color:#123f54;
+  line-height:1.3;letter-spacing:-.3px}
+.ask-bubble strong{color:#103c50}
+.ask-bubble ul{margin:8px 0 12px;padding-left:20px}
+.ask-bubble li{margin:4px 0;line-height:1.55}
+.ask-chips{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}
+.ask-chip{padding:4px 8px;border-radius:4px;background:#eef4f6;color:#486577;
+  font-size:11px;line-height:1.5}
+.ask-results{padding:0;list-style:none;margin:10px 0}
+.ask-result{padding:9px 0;border-bottom:1px solid #e9eef1;line-height:1.4}
+.ask-result-name{color:#087780;background:transparent;border:0;padding:0;text-align:left;
+  font-size:14px;font-weight:600;cursor:pointer}
+.ask-result-name:hover{text-decoration:underline}
+.ask-result-meta{display:block;color:#667d89;font-size:12px;margin-top:4px}
+.ask-note{color:#6a6d62;background:#f7f5ed;padding:10px 12px;border-left:3px solid #cebc77;
+  font-size:12px;line-height:1.55;border-radius:0 4px 4px 0;margin:12px 0}
+.ask-sources{color:#72848f;font-size:11px;margin-top:11px}
+.ask-pending{color:#6d838f;font-size:13px;display:flex;align-items:center;gap:8px}
+.ask-dots{width:34px;height:8px;display:inline-flex;gap:4px}
+.ask-dots i{width:8px;height:8px;border-radius:50%;background:#9cc3c7;
+  animation:askBlink 1.2s ease-in-out infinite}
+.ask-dots i:nth-child(2){animation-delay:.18s}
+.ask-dots i:nth-child(3){animation-delay:.36s}
+@keyframes askBlink{0%,100%{opacity:.3}50%{opacity:1}}
+.ask-error{background:#fdf1ee;border-left:3px solid #c9705c;color:#8e3c29;padding:10px 12px;
+  font-size:13px;line-height:1.55;border-radius:0 4px 4px 0}
+.ask-buttons{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}
+
+/* Suggestions and composer. */
+.ask-suggestions{display:flex;gap:7px;flex-wrap:wrap;padding:10px 18px 12px;
+  border-top:1px solid #f0f3f5}
+.ask-suggestion{border:1px solid #d9e4e9;background:#fff;color:#246174;border-radius:6px;
+  padding:7px 10px;font-size:12px;text-align:left;cursor:pointer}
+.ask-suggestion:hover{background:#edf8f8;border-color:#9ac8ca}
+.ask-composer{margin:0 16px 16px;border:1px solid #b6d0d8;border-radius:9px;
+  box-shadow:0 1px 4px #0a53600a;padding:10px 12px 8px}
+.ask-composer:focus-within{border-color:#168f95;box-shadow:0 0 0 2px #007f8610}
+.ask-composer textarea{resize:none;border:0;background:transparent;width:100%;outline:none;
+  color:#1d4053;min-height:46px;font-size:15px;line-height:1.5;font-family:inherit}
+.ask-composer textarea::placeholder{color:#83939d}
+.ask-compose-footer{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ask-compose-hint{font-size:11px;color:#728894}
+.ask-send{border:0;border-radius:5px;background:#007c83;color:#fff;font-size:13px;
+  font-weight:600;padding:8px 19px;cursor:pointer}
+.ask-send:hover{background:#006970}
+.ask-send:disabled{opacity:.5;cursor:default}
+.ask-btn{background:#fff;color:#284e63;border:1px solid #cbd9e1;padding:8px 13px;
+  border-radius:6px;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
+.ask-btn:hover{background:#eaf4f6}
+.ask-btn:disabled{opacity:.5;cursor:default}
+.ask-btn-primary{background:var(--ask-teal);border-color:var(--ask-teal);color:#fff}
+.ask-btn-primary:hover{background:#00676d}
+
+/* The evidence panel: overview, record list, one record, or a briefing. */
+.ask-evidence{display:flex;flex-direction:column;background:#fafcfd;
+  border:1px solid var(--ask-line);border-radius:10px;min-width:0;overflow:hidden}
+.ask-evidence-header{padding:18px 18px 15px;display:flex;justify-content:space-between;
+  align-items:center;border-bottom:1px solid var(--ask-line);gap:10px}
+.ask-kicker{font-size:11px;letter-spacing:1.5px;font-weight:700;color:#627786;
+  text-transform:uppercase;display:block}
+.ask-evidence-title{font-size:17px;line-height:1.3;margin:6px 0 0;color:#183f53;display:block}
+.ask-count{padding:4px 9px;background:#e5edf2;color:#36596d;border-radius:5px;
+  font-size:13px;font-weight:600;flex:none}
+.ask-evidence-toolbar{display:flex;gap:7px;flex-wrap:wrap;padding:0 16px}
+.ask-evidence-toolbar:not(:empty){padding-top:11px;padding-bottom:11px;
+  border-bottom:1px solid var(--ask-line)}
+.ask-evidence-toolbar .ask-btn{font-size:12px;padding:6px 10px}
+.ask-evidence-body{overflow:auto;flex:1;padding:16px 18px 22px}
+.ask-source-meta{color:#6c818e;font-size:12px;margin:0 0 16px}
+.ask-metric-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-bottom:18px;
+  border-bottom:1px solid var(--ask-line)}
+.ask-metric span{font-size:12px;color:#637b8a;display:block}
+.ask-metric strong{font-size:26px;letter-spacing:-1px;font-weight:600;color:#103f54;
+  display:block;margin:4px 0 1px}
+.ask-metric strong.over{color:#9a3e2b}
+.ask-metric strong.late{color:#83601b}
+.ask-metric small{font-size:11px;color:#70828e}
+.ask-section-label{font-size:11px;letter-spacing:1.2px;font-weight:700;color:#627786;
+  text-transform:uppercase;margin:18px 0 4px}
+.ask-unit-row{display:grid;grid-template-columns:minmax(80px,110px) 1fr 28px;gap:10px;
+  align-items:center;margin:12px 0;font-size:12px;color:#36596a}
+.ask-unit-row button{padding:0;background:none;border:0;text-align:left;color:inherit;
+  font-size:12px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ask-unit-row button:hover{color:#087780;text-decoration:underline}
+.ask-unit-track{height:6px;background:#e5edf1;border-radius:3px;overflow:hidden}
+.ask-unit-fill{height:100%;background:#208793;border-radius:3px}
+.ask-unit-row b{text-align:right;font-size:12px;font-weight:500}
+
+/* A record card in the list. */
+.ask-record{background:#fff;border:1px solid #dce6eb;border-radius:7px;padding:14px;
+  margin-bottom:12px}
+.ask-record:hover{border-color:#b7d3db}
+.ask-record[data-selected=true]{border-color:#1a9aa2;box-shadow:0 0 0 2px #007f8618}
+.ask-record-top{display:flex;gap:8px;justify-content:space-between;font-size:10px;
+  letter-spacing:.7px;color:#6e8290;text-transform:uppercase}
+.ask-record-name{font-size:16px;margin:7px 0;color:#153f55;line-height:1.35;
+  background:none;border:0;padding:0;text-align:left;font-weight:600;cursor:pointer;display:block}
+.ask-record-name:hover{color:#087780;text-decoration:underline}
+.ask-record p{font-size:13px;line-height:1.6;margin:7px 0;color:#43606f;
+  white-space:pre-wrap;overflow-wrap:anywhere}
+.ask-record-footer{display:flex;justify-content:space-between;gap:10px;margin-top:12px;
+  align-items:center}
+.ask-text-link{background:none;border:0;padding:0;color:#087780;font-size:13px;
+  font-weight:600;cursor:pointer}
+.ask-text-link:hover{text-decoration:underline}
+.ask-risk{border-radius:4px;padding:3px 6px;font-size:11px;white-space:nowrap}
+.ask-risk-high{background:#fce9e5;color:#9a3e2b}
+.ask-risk-medium{background:#fff0d4;color:#83601b}
+.ask-risk-low{background:#e5f2ed;color:#27664f}
+.ask-risk-other{background:#edf1f4;color:#637783}
+.ask-source-line{color:#72848f;font-size:11px;margin-top:11px}
+.ask-small{display:block;font-size:11px;color:#6d838f;margin-top:8px}
+.ask-empty{padding:24px 0;color:#667d8b;font-size:14px;line-height:1.7}
+.ask-empty strong{display:block;color:#1d4a5e;font-size:15px;margin-bottom:6px}
+
+/* One record, and a briefing. */
+.ask-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:15px 0;
+  padding:0}
+.ask-field-grid dt{font-size:11px;color:#6b818e;text-transform:uppercase;letter-spacing:.6px}
+.ask-field-grid dd{margin:3px 0 0;font-size:14px;color:#234657;overflow-wrap:anywhere}
+.ask-field-grid dd.over{color:#9a3e2b;font-weight:600}
+.ask-field-grid dd.late{color:#83601b;font-weight:600}
+.ask-report-title{font-size:21px;line-height:1.3;letter-spacing:-.3px;margin:4px 0 9px;
+  color:#123f54}
+.ask-report-summary{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
+.ask-report-summary span{font-size:12px;padding:7px 9px;background:#e9f2f5;border-radius:5px}
+.ask-report-section{margin:18px 0;border-top:1px solid #dce5ea;padding-top:14px}
+.ask-report-section h4{font-size:15px;margin:0 0 6px;color:#163548}
+.ask-report-section p{font-size:13px;line-height:1.6;white-space:pre-wrap;color:#456171;margin:7px 0}
+.ask-history-entry{border-left:2px solid #a9cbd0;margin:16px 0;padding:1px 0 1px 13px}
+.ask-history-entry time{font-size:12px;font-weight:700;color:#26717b}
+.ask-history-entry p{white-space:pre-wrap;font-size:13px;color:#365363;line-height:1.6;margin:7px 0}
+
+/* Photographs. Styled now so adding them later is a render call, not a redesign. */
+.ask-photo{margin:0 0 18px}
+.ask-photo img{display:block;width:100%;height:220px;object-fit:cover;border-radius:6px;
+  background:#e7eef2}
+.ask-photo figcaption{font-size:12px;color:#4c6777;padding:9px 0;line-height:1.5}
+.ask-photo figcaption strong{display:block;color:#214c61;margin-bottom:4px}
+.ask-photo button{padding:0;border:0;background:none;width:100%;text-align:left;cursor:pointer}
+
+/* The rail. Older and newer move between result SETS, never between records. */
+.ask-rail{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0}
+.ask-rail-btn{width:34px;height:34px;border-radius:8px;border:1px solid #cbd9e1;background:#fff;
+  color:#2a6b7c;display:grid;place-items:center;cursor:pointer;flex:none}
+.ask-rail-btn:hover:not(:disabled){background:#eaf4f6;border-color:#9ac8ca}
+.ask-rail-btn:disabled{opacity:.38;cursor:default}
+.ask-rail-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round}
+.ask-rail-download{background:var(--ask-teal);border-color:var(--ask-teal);color:#fff}
+.ask-rail-download:hover:not(:disabled){background:#00676d;border-color:#00676d}
+.ask-rail-label{font-size:10px;line-height:1.3;color:#6b818e;text-align:center;
+  writing-mode:vertical-rl;transform:rotate(180deg);max-height:150px;overflow:hidden;
+  letter-spacing:.4px}
+.ask-rail-rule{width:18px;height:1px;background:#d7e2e8;margin:4px 0}
+.ask-foot{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:#718591;
+  padding:12px 2px 0;flex-wrap:wrap;margin:0}
+
+/* The assistant's record dialog. Deliberately not the edit form: this pane only
    reads, and handing someone a form with a Save button contradicts that. */
 .ask-record-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px 20px}
 .ask-record-field span{display:block;font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:#6e8290}
@@ -135,138 +383,50 @@ ${ENHANCED_STYLES}
 .ask-record-update h4{margin:0 0 6px;font-size:12px;letter-spacing:.6px;color:#586f7e;text-transform:uppercase}
 .ask-record-update p{margin:0;font-size:14px;line-height:1.6;color:#243b49;white-space:pre-wrap}
 .ask-record-note{font-size:12px;color:#6e8290;margin-right:auto}
-/* --- Ask the Tracker ------------------------------------------------------ */
-/* Follows the Ask the Tracker pilot: a conversation on the left and an evidence
-   panel on the right, so every figure in an answer can be traced to the record
-   it came from rather than being taken on trust. */
-.pane[data-pane="ask"]{--ask-navy:#07364b;--ask-teal:#007f86;--ask-ink:#163548;
-  --ask-muted:#586c7a;--ask-line:#dce5ea}
-.ask-workspace{display:grid;grid-template-columns:minmax(390px,1.25fr) minmax(320px,1fr);
-  gap:20px;min-height:520px;height:calc(100vh - 300px);max-height:950px}
-.ask-conversation{background:#fff;border:1px solid var(--ask-line);border-radius:10px;
-  display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;overflow:hidden;
-  box-shadow:0 2px 4px #17334505}
-.ask-messages{flex:1 1 0;min-height:0;overflow-y:auto;padding:25px 23px 8px;scroll-behavior:smooth}
-.ask-turn{margin-bottom:24px}
-.ask-label{display:flex;align-items:center;gap:8px;color:#265569;font-size:12px;
-  font-weight:700;margin-bottom:9px}
-.ask-user{display:flex;flex-direction:column;align-items:flex-end;margin-bottom:18px}
-.ask-user .ask-bubble{background:#edf3f7;border:1px solid #e0e9ef;
-  border-radius:11px 11px 3px 11px;padding:11px 14px;max-width:93%;font-size:15px;color:var(--ask-ink)}
-.ask-reply{font-size:15px;line-height:1.6;color:var(--ask-ink)}
-.ask-reply.is-refusal{color:#7a4418}
-.ask-reply.is-error{color:#9a3e2b}
-.ask-pending{color:var(--ask-muted);font-style:italic;font-size:14px}
-.ask-chips{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}
-.ask-chip{padding:4px 8px;border-radius:4px;background:#eef4f6;color:#486577;font-size:11px;line-height:1.5}
-.ask-label-ai{letter-spacing:.8px;text-transform:uppercase;font-size:11px;color:#1f5a6b}
-.ask-debug{margin-top:12px;border:1px dashed #c3d3db;border-radius:6px;background:#fbfdfe}
-.ask-debug summary{cursor:pointer;padding:7px 10px;font-size:11px;font-weight:600;
-  letter-spacing:.4px;text-transform:uppercase;color:#5c7383}
-.ask-debug dl{margin:0;padding:0 10px 10px;display:grid;
-  grid-template-columns:minmax(74px,auto) 1fr;gap:4px 12px}
-.ask-debug dt{font-size:11px;color:#6e8290;text-transform:uppercase;letter-spacing:.4px}
-.ask-debug dd{margin:0;font-size:11.5px;color:#28404e;font-family:ui-monospace,SFMono-Regular,
-  Menlo,Consolas,monospace;white-space:pre;overflow-x:auto;max-height:260px;overflow-y:auto;
-  line-height:1.5;tab-size:2}
-.ask-debug dd:first-of-type{white-space:pre-wrap}
-.ask-results{margin:12px 0 0}
-.ask-result{padding:10px 0;border-bottom:1px solid #eef2f4}
-.ask-result:last-child{border-bottom:0}
-.ask-result-name{display:block;border:0;background:none;padding:0;text-align:left;cursor:pointer;
-  font-size:14px;font-weight:600;color:#00767e;line-height:1.4}
-.ask-result-name:hover{text-decoration:underline}
-.ask-result-meta{font-size:12px;color:#72848f;margin-top:3px}
-.ask-sources{margin-top:12px;padding-top:10px;border-top:1px solid var(--ask-line);
-  font-size:11px;color:#72848f}
-.ask-composer{margin:0 16px 10px;border:1px solid #b6d0d8;border-radius:9px;
-  box-shadow:0 1px 4px #0a53600a;padding:10px 12px 8px;background:#fff}
-.ask-composer textarea{resize:none;border:0;background:transparent;width:100%;outline:none;
-  color:#1d4053;min-height:48px;font-size:15px;line-height:1.5;font-family:inherit}
-.ask-compose-footer{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.ask-compose-actions{display:flex;gap:8px;align-items:center}
-.ask-scope{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ask-muted)}
-.ask-send{border:0;border-radius:5px;background:var(--ask-teal);color:#fff;font-size:13px;
-  font-weight:600;padding:8px 19px;cursor:pointer}
-.ask-send[disabled]{opacity:.55;cursor:default}
-.ask-btn{background:#fff;color:#284e63;border:1px solid #cbd9e1;padding:8px 13px;
-  border-radius:6px;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
-.ask-modes{display:flex;gap:2px;background:#edf2f5;padding:3px;border-radius:7px;
-  margin:14px 16px 0;align-self:flex-start}
-.ask-modes button{border:0;background:transparent;color:#536d7c;padding:6px 14px;
-  border-radius:5px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
-.ask-modes button[aria-pressed="true"]{background:#fff;color:var(--ask-ink);
-  box-shadow:0 1px 2px rgba(10,60,80,.12)}
 
-/* The orb is the whole interface while a call is live, so its state has to be
-   readable from across a room: resting, reaching out, listening, speaking. */
-.ask-voice-panel{padding:28px 20px 22px;text-align:center;background:#f3f8fa;
-  border-bottom:1px solid var(--ask-line)}
-.ask-orb{position:relative;width:188px;height:188px;margin:0 auto;border-radius:50%}
-.ask-orb-skin{position:absolute;inset:0;border-radius:50%;
-  background:
-    radial-gradient(circle at 30% 22%, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 42%),
-    linear-gradient(142deg, #58c24a 0%, #3fbb7a 32%, #2aa9b4 62%, #2f86d8 100%);
-  box-shadow:0 20px 44px rgba(20,90,120,.3), inset 0 -16px 36px rgba(8,54,86,.3);
-  transition:transform .45s ease, filter .45s ease}
-.ask-orb[data-state="idle"] .ask-orb-skin{filter:saturate(.55) brightness(1.04)}
-.ask-orb[data-state="connecting"] .ask-orb-skin{animation:askOrbReach 1.5s ease-in-out infinite}
-.ask-orb[data-state="listening"] .ask-orb-skin{animation:askOrbBreathe 3.4s ease-in-out infinite}
-.ask-orb[data-state="speaking"] .ask-orb-skin{animation:askOrbSpeak 1.05s ease-in-out infinite}
-@keyframes askOrbBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
-@keyframes askOrbReach{0%,100%{transform:scale(.96);filter:saturate(.7)}50%{transform:scale(1.02);filter:saturate(1)}}
-@keyframes askOrbSpeak{0%,100%{transform:scale(1.01)}50%{transform:scale(1.085)}}
-@media (prefers-reduced-motion:reduce){
-  .ask-orb .ask-orb-skin{animation:none!important}
-}
-.ask-orb-call{position:relative;margin:-26px auto 0;display:grid;place-items:center;
-  width:52px;height:52px;border-radius:50%;border:3px solid #f3f8fa;background:#10303f;
-  color:#fff;cursor:pointer;box-shadow:0 6px 16px rgba(10,48,63,.3)}
-.ask-orb-call svg{width:20px;height:20px;fill:currentColor}
-.ask-orb-call.is-live{background:#9a3e2b}
-.ask-orb-call.is-live svg{transform:rotate(135deg)}
-.ask-orb-call[disabled]{opacity:.6;cursor:default}
-.ask-stop{display:block;margin:14px auto 0;border:1px solid #cbd9e1;background:#fff;
-  color:#9a3e2b;font-size:12.5px;font-weight:600;padding:7px 16px;border-radius:999px;cursor:pointer}
-.ask-stop:hover{border-color:#9a3e2b}
-.ask-voice-status{margin:14px auto 0;max-width:40ch;font-size:12.5px;color:#586c7a;line-height:1.5}
-#askVoiceAudio{display:none}
-.ask-suggestions{display:flex;gap:7px;flex-wrap:wrap;padding:10px 20px 12px;border-top:1px solid #f0f3f5}
-.ask-suggestion{border:1px solid #d9e4e9;background:#fff;color:#246174;border-radius:6px;
-  padding:7px 10px;font-size:12px;text-align:left;cursor:pointer}
-.ask-suggestion:hover{border-color:var(--ask-teal);color:var(--ask-teal)}
-.ask-evidence{display:flex;flex-direction:column;background:#fafcfd;border:1px solid var(--ask-line);
-  border-radius:10px;min-width:0;min-height:0;height:100%;overflow:hidden}
-.ask-evidence-header{padding:20px 20px 17px;display:flex;justify-content:space-between;
-  align-items:center;border-bottom:1px solid var(--ask-line);gap:10px}
-.ask-kicker{display:block;font-size:11px;letter-spacing:1.5px;font-weight:700;color:#627786}
-.ask-evidence-title{display:block;font-size:14px;color:var(--ask-ink);margin-top:4px}
-.ask-count{padding:4px 9px;background:#e5edf2;color:#36596d;border-radius:5px;font-size:13px;font-weight:600}
-.ask-evidence-body{overflow:auto;flex:1;padding:18px 20px 24px}
-.ask-record{background:#fff;border:1px solid #dce6eb;border-radius:7px;padding:14px;margin-bottom:12px}
-.ask-record-top{display:flex;gap:8px;justify-content:space-between;font-size:10px;
-  letter-spacing:.7px;color:#6e8290;text-transform:uppercase}
-.ask-record-name{display:block;border:0;background:none;padding:0;text-align:left;cursor:pointer;
-  font-size:14px;font-weight:600;color:var(--ask-ink);margin:6px 0 2px;font-family:inherit}
-.ask-record-name:hover{color:#00767e;text-decoration:underline}
-.ask-evidence-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:26ch}
-.ask-metric-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
-.ask-metric{padding:0 6px 0 0}
-.ask-metric span{display:block;font-size:10px;letter-spacing:.7px;color:#6e8290;text-transform:uppercase}
-.ask-metric strong{font-size:14px;color:var(--ask-ink);font-variant-numeric:tabular-nums}
-.ask-metric strong.over{color:#9a3e2b}
-.ask-metric strong.late{color:#83601b}
-.ask-risk{border-radius:4px;padding:3px 6px;font-size:11px;white-space:nowrap}
-.ask-risk-high{background:#fce9e5;color:#9a3e2b}
-.ask-risk-medium{background:#fff0d4;color:#83601b}
-.ask-risk-low{background:#e5f2ed;color:#27664f}
-.ask-risk-other{background:#edf1f4;color:#637783}
-.ask-source-line{color:#72848f;font-size:11px;margin-top:11px}
-.ask-empty{padding:25px 0;color:#667d8b;font-size:14px;line-height:1.7}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0,0,0,0);white-space:nowrap;border:0}
-@media (max-width:980px){
-  .ask-workspace{grid-template-columns:1fr;height:auto;max-height:none}
-  .ask-evidence{max-height:420px}
+
+/* Responsive. The rail folds into a row above the evidence panel rather than
+   disappearing: moving between result sets is not a desktop-only affordance. */
+@media (max-width:1280px){
+  .ask-workspace{grid-template-columns:minmax(320px,1.1fr) minmax(300px,1fr) 44px;gap:14px}
+}
+@media (max-width:1024px){
+  .ask-workspace{grid-template-columns:1fr;height:auto;max-height:none;min-height:0}
+  .ask-conversation{min-height:520px}
+  .ask-evidence{max-height:560px}
+  .ask-rail{flex-direction:row;justify-content:flex-end;padding:0;order:-1}
+  .ask-rail-label{writing-mode:horizontal-tb;transform:none;max-height:none;
+    margin-right:auto;font-size:11px}
+  .ask-rail-rule{width:1px;height:18px;margin:0 4px}
+}
+@media (max-width:640px){
+  .ask-top,.ask-head{flex-direction:column;align-items:flex-start}
+  .ask-crumb-now{max-width:18ch}
+  .ask-context{max-width:100%}
+  .ask-field-grid,.ask-metric-pair{grid-template-columns:1fr}
+  .ask-scope-pick select{max-width:100%}
+  .ask-messages{padding:16px 14px 4px}
+  .ask-composer{margin:0 12px 12px}
+}
+@media (prefers-reduced-motion:reduce){
+  .ask-orb-skin,.ask-dots i{animation:none!important}
+  .ask-messages{scroll-behavior:auto}
+}
+
+/* Print: the briefing is the page. Everything that is furniture goes away, and
+   the evidence body is allowed to flow onto as many sheets as it needs. */
+@media print{
+  body{background:#fff}
+  .sidebar,.topbar,.ask-top,.ask-head,.ask-conversation,.ask-rail,
+  .ask-evidence-toolbar,.ask-evidence-header,.ask-foot,.toast,
+  .pane:not([data-pane="ask"]){display:none!important}
+  .app{display:block!important;box-shadow:none!important;background:#fff!important}
+  .ask-workspace,.ask-evidence,.ask-evidence-body{display:block!important;height:auto!important;
+    max-height:none!important;overflow:visible!important;border:0!important;
+    padding:0!important;margin:0!important;background:#fff!important}
+  .ask-report-section,.ask-record,.ask-history-entry{break-inside:avoid}
+  .ask-report-title{font-size:25px}
 }
 `;

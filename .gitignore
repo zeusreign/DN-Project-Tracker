@@ -55,6 +55,7 @@ r2-keys.txt
 # repository root; no HTML is tracked anywhere in the tree, and the Pages build is
 # worker-based, so this cannot mask a build entry point.
 /DN_Tracker_*.html
+/DNC_*.html
 
 # Central City photo migration. The export drop from DN.LagosPM.com is 193 MB of
 # client photographs, and the generated manifest reproduces every caption and

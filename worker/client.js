@@ -757,10 +757,18 @@ load(true).catch(function(e){byId("loading").innerHTML="<strong>Unable to load t
 // cleared on sign-out, because this runs on shared machines and an answer holds
 // project budgets the next person may not be entitled to see.
 var ASK_SUGGESTIONS=[
-  "Which projects slipped more than 30 days?",
-  "Anything more than $50k over budget?",
-  "Which projects have high schedule risk?",
-  "What does Days mean?"
+  {label:"High schedule risk",q:"Which projects have high schedule risk?"},
+  {label:"Over budget",q:"Which projects are over budget?"},
+  {label:"Slipped 30 days",q:"Which projects slipped more than 30 days?"},
+  {label:"What does Days mean?",q:"What does Days mean?"}
+];
+// Once a set exists these are the moves worth offering: they act on it rather
+// than starting a new search, which is what a reader is usually after next.
+var ASK_NEXT=[
+  {label:"Latest updates",q:"What are their latest updates?"},
+  {label:"Only high risk",q:"Which of those are high risk?"},
+  {label:"Draft a briefing",q:"Draft a briefing for these projects"},
+  {label:"Explain the figures",q:"What does variance mean?"}
 ];
 var askTurns=[];
 
@@ -814,43 +822,382 @@ function askRiskClass(level){
 
 // The evidence panel: the records behind the most recent answer, so a figure can
 // be traced to the project it came from instead of being taken on trust.
-function renderEvidence(answer){
-  var body=byId("askEvidence"),count=byId("askEvidenceCount"),title=byId("askEvidenceTitle");
-  if(!body)return;
-  var rows=(answer&&answer.rows)||[];
-  if(count)count.textContent=answer&&answer.total!==undefined?String(answer.total):"—";
-  if(title)title.textContent=(answer&&answer.question)?answer.question:"Matching records";
-  if(!rows.length){
-    body.innerHTML='<div class="ask-empty">'+(answer&&answer.total===0
-      ?'No records matched those filters. The filters applied are listed with the answer, so you can see what was searched for.'
-      :'Ask a question and the records behind the answer appear here, so every figure can be traced to the project it came from.')
-      +'</div>';
-    return;
-  }
-  body.innerHTML=rows.map(function(p){
-    var variance=p.forecast_variance,days=p.duration_change_days;
-    return '<article class="ask-record">'
-      +'<div class="ask-record-top"><span>'+esc(p.business_unit||"")+'</span>'
-      +'<span>'+esc(p.project_type||"")+'</span></div>'
-      +'<button type="button" class="ask-record-name project-link" data-ask-record="'+esc(String(p.id))+'">'
-        +esc(p.name)+'</button>'
-      +'<div class="ask-chips">'
-        +'<span class="ask-risk '+askRiskClass(p.budget_risk)+'">Budget '+esc(p.budget_risk||"Not Rated")+'</span>'
-        +'<span class="ask-risk '+askRiskClass(p.schedule_risk)+'">Schedule '+esc(p.schedule_risk||"Not Rated")+'</span>'
-        +'<span class="ask-chip">'+esc(p.status||"—")+'</span>'
-      +'</div>'
-      +'<div class="ask-metric-pair">'
-        +'<div class="ask-metric"><span>Variance</span><strong class="'+(Number(variance)>0?"over":"")+'">'
-          +esc(askMoney(variance))+'</strong></div>'
-        +'<div class="ask-metric"><span>Days</span><strong class="'+(Number(days)>0?"late":"")+'">'
-          +(days===null||days===undefined?"—":esc(String(days)))+'</strong></div>'
-      +'</div>'
-      +'<div class="ask-source-line">'+esc(p.venue||p.section_name||"")
-        +(p.reporting_period?' · reported '+esc(dateText(p.reporting_period)):"")+'</div>'
-      +'</article>';
-  }).join("");
-  body.scrollTop=0;
+// --- Result sets -------------------------------------------------------------
+// Every question that returns records keeps its own result set, and the rail
+// moves between them. A set is restored from what it stored, never by asking
+// again: re-running would be a different question against the same words, and
+// the point of going back is to see what you were shown.
+var askSets=[];
+var askIndex=-1;
+var ASK_PAGE=12;
+
+function activeSet(){return askIndex>=0&&askIndex<askSets.length?askSets[askIndex]:null}
+
+function recordSet(question,answer){
+  var set={
+    question:question,
+    rows:(answer.rows||[]).slice(),
+    total:answer.total,
+    returned:answer.returned,
+    truncated:!!answer.truncated,
+    limit:answer.limit,
+    plan:answer.plan||null,
+    intent:answer.intent,
+    summary:answer.summary||"",
+    filters:(answer.description||[]).slice(),
+    sources:(answer.sources||[]).slice(),
+    // The scope the question was asked under, so a restored set is labelled
+    // with the scope that produced it rather than whatever is selected now.
+    unit:askUnit(),
+    // UI state, so a set comes back the way it was left rather than reset.
+    view:"records",
+    recordId:null,
+    shown:ASK_PAGE,
+    history:null
+  };
+  askSets.push(set);
+  askIndex=askSets.length-1;
+  return set;
 }
+
+function askUnit(){var pick=byId("askUnitScope");return pick&&pick.value?pick.value:"All"}
+
+function askUnitRows(){
+  var unit=askUnit();
+  return unit==="All"?state.projects:state.projects.filter(function(p){return p.business_unit===unit});
+}
+
+// --- Figures, counted the way the rest of the Tracker counts them -----------
+function askTotals(rows){
+  var budgets=rows.filter(function(p){return p.approved_budget!==null&&p.approved_budget!==undefined});
+  var forecasts=rows.filter(function(p){return p.anticipated_final_cost!==null&&p.anticipated_final_cost!==undefined});
+  var paired=rows.filter(function(p){return askNum(p.forecast_variance)!==null});
+  var dated=rows.filter(function(p){return askNum(p.duration_change_days)!==null});
+  var add=function(list,key){return list.reduce(function(sum,p){return sum+Number(p[key])},0)};
+  return {
+    count:rows.length,
+    approved:add(budgets,"approved_budget"),approvedCount:budgets.length,
+    forecast:add(forecasts,"anticipated_final_cost"),forecastCount:forecasts.length,
+    pairedCount:paired.length,
+    pairedVariance:paired.reduce(function(sum,p){return sum+Number(p.forecast_variance)},0),
+    overBudget:paired.filter(function(p){return Number(p.forecast_variance)>0}).length,
+    delayed:dated.filter(function(p){return Number(p.duration_change_days)>0}).length,
+    datedCount:dated.length,
+    highRisk:rows.filter(function(p){return p.budget_risk==="High"||p.schedule_risk==="High"}).length,
+    capital:rows.filter(function(p){return p.project_type==="Capital"}).length,
+    development:rows.filter(function(p){return p.project_type==="Development"}).length
+  };
+}
+function askNum(value){
+  if(value===null||value===undefined||value==="")return null;
+  var n=Number(value);
+  return isFinite(n)?n:null;
+}
+function askShortMoney(value){
+  var n=askNum(value);
+  if(n===null)return "Not recorded";
+  var sign=n<0?"-":"",a=Math.abs(n);
+  if(a>=1e9)return sign+"$"+(a/1e9).toFixed(1)+"B";
+  if(a>=1e6)return sign+"$"+(a/1e6).toFixed(1)+"M";
+  if(a>=1e3)return sign+"$"+Math.round(a/1e3)+"K";
+  return sign+"$"+a;
+}
+
+// --- The evidence panel ------------------------------------------------------
+// Four views over one panel: the portfolio before anything is asked, the
+// records an answer found, one of those records, and a briefing built from the
+// set. The toolbar belongs to the view, so the actions on offer are always the
+// ones that apply to what is on screen.
+function renderEvidence(){
+  var body=byId("askEvidence"),title=byId("askEvidenceTitle"),count=byId("askEvidenceCount");
+  var bar=byId("askToolbar"),crumb=byId("askCrumb");
+  if(!body)return;
+  var set=activeSet();
+  var view=set?set.view:"overview";
+  var head={title:"Portfolio at a glance",count:"—",crumb:"Portfolio at a glance"};
+
+  if(view==="overview"){
+    body.innerHTML=askOverviewHtml();
+    var rows=askUnitRows();
+    head={title:askUnit()==="All"?"Portfolio at a glance":askUnit(),
+      count:String(rows.length),crumb:"Portfolio at a glance"};
+    bar.innerHTML='<button type="button" class="ask-btn" data-ask-action="browse">Browse records</button>'
+      +'<button type="button" class="ask-btn" data-ask-ask="Draft a briefing for all projects">Draft briefing</button>';
+  }else if(view==="record"){
+    var project=askRecordById(set.recordId);
+    body.innerHTML=askRecordHtml(set,project);
+    head={title:"Project source record",count:project?"#"+project.id:"—",
+      crumb:project?project.name:"Project record"};
+    bar.innerHTML='<button type="button" class="ask-btn" data-ask-action="back">Back to results</button>'
+      +'<button type="button" class="ask-btn" data-ask-action="record-briefing">Project briefing</button>'
+      +(project?'<button type="button" class="ask-btn" data-ask-record-full="'+esc(String(project.id))+'">Full activity history</button>':"");
+  }else if(view==="briefing"){
+    body.innerHTML=askBriefingHtml(set);
+    head={title:"Briefing preview",count:String(set.total),crumb:"Briefing"};
+    bar.innerHTML='<button type="button" class="ask-btn ask-btn-primary" data-ask-action="download">Download briefing</button>'
+      +'<button type="button" class="ask-btn" data-ask-action="print">Print / PDF</button>'
+      +'<button type="button" class="ask-btn" data-ask-action="csv">CSV</button>'
+      +'<button type="button" class="ask-btn" data-ask-action="back">Back to results</button>';
+  }else{
+    body.innerHTML=askRecordsHtml(set);
+    // The question, not "Matching projects". With several result sets kept at
+    // once the panel has to say which one it is showing, or the rail moves and
+    // nothing on screen changes its mind about what it is.
+    head={title:set.question,count:String(set.total),crumb:"Matching projects"};
+    bar.innerHTML=set.rows.length
+      ?'<button type="button" class="ask-btn" data-ask-action="briefing">Draft briefing</button>'
+       +'<button type="button" class="ask-btn" data-ask-action="csv">Export CSV</button>'
+       +'<button type="button" class="ask-btn" data-ask-action="browse">Browse records</button>'
+      :'<button type="button" class="ask-btn" data-ask-action="browse">Browse records</button>';
+  }
+
+  if(title)title.textContent=head.title;
+  if(count)count.textContent=head.count;
+  if(crumb)crumb.textContent=head.crumb;
+  body.scrollTop=0;
+  renderRail();
+  renderAskContext();
+}
+
+// The portfolio, before anything has been asked. Counts come from the records
+// this reader can see, so it states their portfolio rather than the company's.
+function askOverviewHtml(){
+  var rows=askUnitRows(),totals=askTotals(rows);
+  if(!rows.length){
+    return '<div class="ask-empty"><strong>No projects are visible to you yet.</strong>'
+      +'If that looks wrong, ask an administrator to check your business-unit access.</div>';
+  }
+  var units=[];
+  state.projects.forEach(function(p){if(units.indexOf(p.business_unit)<0)units.push(p.business_unit)});
+  var biggest=units.reduce(function(max,u){
+    var n=state.projects.filter(function(p){return p.business_unit===u}).length;
+    return n>max?n:max;
+  },1);
+  var period=rows.map(function(p){return p.reporting_period}).filter(Boolean).sort().pop();
+  return '<p class="ask-source-meta">'+esc(String(rows.length))+' project record'
+      +(rows.length===1?"":"s")+(period?' · latest reporting period '+esc(dateText(period)):"")+'</p>'
+    +'<div class="ask-metric-pair">'
+      +'<div class="ask-metric"><span>Project records</span><strong>'+totals.count+'</strong>'
+        +'<small>'+totals.capital+' capital · '+totals.development+' development</small></div>'
+      +'<div class="ask-metric"><span>Forecast cost recorded</span><strong>'+esc(askShortMoney(totals.forecast))+'</strong>'
+        +'<small>'+totals.forecastCount+' of '+totals.count+' projects</small></div>'
+    +'</div>'
+    +'<div class="ask-section-label">Business units</div>'
+    +units.map(function(u){
+      var n=state.projects.filter(function(p){return p.business_unit===u}).length;
+      return '<div class="ask-unit-row">'
+        +'<button type="button" data-ask-ask="Show '+esc(u)+' projects">'+esc(u)+'</button>'
+        +'<div class="ask-unit-track"><div class="ask-unit-fill" style="width:'
+          +Math.max(4,Math.round(n/biggest*100))+'%"></div></div>'
+        +'<b>'+n+'</b></div>';
+    }).join("")
+    +'<div class="ask-note">These are the records you are entitled to see. An answer never '
+      +'reaches a business unit outside your access, so a count here is your portfolio, not the whole company.</div>';
+}
+
+// The records an answer found, as cards. The figures on each card are the two a
+// reader checks first, and the update excerpt is what makes a card worth
+// reading rather than a row of labels.
+function askRecordsHtml(set){
+  if(!set.rows.length){
+    return '<div class="ask-chips">'+set.filters.map(function(f){
+        return '<span class="ask-chip">'+esc(f)+'</span>'}).join("")+'</div>'
+      +'<div class="ask-empty"><strong>No records match that question.</strong>'
+      +'The conditions that were applied are listed above, so you can see what was searched for. '
+      +'Try a project name, a venue, a CAPP number, or a wider business unit.</div>';
+  }
+  var shown=set.rows.slice(0,set.shown);
+  var more=set.rows.length-shown.length;
+  return '<div class="ask-chips">'+set.filters.map(function(f){
+      return '<span class="ask-chip">'+esc(f)+'</span>'}).join("")+'</div>'
+    +shown.map(function(p){return askCardHtml(p,set)}).join("")
+    +(more>0?'<button type="button" class="ask-btn" data-ask-action="more">Show '
+      +Math.min(ASK_PAGE,more)+' more</button>':"")
+    +(set.truncated?'<div class="ask-note">'+esc(String(set.total))+' records match. '
+      +esc(String(set.returned))+' were returned, which is the cap on one answer. '
+      +'Narrow the question to see a different part of the set.</div>':"");
+}
+
+function askCardHtml(p,set){
+  var variance=p.forecast_variance,days=p.duration_change_days;
+  var update=p.current_update||"";
+  var excerpt=update.length>220?update.slice(0,220)+"…":update;
+  var where=p.venue||p.section_name||"";
+  return '<article class="ask-record" data-selected="'+(set&&set.recordId===p.id?"true":"false")+'">'
+    +'<div class="ask-record-top"><span>'+esc(where||p.business_unit||"")+'</span>'
+      +'<span>#'+esc(String(p.id))+'</span></div>'
+    +'<button type="button" class="ask-record-name" data-ask-open="'+esc(String(p.id))+'">'
+      +esc(p.name)+'</button>'
+    +'<p>'+esc([p.business_unit,p.status,p.project_manager||p.development_lead].filter(Boolean).join(" · "))+'</p>'
+    +'<div class="ask-chips">'
+      +'<span class="ask-risk '+askRiskClass(p.schedule_risk)+'">Schedule: '+esc(p.schedule_risk||"Not Rated")+'</span>'
+      +'<span class="ask-risk '+askRiskClass(p.budget_risk)+'">Budget: '+esc(p.budget_risk||"Not Rated")+'</span>'
+    +'</div>'
+    +'<div class="ask-metric-pair" style="border:0;padding-bottom:6px">'
+      +'<div class="ask-metric"><span>Variance</span><strong class="'+(Number(variance)>0?"over":"")+'">'
+        +esc(askMoney(variance))+'</strong><small>forecast less approved</small></div>'
+      +'<div class="ask-metric"><span>Days</span><strong class="'+(Number(days)>0?"late":"")+'">'
+        +(askNum(days)===null?"—":esc(String(days)))+'</strong><small>turnover movement</small></div>'
+    +'</div>'
+    +(excerpt?'<p>'+esc(excerpt)+'</p>':'<p class="ask-source-line">No activity update recorded.</p>')
+    +'<div class="ask-record-footer">'
+      +'<span class="ask-source-line" style="margin:0">'
+        +(p.reporting_period?esc(dateText(p.reporting_period)):"No reporting date")+'</span>'
+      +'<button type="button" class="ask-text-link" data-ask-open="'+esc(String(p.id))+'">Open record</button>'
+    +'</div></article>';
+}
+
+// One record, at the level of detail the pilot established: identity, the
+// ratings, the money, the dates, the scope, then the saved updates.
+function askRecordHtml(set,p){
+  if(!p){
+    return '<div class="ask-empty"><strong>That record is no longer loaded.</strong>'
+      +'Refresh the page, or go back to the results and open it again.</div>';
+  }
+  var field=function(label,value,cls){
+    return '<div><dt>'+esc(label)+'</dt><dd'+(cls?' class="'+cls+'"':"")+'>'
+      +esc(value===null||value===undefined||value===""?"Not recorded":String(value))+'</dd></div>';
+  };
+  var days=p.duration_change_days,variance=p.forecast_variance;
+  var html='<span class="ask-kicker">'+esc(p.venue||p.section_name||p.business_unit||"")+'</span>'
+    +'<h3 class="ask-report-title">'+esc(p.name)+'</h3>'
+    +'<p class="ask-source-meta">'+esc([p.business_unit,p.status,
+        p.capp_number||p.initiative_number||"No project number"].filter(Boolean).join(" · "))+'</p>'
+    +'<div class="ask-chips">'
+      +'<span class="ask-risk '+askRiskClass(p.schedule_risk)+'">Schedule: '+esc(p.schedule_risk||"Not Rated")+'</span>'
+      +'<span class="ask-risk '+askRiskClass(p.budget_risk)+'">Budget: '+esc(p.budget_risk||"Not Rated")+'</span>'
+    +'</div>'
+    +'<dl class="ask-field-grid">'
+      +field("Project lead",p.project_manager||p.development_lead)
+      +field("Phase",p.phase)
+      +field("Type",p.project_type)
+      +field("Approved budget",askMoney(p.approved_budget))
+      +field("Forecast final cost",askMoney(p.anticipated_final_cost))
+      +field("Variance",askMoney(variance),Number(variance)>0?"over":"")
+      +field("Original turnover",p.original_turnover_date?dateText(p.original_turnover_date):null)
+      +field("Current turnover",p.current_turnover_date?dateText(p.current_turnover_date):null)
+      +field("Days moved",askNum(days)===null?null:String(days),Number(days)>0?"late":"")
+      +field("Reporting period",p.reporting_period?dateText(p.reporting_period):null)
+    +'</dl>';
+  if(p.scope_description){
+    html+='<div class="ask-report-section"><h4>Scope</h4><p>'+esc(p.scope_description)+'</p></div>';
+  }
+  html+='<div class="ask-report-section"><h4>Latest saved update</h4>'
+    +'<p>'+esc(p.current_update||"No activity update recorded.")+'</p>'
+    +(p.reporting_period?'<span class="ask-small">Saved for '+esc(dateText(p.reporting_period))+'</span>':"")
+    +'</div>';
+  if(set.history===null){
+    html+='<div class="ask-report-section"><h4>Activity history</h4>'
+      +'<p class="ask-pending"><span class="ask-dots"><i></i><i></i><i></i></span>Loading saved updates…</p></div>';
+  }else if(set.history&&set.history.length){
+    html+='<div class="ask-report-section"><h4>Activity history</h4>'
+      +set.history.slice(0,6).map(function(h){
+        return '<div class="ask-history-entry"><time>'+esc(dateText(h.reporting_period))+'</time>'
+          +'<p>'+esc(h.current_summary||"")+'</p></div>';
+      }).join("")
+      +(set.history.length>6?'<span class="ask-small">'+(set.history.length-6)
+        +' earlier entries are in the full history.</span>':"")
+      +'</div>';
+  }else if(set.history&&!set.history.length){
+    html+='<div class="ask-report-section"><h4>Activity history</h4>'
+      +'<p class="ask-source-line">No earlier updates are recorded for this project.</p></div>';
+  }
+  if(p.previous_update){
+    html+='<div class="ask-note"><strong>Previous update</strong><br>'+esc(p.previous_update)+'</div>';
+  }
+  return html;
+}
+
+// The briefing, on screen before it is downloaded or printed. What prints is
+// this view, which is why the print stylesheet hides everything else.
+function askBriefingHtml(set){
+  var totals=askTotals(set.rows);
+  var scope=set.plan&&set.plan.unit&&set.plan.unit!=="All"?set.plan.unit+" project review":"Project portfolio review";
+  var periods=set.rows.map(function(p){return p.reporting_period}).filter(Boolean).sort();
+  return '<span class="ask-kicker">D&amp;C · Project briefing</span>'
+    +'<h3 class="ask-report-title">'+esc(scope)+'</h3>'
+    +'<p class="ask-source-meta">Prepared from the question “'+esc(set.question)+'”.<br>'
+      +(periods.length?'Reporting dates '+esc(dateText(periods[0]))
+        +(periods[periods.length-1]!==periods[0]?' to '+esc(dateText(periods[periods.length-1])):"")+'.':'No reporting dates recorded.')
+      +'</p>'
+    +'<div class="ask-chips">'+set.filters.map(function(f){
+        return '<span class="ask-chip">'+esc(f)+'</span>'}).join("")+'</div>'
+    +'<div class="ask-report-summary">'
+      +'<span><strong>'+totals.count+'</strong> project'+(totals.count===1?"":"s")+'</span>'
+      +'<span><strong>'+totals.highRisk+'</strong> high risk</span>'
+      +'<span><strong>'+totals.overBudget+'</strong> above budget</span>'
+      +'<span><strong>'+totals.delayed+'</strong> turnover moved later</span>'
+    +'</div>'
+    +'<dl class="ask-field-grid">'
+      +'<div><dt>Recorded approved budgets</dt><dd>'+esc(askMoney(totals.approved))
+        +' <span class="ask-small" style="display:inline">('+totals.approvedCount+' of '+totals.count+')</span></dd></div>'
+      +'<div><dt>Recorded forecast costs</dt><dd>'+esc(askMoney(totals.forecast))
+        +' <span class="ask-small" style="display:inline">('+totals.forecastCount+' of '+totals.count+')</span></dd></div>'
+      +'<div><dt>Matched-pair variance</dt><dd class="'+(totals.pairedVariance>0?"over":"")+'">'
+        +esc(askMoney(totals.pairedVariance))+' <span class="ask-small" style="display:inline">('
+        +totals.pairedCount+' with both figures)</span></dd></div>'
+      +'<div><dt>Turnover dates comparable</dt><dd>'+totals.datedCount+' of '+totals.count+'</dd></div>'
+    +'</dl>'
+    +'<div class="ask-note">Totals cover different sets of projects where figures are missing. '
+      +'The matched-pair variance is the only directly comparable number.</div>'
+    +set.rows.map(function(p){
+      var days=p.duration_change_days;
+      return '<div class="ask-report-section"><h4>'+esc(p.name)+'</h4>'
+        +'<p class="ask-source-meta" style="margin:0 0 6px">'+esc([p.business_unit,p.status,
+            p.project_manager||p.development_lead||"Manager not recorded"].filter(Boolean).join(" · "))+'</p>'
+        +'<p style="margin:4px 0">Budget risk '+esc(p.budget_risk||"Not Rated")
+          +' · Schedule risk '+esc(p.schedule_risk||"Not Rated")
+          +' · Approved '+esc(askMoney(p.approved_budget))
+          +' · Forecast '+esc(askMoney(p.anticipated_final_cost))
+          +(askNum(days)===null?"":' · '+esc(String(days))+' days')+'</p>'
+        +'<p>'+esc(p.current_update||"No activity update recorded.")+'</p>'
+        +(p.reporting_period?'<span class="ask-small">Saved for '+esc(dateText(p.reporting_period))+'</span>':"")
+        +'</div>';
+    }).join("");
+}
+
+// --- The rail ----------------------------------------------------------------
+// Older and newer move between result SETS. They never move between records:
+// that is what Open record and Back to results are for.
+function renderRail(){
+  var older=byId("askOlder"),newer=byId("askNewer"),label=byId("askRailLabel"),down=byId("askDownload");
+  if(!older)return;
+  var has=askSets.length>0;
+  older.disabled=!has||askIndex<=0;
+  newer.disabled=!has||askIndex>=askSets.length-1;
+  if(down)down.disabled=!has||!askSets[askIndex].rows.length;
+  if(label){
+    label.textContent=has?"Result "+(askIndex+1)+" of "+askSets.length:"No results yet";
+    label.title=has?askSets[askIndex].question:"";
+  }
+}
+
+function showSet(index){
+  if(index<0||index>=askSets.length)return;
+  askIndex=index;
+  renderEvidence();
+}
+
+function renderAskContext(){
+  var tag=byId("askContext"),foot=byId("askFoot"),scope=byId("askScope");
+  var set=activeSet();
+  if(tag){
+    tag.textContent=set
+      ?set.total+" record"+(set.total===1?"":"s")+" · "+(set.filters.length?set.filters.join(" · "):"All available projects")
+      :(askUnit()==="All"?"Every project you can see":askUnit());
+    tag.title=tag.textContent;
+  }
+  if(scope){
+    scope.textContent=state.me?"Scoped to "+(state.me.name||state.me.email):"";
+  }
+  if(foot){
+    var rows=askUnitRows();
+    foot.innerHTML='<span>'+esc(String(rows.length))+' project record'+(rows.length===1?"":"s")
+      +' you can see'+(askSets.length?' · '+askSets.length+' result set'+(askSets.length===1?"":"s")+' this conversation':"")+'</span>'
+      +'<span>Read-only · this assistant never changes a record</span>';
+  }
+}
+
 
 var ASK_SPARK='<svg class="ai-spark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
   +'<path d="M12 2.2l2.15 6.15 6.15 2.15-6.15 2.15L12 18.8l-2.15-6.15L3.7 10.5l6.15-2.15z"/>'
@@ -864,25 +1211,60 @@ function askAiLabel(){
 // The results as the answer itself, not only as a count. A list the reader can
 // scan is what makes the figure checkable; the evidence panel then carries the
 // detail for whichever record they want to look at.
+// The answer's own list. A name here opens the record dialog: a quick look
+// that keeps the reader's place in the conversation. The records panel opens
+// the same project in the panel instead, where there is a way back.
 function askResultListHtml(answer){
   var rows=answer.rows||[];
   if(!rows.length)return "";
-  var html='<div class="ask-results">'+rows.map(function(p){
+  var html='<ul class="ask-results">'+rows.slice(0,5).map(function(p){
     var lead=p.section_name||p.venue||"";
-    var who=p.project_manager||p.development_lead||"";
+    var who=p.project_manager||p.development_lead||"Manager not recorded";
     var meta=[p.business_unit,p.status,who].filter(Boolean).map(esc).join(" · ");
-    return '<div class="ask-result">'
-      +'<button type="button" class="ask-result-name project-link" data-ask-record="'+esc(String(p.id))+'">'
+    return '<li class="ask-result">'
+      +'<button type="button" class="ask-result-name" data-ask-record="'+esc(String(p.id))+'">'
       +(lead?esc(lead)+' · ':"")+esc(p.name)+'</button>'
-      +'<div class="ask-result-meta">'+meta+'</div>'
-      +'</div>';
-  }).join("")+'</div>';
-  var period=rows.map(function(p){return p.reporting_period}).filter(Boolean).sort().pop();
-  html+='<div class="ask-sources">'+esc(String(answer.total))+' source record'
-    +(answer.total===1?"":"s")
-    +(answer.truncated?' · showing the first '+esc(String(answer.returned)):"")
-    +(period?' · saved updates '+esc(dateText(period)):"")+'</div>';
+      +'<small class="ask-result-meta">'+meta+'</small>'
+      +'</li>';
+  }).join("")+'</ul>';
+  if(rows.length>5){
+    html+='<p class="ask-source-line">'+(rows.length-5)
+      +' more are listed in the records panel. A briefing includes all '+rows.length+'.</p>';
+  }
   return html;
+}
+
+// What the answer rests on: how many records, over what reporting dates. A
+// figure nobody can date is a figure nobody can check.
+function askSourceLine(answer){
+  var rows=answer.rows||[];
+  var periods=rows.map(function(p){return p.reporting_period}).filter(Boolean).sort();
+  var dates=periods.length
+    ?"saved updates "+dateText(periods[0])
+      +(periods[periods.length-1]!==periods[0]?" to "+dateText(periods[periods.length-1]):"")
+    :"no dated updates";
+  return '<div class="ask-sources">'+esc(String(answer.total))+' source record'
+    +(answer.total===1?"":"s")+' · '+esc(dates)
+    +(answer.truncated?' · showing the first '+esc(String(answer.returned)):"")+'</div>';
+}
+
+// Notes that explain a derived figure, shown only when the question used it.
+// Without them "behind schedule" reads as a judgement rather than as the date
+// subtraction it actually is.
+function askPlanNotes(plan){
+  if(!plan)return "";
+  var notes=[];
+  if(plan.delayed||plan.minDelayDays!==undefined){
+    notes.push("“Slipped” means the current turnover date is later than the original. "
+      +"A project without both dates cannot be included in that comparison.");
+  }
+  if(plan.overBudget||plan.underBudget||plan.minVariance!==undefined||plan.maxVariance!==undefined){
+    notes.push("Only projects with both an approved budget and a forecast are compared.");
+  }
+  if(plan.risk==="either"){
+    notes.push("High risk with no further qualification means either the budget or the schedule rating is High.");
+  }
+  return notes.map(function(n){return '<div class="ask-note">'+esc(n)+'</div>'}).join("");
 }
 
 // The query behind an answer, for whoever is building this. Present only when
@@ -911,39 +1293,50 @@ function askDebugHtml(debug){
     }).join("")+'</dl></details>';
 }
 
-function askTurnHtml(turn){
+function askTurnHtml(turn,index){
   var answer=turn.answer||{};
-  var cls=turn.state==="error"?" is-error"
-    :(answer.intent&&["refuse","off_topic"].indexOf(answer.intent)>=0?" is-refusal":"");
   var body="";
   if(turn.state==="pending"){
-    body='<div class="ask-pending">Looking…</div>';
+    body='<div class="ask-bubble"><p class="ask-pending">'
+      +'<span class="ask-dots"><i></i><i></i><i></i></span>Reading your records…</p></div>';
   }else if(turn.state==="error"){
-    body='<div class="ask-reply is-error">'+esc(turn.message||"That question could not be answered.")+'</div>';
+    body='<div class="ask-bubble"><div class="ask-error">'
+      +esc(turn.message||"That question could not be answered.")
+      +'<br>Your records have not changed. Try asking again.</div></div>';
   }else{
-
-    if(answer.message)body+='<div class="ask-reply'+cls+'">'+esc(answer.message)+'</div>';
+    var html="";
+    if(answer.message)html+='<p>'+esc(answer.message)+'</p>';
     if(answer.rows){
       if(answer.total){
-        // The worker writes this from the plan it ran, so it says what was
+        // No filter chips here. The pilot shows them beside the answer because
+        // it has no sentence; ours does, and it says the same thing in words -
+        // "I found 5 projects that slipped 30 days or more" beside a chip
+        // reading "Slipped 30 days or more" is the same fact twice. The chips
+        // stay where there is no sentence: the records panel and the briefing.
+        // Written by the worker from the plan it ran, so it says what was
         // searched for rather than only how many turned up.
-        body+='<div class="ask-reply">'+esc(answer.summary
-          ||("I found "+answer.total+" project"+(answer.total===1?"":"s")+"."))+'</div>';
-        body+=askResultListHtml(answer);
+        html+='<p>'+esc(answer.summary
+          ||("I found "+answer.total+" project"+(answer.total===1?"":"s")+"."))+'</p>';
+        html+=askResultListHtml(answer);
+        html+=askPlanNotes(answer.plan);
+        html+=askSourceLine(answer);
+        if(turn.setIndex!==undefined&&turn.setIndex!==null){
+          html+='<div class="ask-buttons">'
+            +'<button type="button" class="ask-btn" data-ask-set="'+turn.setIndex+'">Show these records</button>'
+            +'<button type="button" class="ask-btn" data-ask-brief="'+turn.setIndex+'">Draft briefing</button>'
+            +'</div>';
+        }
       }else if(!answer.message){
-        // The wording matters: an empty result has to read as "nothing matched
-        // these filters", which are listed above it, rather than as a failure.
-        // The same sentence, so an empty answer says what was looked for
-        // instead of only that nothing turned up.
-        body+='<div class="ask-reply">'+esc(answer.summary||"I found no projects.")
-          +' Try a project name, venue, CAPP number, or a wider business unit.</div>';
+        html+='<p>'+esc(answer.summary||"I found no projects.")+'</p>'
+          +'<p>Try a project name, a venue, a CAPP number, or a wider business unit.</p>';
       }
     }
+    body='<div class="ask-bubble">'+html+'</div>';
   }
-  return '<div class="ask-turn">'
-    +'<div class="ask-user"><div class="ask-bubble">'+esc(turn.question)+'</div></div>'
-    +askAiLabel()+body+askDebugHtml(answer&&answer.debug)
-    +'</div>';
+  return '<article class="ask-turn">'
+    +'<div class="ask-turn-user"><div class="ask-bubble">'+esc(turn.question)+'</div></div>'
+    +'</article><article class="ask-turn">'+askAiLabel()+body
+    +askDebugHtml(answer&&answer.debug)+'</article>';
 }
 
 // A read-only view of one project. The assistant reads and does not write, so
@@ -1062,6 +1455,10 @@ function setAskMode(mode){
   if(composer)composer.hidden=voiceMode;
   var suggestions=byId("askSuggestions");
   if(suggestions)suggestions.hidden=voiceMode;
+  var hint=byId("askHint");
+  if(hint)hint.textContent=voiceMode
+    ?"Voice \u00b7 the microphone is used only while a call is running"
+    :"Quiet chat \u00b7 microphone off";
   // Leaving voice ends the call rather than leaving it running out of sight.
   if(!voiceMode&&voice.state!=="off")stopVoice("");
 }
@@ -1255,34 +1652,57 @@ function renderAsk(){
   var thread=byId("askThread");
   if(!thread)return;
   thread.innerHTML=askTurns.length?askTurns.map(askTurnHtml).join("")
-    :'<div class="ask-empty">Ask about budgets, schedules, risk ratings and turnover dates for the '
-     +'projects you can see. This assistant reads records, it does not change them.</div>';
+    :askWelcomeHtml();
   var toBottom=function(){
     if(typeof thread.scrollTo==="function")thread.scrollTo({top:thread.scrollHeight,behavior:"auto"});
     else thread.scrollTop=thread.scrollHeight;
   };
   toBottom();
   if(typeof requestAnimationFrame==="function")requestAnimationFrame(toBottom);
+  renderAskSuggestions();
+  renderAskUnits();
+  renderEvidence();
+}
+
+// The opening message. It states what is here and offers a first question,
+// because an empty box with a cursor in it tells a reader nothing about what
+// this will answer.
+function askWelcomeHtml(){
+  var rows=askUnitRows();
+  var updates=state.updates?state.updates.length:0;
+  return '<article class="ask-turn">'+askAiLabel()
+    +'<div class="ask-bubble">'
+    +'<h3>A conversation with<br>your project portfolio.</h3>'
+    +'<p>Ask about <strong>'+esc(String(rows.length))+' project'+(rows.length===1?"":"s")+'</strong>'
+      +(updates?' and <strong>'+esc(String(updates))+' saved updates</strong>':"")
+      +'. Narrow the results, open a record, or turn a set into a briefing.</p>'
+    +'<p>Try <strong>“Which projects have high schedule risk?”</strong></p>'
+    +'<div class="ask-note">This assistant reads the records you are entitled to see. '
+      +'It never changes a project, and every answer lists the conditions it applied.</div>'
+    +'</div></article>';
+}
+
+// Suggestions follow the conversation: openers before anything is asked, then
+// the moves a reader actually wants next once a set exists.
+function renderAskSuggestions(){
   var chips=byId("askSuggestions");
-  if(chips){
-    chips.innerHTML=ASK_SUGGESTIONS.map(function(text){
-      return '<button type="button" class="ask-suggestion">'+esc(text)+'</button>';
-    }).join("");
-  }
-  var scope=byId("askScope");
-  if(scope)scope.textContent=state.me?"Covers the projects "+(state.me.name||state.me.email)+" can see":"";
-  // The evidence follows the most recent answer that actually returned records,
-  // carrying its question so the panel is never ambiguous about which answer it
-  // belongs to.
-  var last=null;
-  for(var i=askTurns.length-1;i>=0;i--){
-    var turn=askTurns[i];
-    if(turn.state==="done"&&turn.answer&&turn.answer.rows&&turn.answer.rows.length){
-      last=Object.assign({},turn.answer,{question:turn.question});
-      break;
-    }
-  }
-  renderEvidence(last);
+  if(!chips)return;
+  var items=activeSet()&&activeSet().rows.length?ASK_NEXT:ASK_SUGGESTIONS;
+  chips.innerHTML=items.map(function(item){
+    var q=item.q||item,label=item.label||item;
+    return '<button type="button" class="ask-suggestion" data-ask-ask="'+esc(q)+'">'+esc(label)+'</button>';
+  }).join("");
+}
+
+// The scope selector, from the units this reader can actually see.
+function renderAskUnits(){
+  var pick=byId("askUnitScope");
+  if(!pick||pick.dataset.filled==="true")return;
+  var units=[];
+  state.projects.forEach(function(p){if(units.indexOf(p.business_unit)<0)units.push(p.business_unit)});
+  pick.innerHTML='<option value="All">All business units</option>'
+    +units.map(function(u){return '<option value="'+esc(u)+'">'+esc(u)+'</option>'}).join("");
+  pick.dataset.filled="true";
 }
 
 async function submitAsk(question){
@@ -1331,6 +1751,15 @@ async function submitAsk(question){
     if(history.length)payload.history=history;
     var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify(payload)});
     turn.state="done";turn.answer=answer;
+    // Every search keeps its own set, including one that found nothing: "that
+    // question matched no records" is a result worth being able to go back to,
+    // and leaving the panel on the previous set would answer the wrong question
+    // with a straight face. Refusals and definitions carry no rows and make no
+    // set, so the records on screen stay where they were.
+    if(answer.rows){
+      recordSet(text,answer);
+      turn.setIndex=askSets.length-1;
+    }
   }catch(error){
     // api() throws with the worker's own message, which already explains a
     // refusal, a missing key or a rate limit in words a user can act on.
@@ -1339,6 +1768,138 @@ async function submitAsk(question){
   byId("askSubmit").disabled=false;
   askSave();
   renderAsk();
+}
+
+// --- Briefing, CSV and printing ---------------------------------------------
+// All three read the active result set, so moving the rail back to an earlier
+// question changes what they produce. That is the whole point of keeping the
+// sets: a briefing belongs to a question, not to whatever was asked last.
+function briefingText(set){
+  var totals=askTotals(set.rows);
+  var periods=set.rows.map(function(p){return p.reporting_period}).filter(Boolean).sort();
+  var lines=[
+    "D&C PROJECT BRIEFING",
+    "Question: "+set.question,
+    "Scope: "+(set.filters.length?set.filters.join(" · "):"All available projects"),
+    "Business unit: "+(set.unit==="All"?"All business units":set.unit),
+    "Prepared: "+new Date().toISOString().slice(0,10),
+    "Reporting dates: "+(periods.length
+      ?periods[0]+(periods[periods.length-1]!==periods[0]?" to "+periods[periods.length-1]:"")
+      :"none recorded"),
+    "",
+    "Project count: "+totals.count+(set.truncated?" of "+set.total+" matched (answer capped at "+set.returned+")":""),
+    "Approved budgets: "+askMoney(totals.approved)+" ("+totals.approvedCount+" of "+totals.count+" recorded)",
+    "Forecast costs: "+askMoney(totals.forecast)+" ("+totals.forecastCount+" of "+totals.count+" recorded)",
+    "Matched-pair variance: "+askMoney(totals.pairedVariance)+" ("+totals.pairedCount+" with both figures)",
+    "High risk: "+totals.highRisk+"   Above budget: "+totals.overBudget+"   Turnover moved later: "+totals.delayed,
+    "",
+    "Totals cover different sets of projects where figures are missing.",
+    "The matched-pair variance is the only directly comparable number.",
+    "",
+    "----------------------------------------------------------------------"
+  ];
+  set.rows.forEach(function(p){
+    var days=askNum(p.duration_change_days);
+    lines.push(
+      (p.venue||p.section_name||p.business_unit||"")+" | "+p.name+" [Project "+p.id+"]",
+      (p.business_unit||"")+" · "+(p.status||"")+" · "+(p.project_manager||p.development_lead||"Manager not recorded"),
+      "Budget risk: "+(p.budget_risk||"Not Rated")+" | Schedule risk: "+(p.schedule_risk||"Not Rated"),
+      "Approved: "+askMoney(p.approved_budget)+" | Forecast: "+askMoney(p.anticipated_final_cost)
+        +" | Variance: "+askMoney(p.forecast_variance),
+      "Turnover: "+(p.original_turnover_date||"not recorded")+" → "+(p.current_turnover_date||"not recorded")
+        +(days===null?"":" ("+days+" days)"),
+      "Reporting period: "+(p.reporting_period||"not recorded"),
+      "Update: "+(p.current_update||"No activity update recorded."),
+      "----------------------------------------------------------------------");
+  });
+  lines.push("Read-only briefing. Figures are the saved values in the Tracker at the time of this export.");
+  return lines.join("\\n");
+}
+
+function csvText(rows){
+  var cols=["id","business_unit","venue","section_name","name","project_type","status","phase",
+    "project_manager","development_lead","approved_budget","anticipated_final_cost","forecast_variance",
+    "budget_risk","schedule_risk","original_turnover_date","current_turnover_date",
+    "duration_change_days","reporting_period"];
+  // A leading =, +, - or @ is prefixed with an apostrophe: a spreadsheet would
+  // otherwise read a project name as a formula.
+  var cell=function(value){
+    var text=value===null||value===undefined?"":String(value);
+    if(/^[=+\\-@\\t\\r]/.test(text))text="'"+text;
+    return '"'+text.replace(/"/g,'""')+'"';
+  };
+  // The header is quoted like every other cell, so a reader opening the file
+  // in a text editor sees one consistent shape rather than two.
+  return [cols.map(cell).join(",")].concat(rows.map(function(p){
+    return cols.map(function(c){return cell(p[c])}).join(",");
+  })).join("\\r\\n");
+}
+
+function askDownload(name,text,type){
+  var blob=new Blob([text],{type:type}),url=URL.createObjectURL(blob);
+  var link=document.createElement("a");
+  link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();
+  setTimeout(function(){URL.revokeObjectURL(url)},60000);
+}
+
+function askSlug(set){
+  var base=(set.unit==="All"?"portfolio":set.unit).replace(/[^A-Za-z0-9]+/g,"-").toLowerCase();
+  return base+"-"+new Date().toISOString().slice(0,10);
+}
+
+// Opens a record inside the evidence panel, the way the pilot does, and keeps
+// it as part of the set so the rail restores it with everything else.
+async function openAskPanelRecord(id){
+  var set=activeSet();
+  if(!set)return;
+  set.recordId=Number(id);
+  set.view="record";
+  set.history=null;
+  renderEvidence();
+  // The history endpoint applies the same business-unit scope as every other
+  // route: an out-of-scope id answers 404, so this cannot be used to probe.
+  try{
+    var data=await api("/api/projects/"+Number(id)+"/history");
+    set.history=data.history||[];
+  }catch(error){
+    set.history=[];
+  }
+  if(activeSet()===set&&set.view==="record")renderEvidence();
+}
+
+function askAction(action){
+  var set=activeSet();
+  if(action==="browse"){setView("projects");return}
+  if(action==="more"&&set){set.shown+=ASK_PAGE;renderEvidence();return}
+  if(action==="back"&&set){set.view="records";set.recordId=null;renderEvidence();return}
+  if(action==="briefing"&&set){set.view="briefing";renderEvidence();return}
+  if(action==="record-briefing"&&set&&set.recordId){
+    // A briefing for the one record, without disturbing the set it came from.
+    var one=set.rows.filter(function(p){return p.id===set.recordId});
+    if(!one.length)return;
+    askDownload("dn-dc-briefing-project-"+set.recordId+".txt",
+      briefingText(Object.assign({},set,{rows:one,total:one.length,returned:1,truncated:false,
+        question:"Project record "+one[0].name})),"text/plain;charset=utf-8");
+    toast("Project briefing downloaded.");
+    return;
+  }
+  if(!set||!set.rows.length){toast("Ask a question first, then a briefing can be built from the records it finds.");return}
+  if(action==="download"){
+    askDownload("dn-dc-briefing-"+askSlug(set)+".txt",briefingText(set),"text/plain;charset=utf-8");
+    toast("Briefing downloaded for result "+(askIndex+1)+" of "+askSets.length+".");
+    return;
+  }
+  if(action==="csv"){
+    askDownload("dn-dc-results-"+askSlug(set)+".csv",csvText(set.rows),"text/csv;charset=utf-8");
+    toast("CSV downloaded for "+set.rows.length+" record"+(set.rows.length===1?"":"s")+".");
+    return;
+  }
+  if(action==="print"){
+    set.view="briefing";
+    renderEvidence();
+    // The briefing has to be painted before the print dialog reads the page.
+    setTimeout(function(){window.print()},60);
+  }
 }
 
 document.addEventListener("submit",function(event){
@@ -1367,15 +1928,71 @@ document.addEventListener("click",function(event){
     event.target.close();
     return;
   }
-  var record=event.target.closest?event.target.closest("[data-ask-record]"):null;
+  var closest=function(selector){
+    return event.target.closest?event.target.closest(selector):null;
+  };
+  // A suggestion, a business-unit bar, or anything else that asks a question.
+  var asks=closest("[data-ask-ask]");
+  if(asks){submitAsk(asks.dataset.askAsk);return}
+  // Open a record inside the evidence panel, as the pilot does.
+  var open=closest("[data-ask-open]");
+  if(open){openAskPanelRecord(open.dataset.askOpen);return}
+  // The dialog is the full activity history, for when the panel's six entries
+  // are not enough.
+  var full=closest("[data-ask-record-full]");
+  if(full){openAskRecord(full.dataset.askRecordFull);return}
+  // Kept for anything still pointing at the old attribute.
+  var record=closest("[data-ask-record]");
   if(record){openAskRecord(record.dataset.askRecord);return}
-  var chip=event.target.closest?event.target.closest(".ask-suggestion"):null;
-  if(chip){submitAsk(chip.textContent);return}
-  if(event.target&&event.target.id==="askClear"){askTurns=[];askSave();renderAsk()}
-  var orbCall=event.target.closest?event.target.closest("#askVoiceBtn"):null;
+  // Jump the rail straight to the set a message produced.
+  var toSet=closest("[data-ask-set]");
+  if(toSet){
+    var i=Number(toSet.dataset.askSet);
+    if(askSets[i]){askSets[i].view="records";showSet(i)}
+    return;
+  }
+  var toBrief=closest("[data-ask-brief]");
+  if(toBrief){
+    var b=Number(toBrief.dataset.askBrief);
+    if(askSets[b]){askSets[b].view="briefing";showSet(b)}
+    return;
+  }
+  var action=closest("[data-ask-action]");
+  if(action){askAction(action.dataset.askAction);return}
+  var crumb=closest("[data-ask-crumb]");
+  if(crumb){
+    if(crumb.dataset.askCrumb==="browse"){setView("projects");return}
+    // Back to the conversation's own level: the records of the active set, or
+    // the portfolio when nothing has been asked.
+    var set=activeSet();
+    if(set){set.view="records";set.recordId=null}
+    renderEvidence();
+    return;
+  }
+  if(event.target&&event.target.id==="askBrowse"){setView("projects");return}
+  if(event.target&&event.target.id==="askOlder"){showSet(askIndex-1);return}
+  if(event.target&&event.target.id==="askNewer"){showSet(askIndex+1);return}
+  if(event.target&&event.target.id==="askDownload"){askAction("download");return}
+  if(event.target&&event.target.id==="askClear"){
+    askTurns=[];askSets=[];askIndex=-1;askSave();renderAsk();return;
+  }
+  var orbCall=closest("#askVoiceBtn");
   if(orbCall){startVoice();return}
   if(event.target&&event.target.id==="askStopBtn"){stopSpeaking();return}
   if(event.target&&event.target.id==="askQuietMode"){setAskMode("quiet");return}
   if(event.target&&event.target.id==="askVoiceMode"){setAskMode("voice");return}
 });
+
+// Changing the scope starts a fresh line of questioning: the previous sets
+// belonged to a different scope, and silently reinterpreting them under a new
+// one would answer questions nobody asked.
+document.addEventListener("change",function(event){
+  if(event.target&&event.target.id==="askUnitScope"){
+    askSets=[];askIndex=-1;
+    renderAsk();
+    toast("Search scope is now "+(askUnit()==="All"?"all business units":askUnit())
+      +". Previous result sets were cleared.");
+  }
+});
+
 `;
