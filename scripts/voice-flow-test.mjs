@@ -149,12 +149,13 @@ await check("a spoken question is answered and the call goes back to listening",
   assert.match(thread(), /Show me Gaming projects/, "the question is in the transcript, in their words");
   assert.match(thread(), /There are 30 projects/, "and so is the answer");
   assert.equal(state(), "listening", "listening resumed by itself");
-  assert.match(browser.text("askRailLabel"), /Result 1 of 1/, "and it made a result set");
+  assert.equal(browser.byId("askEvidence").querySelectorAll(".ask-record").length > 0, true,
+    "and it made a result set, whose records are in the panel");
 });
 await askAloud("Which of those are high schedule risk");
 await askAloud("Show me Corporate projects");
 await check("three questions in a row, each its own result set", () => {
-  assert.match(browser.text("askRailLabel"), /Result 3 of 3/);
+  assert.match(browser.text("askRailLabel"), /^3 of 3$/);
   assert.equal(turns(), 6, "six articles: three questions and three answers");
   const text = thread();
   assert.ok(text.indexOf("Show me Gaming projects") < text.indexOf("Show me Corporate projects"),
@@ -214,29 +215,33 @@ await check("Mute stops the microphone without ending the call", async () => {
 });
 
 // --- The records, and the two buttons --------------------------------------
-await check("Show these records opens that answer's set, not the newest", async () => {
-  const buttons = [...browser.byId("askThread").querySelectorAll("[data-ask-set]")];
-  assert.ok(buttons.length >= 3, "every answer with records offers one");
-  await browser.fire(buttons[0],"click").results; await settle();
-  assert.match(browser.text("askRailLabel"), /Result 1 of/, "the first answer's set");
+await check("the conversation carries no buttons; the panel's chevrons reach each set", async () => {
+  assert.equal(browser.byId("askThread").querySelectorAll("[data-ask-set]").length, 0,
+    "no per-answer buttons");
+  assert.equal(browser.byId("askThread").querySelectorAll("[data-ask-brief]").length, 0);
+  // The chevrons walk back to the first set however many turns were taken.
+  let guard = 0;
+  while (!browser.byId("askOlder").disabled && guard++ < 20) {
+    await browser.fire("askOlder","click").results; await settle();
+  }
+  assert.match(browser.text("askRailLabel"), /^1 of/, "back at the first answer's set");
+  assert.equal(browser.byId("askOlder").disabled, true, "and there is nothing older to reach");
   assert.match(browser.text("askEvidenceTitle"), /Gaming/, "showing its own question");
-  await browser.fire(buttons[1],"click").results; await settle();
-  assert.match(browser.text("askRailLabel"), /Result 2 of/, "and the second answer's set");
 });
-await check("Draft briefing builds from that answer's set", async () => {
+await check("the briefing is built from whichever set is showing", async () => {
   const grabbed = [];
   const RealBlob = globalThis.Blob;
   globalThis.Blob = function(parts,opts){ grabbed.push(String(parts[0])); return new RealBlob(parts,opts); };
   const make = browser.document.createElement.bind(browser.document);
   browser.document.createElement = function(tag){ const el=make(tag);
     if(typeof el.click!=="function")el.click=()=>{}; if(typeof el.remove!=="function")el.remove=()=>{}; return el; };
-  const briefs = [...browser.byId("askThread").querySelectorAll("[data-ask-brief]")];
-  await browser.fire(briefs[0],"click").results; await settle();
+  const brief = browser.byId("askToolbar").querySelector("[data-ask-action=briefing]");
+  await browser.fire(brief,"click").results; await settle();
   assert.match(browser.text("askEvidenceTitle"), /Briefing preview/);
-  assert.match(browser.text("askRailLabel"), /Result 1 of/, "on the set that answer produced");
-  await browser.fire(browser.byId("askDownload"),"click").results; await settle();
+  const download = browser.byId("askToolbar").querySelector("[data-ask-action=download]");
+  await browser.fire(download,"click").results; await settle();
   assert.ok(grabbed.length, "a briefing was written");
-  assert.match(grabbed[0], /Show me Gaming projects/, "for that question, not the latest");
+  assert.match(grabbed[0], /Show me Gaming projects/, "for the set on screen, not the latest");
   globalThis.Blob = RealBlob;
 });
 await check("the chevrons still move between sets after voice turns", async () => {

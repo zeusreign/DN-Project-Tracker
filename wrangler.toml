@@ -80,6 +80,19 @@ ASSISTANT_LEGACY_PLANNER = "false"
 # ASSISTANT_SQL_MODEL = "gpt-4o-mini"
 # ASSISTANT_ANSWER_MODEL = "gpt-4o-mini"
 
+# The voice call's ears. Defaults suit a headset or a laptop microphone with
+# people nearby. Set ASSISTANT_AUDIO_FIELD = "far" for a room microphone, where
+# quiet speech matters more than rejecting the next desk.
+# ASSISTANT_AUDIO_FIELD = "near"
+# Raise the threshold if background conversation still starts a turn; lower it
+# if a quiet speaker is being missed. Change this before the silence setting.
+# ASSISTANT_VAD_THRESHOLD = "0.8"
+# ASSISTANT_VAD_SILENCE_MS = "1100"
+# Pin the spoken language to stop a half-heard noise being transcribed as one
+# nobody is speaking. Leave unset to stay open to any language.
+# ASSISTANT_VOICE_LANGUAGE = "en"
+# ASSISTANT_VOICE_NAME = "alloy"
+
 # TODO(config): optional comma-separated list granting the `admin` role by email.
 # Intentionally left empty — it does NOT create a login account (it only applies
 # to the platform-auth fallback above and to role lookup). The first real

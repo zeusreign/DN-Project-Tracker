@@ -51,6 +51,18 @@ const browser=await createBrowser({page,handler:(r)=>worker.fetch(r,{...base,ASS
 browser.type("loginUsername","ui@example.invalid");browser.type("loginPassword",pw);
 await browser.fire("loginForm","submit").results; await browser.settle();
 
+// Download briefing lives in the panel's toolbar, in the briefing view. The
+// rail that used to carry it is gone: the chevrons moved into the card header
+// beside the count they change.
+const downloadBriefing = async () => {
+  const brief = browser.byId("askToolbar").querySelector("[data-ask-action=briefing]");
+  if (brief) { await browser.fire(brief, "click").results; await browser.settle(); }
+  const dl = browser.byId("askToolbar").querySelector("[data-ask-action=download]");
+  await browser.fire(dl, "click").results; await browser.settle();
+};
+const briefingOffered = () =>
+  !!browser.byId("askToolbar").querySelector("[data-ask-action=briefing],[data-ask-action=download]");
+
 const ok=[];const step=(n,label,fn)=>{try{fn();ok.push(n);console.log(`  ${String(n).padStart(2)} ok   ${label}`)}catch(e){console.log(`  ${String(n).padStart(2)} FAIL ${label}\n       ${e.message}`);process.exitCode=1}};
 const ask=async(q)=>{browser.type("askInput",q);await browser.fire("askForm","submit").results;await browser.settle()};
 const cls=(id,c)=>[...browser.byId(id).querySelectorAll(c)];
@@ -59,7 +71,7 @@ step(1,"application opens signed in",()=>assert.equal(browser.byId("workspace").
 await browser.fire("askNav","click").results; await browser.settle();
 step(2,"Ask the Tracker opens from the existing navigation",()=>assert.equal(browser.byId("askInput").closest("[data-pane]").hidden,false));
 step(3,"the panel renders its parts",()=>{
-  for(const id of ["askBrowse","askCrumb","askQuietMode","askVoiceMode","askToolbar","askEvidence","askOlder","askNewer","askRailLabel","askDownload","askUnitScope","askFoot"])
+  for(const id of ["askBrowse","askCrumb","askQuietMode","askVoiceMode","askToolbar","askEvidence","askOlder","askNewer","askRailLabel","askUnitScope"])
     assert.ok(browser.byId(id),id+" is present");
 });
 step(4,"Browse records and breadcrumbs are present",()=>{
@@ -82,7 +94,11 @@ step(6,"the portfolio overview is the opening evidence view",()=>{
 await ask("Show me Gaming projects");
 const set1=browser.text("askEvidenceCount");
 step(7,"a result set is produced",()=>{
-  assert.match(browser.text("askRailLabel"),/Result 1 of 1/);
+  // One set: nothing to step between, so the label stays out of the way and
+  // the chevrons say so by being disabled.
+  assert.equal(browser.text("askRailLabel").trim(),"");
+  assert.equal(browser.byId("askOlder").disabled,true);
+  assert.equal(browser.byId("askNewer").disabled,true);
   assert.ok(cls("askEvidence",".ask-record").length>0,"records are shown as cards");
 });
 step(8,"records carry the pilot's level of detail",()=>{
@@ -97,20 +113,20 @@ step(8,"records carry the pilot's level of detail",()=>{
 await ask("Which projects have high schedule risk?");
 const set2=browser.text("askEvidenceCount");
 step(9,"a second result set is produced and becomes active",()=>{
-  assert.match(browser.text("askRailLabel"),/Result 2 of 2/);
+  assert.match(browser.text("askRailLabel"),/^2 of 2$/);
   assert.notEqual(set1,set2,"the two sets differ");
 });
 step(10,"the first set is still available",()=>assert.equal(browser.byId("askOlder").disabled,false));
 await browser.fire("askOlder","click").results; await browser.settle();
 step(11,"the older chevron restores the first set exactly",()=>{
-  assert.match(browser.text("askRailLabel"),/Result 1 of 2/);
+  assert.match(browser.text("askRailLabel"),/^1 of 2$/);
   assert.equal(browser.text("askEvidenceCount"),set1);
   assert.match(browser.text("askEvidenceTitle"),/Gaming projects/);
   assert.equal(browser.byId("askNewer").disabled,false);
 });
 await browser.fire("askNewer","click").results; await browser.settle();
 step(12,"the newer chevron restores the second set",()=>{
-  assert.match(browser.text("askRailLabel"),/Result 2 of 2/);
+  assert.match(browser.text("askRailLabel"),/^2 of 2$/);
   assert.equal(browser.text("askEvidenceCount"),set2);
   assert.equal(browser.byId("askNewer").disabled,true,"and newest disables it");
 });
@@ -137,7 +153,7 @@ step(15,"its activity history is shown, and the toolbar offers the way back",()=
   assert.ok(actions.includes("record-briefing"),"Project briefing");
 });
 step(16,"the selected record is part of the set, so the rail restores it",()=>{
-  assert.match(browser.text("askRailLabel"),/Result 2 of 2/);
+  assert.match(browser.text("askRailLabel"),/^2 of 2$/);
 });
 await browser.fire(browser.byId("askOlder"),"click").results; await browser.settle();
 await browser.fire(browser.byId("askNewer"),"click").results; await browser.settle();
@@ -158,8 +174,8 @@ step(18,"a briefing is generated for the active set",()=>{
   for(const a of ["download","print","csv","back"]) assert.ok(actions.includes(a),a+" is offered");
 });
 step(19,"Download briefing is enabled and bound to the active set",()=>{
-  assert.equal(browser.byId("askDownload").disabled,false);
-  assert.match(browser.text("askRailLabel"),/Result 2 of 2/);
+  assert.ok(briefingOffered(),"a briefing can be built from the set on screen");
+  assert.match(browser.text("askRailLabel"),/^2 of 2$/);
 });
 console.log("     (download, print and CSV are verified below against the generated text)");
 
@@ -170,6 +186,7 @@ const grabbed=[];
 const RealBlob=globalThis.Blob;
 globalThis.Blob=function(parts,opts){grabbed.push(String(parts[0]));return new RealBlob(parts,opts)};
 let printed=0; browser.window.print=function(){printed++};
+
 // The harness's elements have no click(); the anchor-download shape the app
 // already uses everywhere needs one, so give created elements a no-op.
 const makeEl=browser.document.createElement.bind(browser.document);
@@ -180,7 +197,7 @@ browser.document.createElement=function(tag){
   return el;
 };
 
-await browser.fire(browser.byId("askDownload"),"click").results; await browser.settle();
+await downloadBriefing();
 step(20,"Download briefing produces a briefing for the active set",()=>{
   assert.equal(grabbed.length,1,"one download");
   const text=grabbed[0];
@@ -192,7 +209,7 @@ step(20,"Download briefing produces a briefing for the active set",()=>{
 });
 // Move the rail back and download again: the briefing must follow the rail.
 await browser.fire("askOlder","click").results; await browser.settle();
-await browser.fire(browser.byId("askDownload"),"click").results; await browser.settle();
+await downloadBriefing();
 step(21,"moving to an older set changes what Download briefing produces",()=>{
   assert.equal(grabbed.length,2);
   assert.match(grabbed[1],/Question: Show me Gaming projects/,"result set 1's briefing, not the newest");
@@ -229,7 +246,7 @@ step(24,"an empty result answers in the conversation and leaves the records alon
     "the records that were on screen are still on screen");
   assert.equal(browser.text("askEvidenceTitle"),titleBeforeEmpty,"still labelled with their own question");
   assert.equal(browser.text("askRailLabel"),railBeforeEmpty,"and the rail has not moved");
-  assert.equal(browser.byId("askDownload").disabled,false,
+  assert.ok(briefingOffered(),
     "the briefing still refers to the records that are showing");
 });
 failNext=true;
@@ -239,7 +256,7 @@ step(25,"an error says what happened and that nothing changed",()=>{
   const thread=browser.byId("askThread");
   assert.ok(thread.querySelectorAll(".ask-error").length>0,"the failure is shown as an error, not an answer");
   assert.match(thread.textContent,/records have not changed/);
-  assert.match(browser.text("askRailLabel"),/Result \d of \d/,"and the existing sets survive it");
+  assert.match(browser.text("askRailLabel"),/^\d+ of \d+$/,"and the existing sets survive it");
 });
 
 // --- permissions, responsiveness, and the Phase 1 gate ----------------------
@@ -263,8 +280,8 @@ const css=(await readFile(`${root}/worker/styles.js`,"utf8"));
 step(28,"responsive and print rules are present, not just the desktop layout",()=>{
   for(const q of ["max-width:1280px","max-width:1024px","max-width:640px","prefers-reduced-motion","@media print"])
     assert.ok(css.includes(q),q+" is handled");
-  assert.match(css,/\.ask-rail\{flex-direction:row/s===null?/x/:/ask-rail/,"the rail folds rather than vanishing");
-  assert.ok(css.includes("writing-mode:horizontal-tb"),"the rail label reflows on narrow screens");
+  assert.ok(css.includes(".ask-evidence-nav"),"the result-set chevrons sit in the panel header");
+  assert.ok(css.includes(".ask-step:disabled"),"and say when there is nothing to step to");
   assert.ok(css.includes(".ask-btn:disabled"),"disabled states are styled");
   assert.ok(css.includes("data-selected=true"),"selected states are styled");
   assert.ok(css.includes(".ask-suggestion:hover"),"hover states are styled");

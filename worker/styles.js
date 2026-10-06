@@ -165,7 +165,7 @@ ${ENHANCED_STYLES}
   font-size:13px;color:#24495c;background:#fff;max-width:17rem}
 
 /* Three columns: talk, evidence, and the rail that moves between result sets. */
-.ask-workspace{display:grid;grid-template-columns:minmax(360px,1.2fr) minmax(320px,1fr) 46px;
+.ask-workspace{display:grid;grid-template-columns:minmax(360px,1.2fr) minmax(330px,1fr);
   gap:18px;min-height:520px;height:calc(100vh - 330px);max-height:950px}
 .ask-conversation{background:#fff;border:1px solid var(--ask-line);border-radius:10px;
   display:flex;flex-direction:column;min-width:0;overflow:hidden;box-shadow:0 2px 4px #17334505}
@@ -388,22 +388,17 @@ ${ENHANCED_STYLES}
 .ask-photo figcaption strong{display:block;color:#214c61;margin-bottom:4px}
 .ask-photo button{padding:0;border:0;background:none;width:100%;text-align:left;cursor:pointer}
 
-/* The rail. Older and newer move between result SETS, never between records. */
-.ask-rail{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0}
-.ask-rail-btn{width:34px;height:34px;border-radius:8px;border:1px solid #cbd9e1;background:#fff;
-  color:#2a6b7c;display:grid;place-items:center;cursor:pointer;flex:none}
-.ask-rail-btn:hover:not(:disabled){background:#eaf4f6;border-color:#9ac8ca}
-.ask-rail-btn:disabled{opacity:.38;cursor:default}
-.ask-rail-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;
+/* Moving between result sets. A horizontal pair in the card's own header,
+   beside the count they change, rather than a rail off to one side: the thing
+   they act on is the panel, so that is where they belong. */
+.ask-evidence-nav{display:flex;align-items:center;gap:6px;flex:none}
+.ask-step-label{font-size:11px;color:#7b8f9a;white-space:nowrap;margin-right:2px}
+.ask-step{width:26px;height:26px;border-radius:6px;border:1px solid #cbd9e1;background:#fff;
+  color:#2a6b7c;display:grid;place-items:center;cursor:pointer;flex:none;padding:0}
+.ask-step:hover:not(:disabled){background:#eaf4f6;border-color:#9ac8ca}
+.ask-step:disabled{opacity:.35;cursor:default}
+.ask-step svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;
   stroke-linecap:round;stroke-linejoin:round}
-.ask-rail-download{background:var(--ask-teal);border-color:var(--ask-teal);color:#fff}
-.ask-rail-download:hover:not(:disabled){background:#00676d;border-color:#00676d}
-.ask-rail-label{font-size:10px;line-height:1.3;color:#6b818e;text-align:center;
-  writing-mode:vertical-rl;transform:rotate(180deg);max-height:150px;overflow:hidden;
-  letter-spacing:.4px}
-.ask-rail-rule{width:18px;height:1px;background:#d7e2e8;margin:4px 0}
-.ask-foot{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:#718591;
-  padding:12px 2px 0;flex-wrap:wrap;margin:0}
 
 /* The assistant's record dialog. Deliberately not the edit form: this pane only
    reads, and handing someone a form with a Save button contradicts that. */
@@ -423,16 +418,12 @@ ${ENHANCED_STYLES}
 /* Responsive. The rail folds into a row above the evidence panel rather than
    disappearing: moving between result sets is not a desktop-only affordance. */
 @media (max-width:1280px){
-  .ask-workspace{grid-template-columns:minmax(320px,1.1fr) minmax(300px,1fr) 44px;gap:14px}
+  .ask-workspace{grid-template-columns:minmax(320px,1.1fr) minmax(300px,1fr);gap:14px}
 }
 @media (max-width:1024px){
   .ask-workspace{grid-template-columns:1fr;height:auto;max-height:none;min-height:0}
   .ask-conversation{min-height:520px}
   .ask-evidence{max-height:560px}
-  .ask-rail{flex-direction:row;justify-content:flex-end;padding:0;order:-1}
-  .ask-rail-label{writing-mode:horizontal-tb;transform:none;max-height:none;
-    margin-right:auto;font-size:11px}
-  .ask-rail-rule{width:1px;height:18px;margin:0 4px}
 }
 @media (max-width:640px){
   .ask-top,.ask-head{flex-direction:column;align-items:flex-start}
@@ -452,8 +443,8 @@ ${ENHANCED_STYLES}
    the evidence body is allowed to flow onto as many sheets as it needs. */
 @media print{
   body{background:#fff}
-  .sidebar,.topbar,.ask-top,.ask-head,.ask-conversation,.ask-rail,
-  .ask-evidence-toolbar,.ask-evidence-header,.ask-foot,.toast,
+  .sidebar,.topbar,.ask-top,.ask-head,.ask-conversation,.ask-voice-bar,
+  .ask-evidence-toolbar,.ask-evidence-header,.toast,
   .pane:not([data-pane="ask"]){display:none!important}
   .app{display:block!important;box-shadow:none!important;background:#fff!important}
   .ask-workspace,.ask-evidence,.ask-evidence-body{display:block!important;height:auto!important;

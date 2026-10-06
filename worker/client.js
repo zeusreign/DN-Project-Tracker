@@ -1299,7 +1299,9 @@ function renderRail(){
   newer.disabled=!has||askIndex>=askSets.length-1;
   if(down)down.disabled=!has||!askSets[askIndex].rows.length;
   if(label){
-    label.textContent=has?"Result "+(askIndex+1)+" of "+askSets.length:"No results yet";
+    // Only once there is something to step between. Beside a count reading "—",
+    // "No results yet" said the same nothing twice.
+    label.textContent=has&&askSets.length>1?(askIndex+1)+" of "+askSets.length:"";
     label.title=has?askSets[askIndex].question:"";
   }
 }
@@ -1311,23 +1313,11 @@ function showSet(index){
 }
 
 function renderAskContext(){
-  var tag=byId("askContext"),foot=byId("askFoot"),scope=byId("askScope");
-  var set=activeSet();
-  if(tag){
-    tag.textContent=set
-      ?set.total+" record"+(set.total===1?"":"s")+" · "+(set.filters.length?set.filters.join(" · "):"All available projects")
-      :(askUnit()==="All"?"Every project you can see":askUnit());
-    tag.title=tag.textContent;
-  }
-  if(scope){
-    scope.textContent=state.me?"Scoped to "+(state.me.name||state.me.email):"";
-  }
-  if(foot){
-    var rows=askUnitRows();
-    foot.innerHTML='<span>'+esc(String(rows.length))+' project record'+(rows.length===1?"":"s")
-      +' you can see'+(askSets.length?' · '+askSets.length+' result set'+(askSets.length===1?"":"s")+' this conversation':"")+'</span>'
-      +'<span>Read-only · this assistant never changes a record</span>';
-  }
+  // One statement of what is on screen, in the card that holds it. The same
+  // count written twice - once above the conversation and again in the panel's
+  // own header - read as two different facts.
+  var scope=byId("askScope");
+  if(scope)scope.textContent=state.me?"Scoped to "+(state.me.name||state.me.email):"";
 }
 
 
@@ -1343,31 +1333,6 @@ function askAiLabel(){
 
 
 
-// The query behind an answer, for whoever is building this. Present only when
-// the environment turned it on, so there is nothing to hide in the client: if
-// the field is absent the panel does not exist.
-function askDebugHtml(debug){
-  if(!debug)return "";
-  var rows=[
-    ["Question",debug.question||""],
-    ["Intent",debug.intent+(debug.followUp?" (follow-up)":"")+(debug.language?" · "+debug.language:"")],
-    ["Plan",JSON.stringify(debug.plan)],
-    ["Scope",Array.isArray(debug.scope)?debug.scope.join(", "):String(debug.scope)],
-    // The conditions first, since that is the line anyone reads; the whole
-    // statement is underneath for when the rest matters.
-    ["Where",debug.where],
-    ["Bindings",JSON.stringify(debug.bindings)],
-    ["SQL",debug.sql],
-    ["Result",debug.total+" matched, "+debug.returned+" returned"+(debug.loosened?" · search loosened":"")],
-  ];
-  if(debug.usage){
-    rows.push(["Tokens",debug.usage.model+" · "+debug.usage.inputTokens+" in / "+debug.usage.outputTokens+" out"]);
-  }
-  return '<details class="ask-debug"><summary>Query behind this answer</summary>'
-    +'<dl>'+rows.filter(function(r){return r[1]!==undefined&&r[1]!==""}).map(function(r){
-      return '<dt>'+esc(r[0])+'</dt><dd>'+esc(String(r[1]))+'</dd>';
-    }).join("")+'</dl></details>';
-}
 
 function askTurnHtml(turn,index){
   var answer=turn.answer||{};
@@ -1396,9 +1361,10 @@ function askTurnHtml(turn,index){
   return '<article class="ask-turn">'
     +'<div class="ask-turn-user"><div class="ask-bubble">'+esc(turn.question)+'</div></div>'
     +'</article><article class="ask-turn">'+askAiLabel()+body
-    // The developer's query is never part of a call. It is furniture for
-    // building this, and a conversation is not the place for it.
-    +(voice.state==="off"?askDebugHtml(answer&&answer.debug):"")+'</article>';
+    // The developer's query is not part of the conversation at all. It was
+    // furniture for building this; the developer panel setting still carries it
+    // in the response for anyone who needs it.
+    +'</article>';
 }
 
 // One line pointing at the panel, and the way back to this set once the
@@ -1413,14 +1379,10 @@ function askEvidenceLine(answer,turn){
     line+=" · across "+esc(String(answer.projects.matched))+" project"
       +(answer.projects.matched===1?"":"s");
   }
-  var html='<div class="ask-sources">'+line+'</div>';
-  if(turn&&turn.setIndex!==undefined&&turn.setIndex!==null){
-    html+='<div class="ask-buttons">'
-      +'<button type="button" class="ask-btn" data-ask-set="'+turn.setIndex+'">Show these records</button>'
-      +'<button type="button" class="ask-btn" data-ask-brief="'+turn.setIndex+'">Draft briefing</button>'
-      +'</div>';
-  }
-  return html;
+  // No buttons here. The records are in the panel beside this and the chevrons
+  // reach any earlier answer; repeating both under every reply was the clutter
+  // that made the conversation hard to read.
+  return '<div class="ask-sources">'+line+'</div>';
 }
 
 // A read-only view of one project. The assistant reads and does not write, so
@@ -2088,19 +2050,6 @@ document.addEventListener("click",function(event){
   // Kept for anything still pointing at the old attribute.
   var record=closest("[data-ask-record]");
   if(record){openAskRecord(record.dataset.askRecord);return}
-  // Jump the rail straight to the set a message produced.
-  var toSet=closest("[data-ask-set]");
-  if(toSet){
-    var i=Number(toSet.dataset.askSet);
-    if(askSets[i]){askSets[i].view="records";showSet(i)}
-    return;
-  }
-  var toBrief=closest("[data-ask-brief]");
-  if(toBrief){
-    var b=Number(toBrief.dataset.askBrief);
-    if(askSets[b]){askSets[b].view="briefing";showSet(b)}
-    return;
-  }
   var action=closest("[data-ask-action]");
   if(action){askAction(action.dataset.askAction);return}
   var crumb=closest("[data-ask-crumb]");

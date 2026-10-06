@@ -138,14 +138,14 @@ step(1, "a simple search: the answer is in the chat, the records are in the pane
   assert.match(thread(), /There are \d+ projects\./, "a sentence, not a list");
   assert.equal(cls("askThread", ".ask-record").length, 0, "no cards in the conversation");
   assert.ok(cls("askEvidence", ".ask-record").length > 0, "cards in the panel");
-  assert.match(browser.text("askRailLabel"), /Result 1 of 1/);
+  assert.equal(browser.byId("askOlder").disabled, true, "one set: nothing older to reach");
 });
 await type("Which of those are high risk?");
 step(2, "Gaming and high risk, as a follow-up", () => {
   assert.ok(seen.at(-1).context, "the second turn carried context");
   assert.match(seen.at(-1).context.sql, /business_unit = 'Gaming'/,
     "and the previous query, recovered from the sealed token");
-  assert.match(browser.text("askRailLabel"), /Result 2 of 2/);
+  assert.match(browser.text("askRailLabel"), /^2 of 2$/);
 });
 
 // 3 negation · 4 aggregation · 5 largest · 6 relative date
@@ -210,7 +210,8 @@ step(9, "an empty answer speaks, and leaves the evidence standing", () => {
 
 // 10-11 result-set history and the chevrons
 step(10, "every answer with records made a result set", () => {
-  assert.match(browser.text("askRailLabel"), /Result \d+ of [5-9]/, "several sets are kept");
+  assert.match(browser.text("askRailLabel"), /^\d+ of \d+$/, "the panel says which set it is showing");
+  assert.equal(browser.byId("askOlder").disabled, false, "and several are kept to step back through");
 });
 const atEnd = browser.text("askEvidenceTitle");
 await browser.fire("askOlder", "click").results; await browser.settle();
@@ -238,9 +239,21 @@ browser.document.createElement = function (tag) {
   return el;
 };
 let printed = 0; browser.window.print = function () { printed++; };
+// Download briefing lives in the panel's toolbar, in the briefing view. The
+// rail that used to carry it is gone: the chevrons moved into the card header
+// beside the count they change.
+const downloadBriefing = async () => {
+  const brief = browser.byId("askToolbar").querySelector("[data-ask-action=briefing]");
+  if (brief) { await browser.fire(brief, "click").results; await browser.settle(); }
+  const dl = browser.byId("askToolbar").querySelector("[data-ask-action=download]");
+  await browser.fire(dl, "click").results; await browser.settle();
+};
+const briefingOffered = () =>
+  !!browser.byId("askToolbar").querySelector("[data-ask-action=briefing],[data-ask-action=download]");
+
 await browser.fire("askOlder", "click").results; await browser.settle();
 const activeTitle = browser.text("askEvidenceTitle");
-await browser.fire(browser.byId("askDownload"), "click").results; await browser.settle();
+await downloadBriefing();
 step(13, "the briefing follows the active result set, not the newest", () => {
   assert.ok(grabbed.length, "a briefing was produced");
   assert.ok(grabbed[0].includes(activeTitle.slice(0, 20)),
@@ -373,7 +386,7 @@ await adminType("Which of those are Gaming?");
 await adminType("Which has the largest budget?");
 await adminType("What are their latest updates?");
 step(23, "a four-turn chain keeps its thread, and each turn is its own set", () => {
-  assert.match(admin.text("askRailLabel"), /Result 4 of 4/, "four result sets, one per answer");
+  assert.match(admin.text("askRailLabel"), /^4 of 4$/, "four result sets, one per answer");
   assert.ok(seen.at(-1).history.length >= 3, "the questions before it travelled with it");
   assert.ok(seen.at(-1).context && seen.at(-1).context.sql,
     "and so did the previous query, sealed");
@@ -388,7 +401,7 @@ step(24, "the switch replaces the subject rather than narrowing the previous one
   const shown = adminCards();
   assert.ok(shown.length > 0, "Corporate has records for an unrestricted reader");
   for (const name of shown) assert.ok(corporate.includes(name), `${name} is not Corporate`);
-  assert.match(admin.text("askRailLabel"), /Result 5 of 5/, "and it is its own result set");
+  assert.match(admin.text("askRailLabel"), /^5 of 5$/, "and it is its own result set");
 });
 await adminType("Which of those are high risk?");
 step(25, "and the turn after a switch follows the new subject, not the old one", () => {
@@ -404,7 +417,7 @@ step(26, "the rail can still reach the first set, unchanged, without re-querying
     await admin.settle();
   }
   assert.equal(admin.text("askEvidenceTitle"), highRiskTitle, "back at the first question");
-  assert.match(admin.text("askRailLabel"), /Result 1 of 6/);
+  assert.match(admin.text("askRailLabel"), /^1 of 6$/);
   assert.equal(seen.length, before, "and nothing was asked again to get there");
 });
 // The step above is async, so give it a tick before the count is read.

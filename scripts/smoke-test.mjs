@@ -2121,8 +2121,11 @@ for (const [parent, child] of [
     "no project cards in the conversation");
   assert.equal(thread.querySelectorAll(".ask-result").length, 0,
     "and no record list either");
-  assert.ok(thread.querySelectorAll("[data-ask-set]").length > 0,
-    "just a way back to the records this answer produced");
+  // Not even a button back to the records: they are in the panel beside this,
+  // and the chevrons in its header reach any earlier answer.
+  assert.equal(thread.querySelectorAll("[data-ask-set]").length, 0,
+    "no per-answer buttons in the conversation");
+  assert.ok(browser.byId("askOlder"), "the panel's own header carries the chevrons");
   assert.equal(browser.byId("askInput").value, "", "the box is cleared ready for the next question");
 
   // The evidence panel carries the records behind the answer, and only ones this

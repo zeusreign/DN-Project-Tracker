@@ -59,12 +59,35 @@ export async function mintVoiceSession(env, { instructions, tools, model, fetchI
       model: chosen,
       instructions,
       audio: {
-        // Transcribing what the listener said is what lets the transcript show
-        // their words rather than the model's rewriting of them.
         input: {
+          // Noise reduction, before anything else sees the audio. near_field is
+          // for a microphone close to the speaker - a headset or a laptop - and
+          // it is what suppresses the colleague at the next desk. Without it
+          // their sentence arrives as speech, is transcribed as a language
+          // nobody is speaking, and becomes a question the listener never
+          // asked. far_field is for a room microphone, where the opposite is
+          // true and quiet speech must survive.
+          noise_reduction: { type: env.ASSISTANT_AUDIO_FIELD === "far" ? "far_field" : "near_field" },
+
+          // Transcribing what the listener said is what lets the transcript
+          // show their words rather than the model's rewriting of them.
+          //
+          // The language hint matters more than it looks. Left to itself the
+          // transcriber will guess at a half-heard noise, and a cough across a
+          // room comes back as Chinese or Urdu - which then drags the whole
+          // conversation, and the speaking voice with it, into that language.
+          // Set ASSISTANT_VOICE_LANGUAGE to the language of the room and the
+          // guessing stops. Leave it unset to stay open to any language, which
+          // is the right default for a portfolio spread across countries.
           ...(withTranscription
-            ? { transcription: { model: env.ASSISTANT_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe" } }
+            ? {
+              transcription: {
+                model: env.ASSISTANT_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe",
+                ...(env.ASSISTANT_VOICE_LANGUAGE ? { language: env.ASSISTANT_VOICE_LANGUAGE } : {}),
+              },
+            }
             : {}),
+
           // Turn detection, tuned for a room with other people in it.
           //
           // create_response is on, so a question is answered when the speaker
@@ -73,23 +96,23 @@ export async function mintVoiceSession(env, { instructions, tools, model, fetchI
           // out half way is worse than waiting - and stopping it is a
           // deliberate act served by the Stop button.
           //
-          // The three thresholds are what keep a passing conversation from
-          // becoming a question. The default threshold of 0.5 and 200ms of
-          // silence will trigger on someone else's sentence across a desk;
-          // 0.75 needs speech that is clearly addressed to the microphone, and
-          // 900ms of silence lets a speaker pause mid-thought without the turn
-          // being taken from them. The padding keeps the first syllable, which
-          // a higher threshold would otherwise clip.
+          // The thresholds are what keep a passing conversation from becoming a
+          // question. The defaults - 0.5 with 200ms of silence - take a turn
+          // from someone else's sentence across a desk. 0.8 needs speech
+          // addressed to the microphone; 1100ms of silence lets a speaker pause
+          // mid-thought, and also means a short burst of chatter has to carry
+          // on for over a second before it is treated as a finished question.
+          // The padding keeps the first syllable, which a high threshold clips.
           turn_detection: {
             type: "server_vad",
             create_response: true,
             interrupt_response: false,
-            threshold: 0.75,
+            threshold: Number(env.ASSISTANT_VAD_THRESHOLD) || 0.8,
             prefix_padding_ms: 300,
-            silence_duration_ms: 900,
+            silence_duration_ms: Number(env.ASSISTANT_VAD_SILENCE_MS) || 1100,
           },
         },
-        output: { voice: "alloy" },
+        output: { voice: env.ASSISTANT_VOICE_NAME || "alloy" },
       },
       // Declared here rather than by the browser sending session.update after
       // the channel opens. The session accepts them at mint time, and that
