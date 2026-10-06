@@ -778,13 +778,26 @@ var askTurns=[];
 function askStorageKey(){return state.me&&state.me.email?"dn-dc-ask:"+state.me.email:null}
 
 function askLoad(){
-  askTurns=[];
+  askTurns=[];askSets=[];askIndex=-1;
   var key=askStorageKey();
   if(!key)return;
   try{
     var raw=sessionStorage.getItem(key);
     if(raw){var parsed=JSON.parse(raw);if(Array.isArray(parsed))askTurns=parsed.slice(-50)}
   }catch(e){/* private window, blocked storage: the feature still works */}
+  // Rebuild the result sets from the transcript. The rows were always stored -
+  // they live inside each turn's answer - but askSets was not, so after a
+  // refresh every "Show these records" and "Draft briefing" button pointed at
+  // an index of an empty array and did nothing at all. Replaying the turns
+  // keeps one source of truth rather than storing the sets a second time.
+  askTurns.forEach(function(turn){
+    if(turn&&turn.state==="done"&&turn.answer&&turn.answer.rows&&turn.answer.rows.length){
+      recordSet(turn.question,turn.answer);
+      turn.setIndex=askSets.length-1;
+    }else if(turn){
+      delete turn.setIndex;
+    }
+  });
 }
 
 function askSave(){
@@ -1383,7 +1396,9 @@ function askTurnHtml(turn,index){
   return '<article class="ask-turn">'
     +'<div class="ask-turn-user"><div class="ask-bubble">'+esc(turn.question)+'</div></div>'
     +'</article><article class="ask-turn">'+askAiLabel()+body
-    +askDebugHtml(answer&&answer.debug)+'</article>';
+    // The developer's query is never part of a call. It is furniture for
+    // building this, and a conversation is not the place for it.
+    +(voice.state==="off"?askDebugHtml(answer&&answer.debug):"")+'</article>';
 }
 
 // One line pointing at the panel, and the way back to this set once the
@@ -1479,36 +1494,58 @@ function openAskRecord(id){
 // /api/assistant/ask - the same endpoint typing uses, with the same session
 // cookie, the same planner and the same scope. Speaking therefore reaches
 // exactly what typing reaches, and nothing more.
-var voice={state:"off",pc:null,mic:null,channel:null,audio:null,heard:"",responding:false};
+var voice={state:"off",pc:null,mic:null,channel:null,audio:null,heard:"",responding:false,muted:false};
 
-var VOICE_STATUS={
-  off:"Tap to start talking. Answers come from the same records as typing.",
-  connecting:"Connecting…",
-  listening:"Listening. Speak when you are ready.",
-  speaking:"Answering…"
+// Four states a caller can act on, and what each one means for them. The call
+// listens again by itself after every answer, so none of these asks for a press.
+var VOICE_STATE={
+  off:["Not connected","Start the call and just talk. There is nothing to press."],
+  connecting:["Connecting","Setting up the call."],
+  listening:["Listening","Ask whenever you are ready. I answer when you stop."],
+  thinking:["Thinking","Looking through your records."],
+  speaking:["Speaking","Stop speaking if you would rather ask something else."],
+  muted:["Muted","The microphone is off. Unmute to carry on."]
 };
 
 function setVoiceState(next,detail){
   voice.state=next;
-  var live=next==="listening"||next==="speaking";
-  var button=byId("askVoiceBtn");
-  if(button){
-    button.classList.toggle("is-live",live);
-    button.setAttribute("aria-label",live?"End voice conversation":"Start voice conversation");
-    button.disabled=next==="connecting";
+  var live=next!=="off"&&next!=="connecting";
+  var shown=voice.muted&&live?"muted":next;
+  var start=byId("askVoiceBtn"),startLabel=byId("askVoiceBtnLabel");
+  if(start){
+    start.dataset.live=live?"true":"false";
+    start.setAttribute("aria-label",live?"End the call":"Start the call");
+    start.disabled=next==="connecting";
   }
-  // Stop is offered only while there is something to stop. The assistant is no
-  // longer interrupted by the listener speaking, so this is the way to cut an
-  // answer short.
+  if(startLabel)startLabel.textContent=live?"End call":"Start call";
+  // Mute is offered for the whole call, not only while listening: the reason to
+  // reach for it is usually that someone else has started talking.
+  var mute=byId("askMuteBtn"),muteLabel=byId("askMuteLabel");
+  if(mute){
+    mute.hidden=!live;
+    mute.setAttribute("aria-pressed",String(!!voice.muted));
+    mute.setAttribute("aria-label",voice.muted?"Turn the microphone back on":"Turn the microphone off");
+  }
+  if(muteLabel)muteLabel.textContent=voice.muted?"Unmute":"Mute";
+  // Stop is offered only while there is something to stop. A reply is never cut
+  // off by a noise, so this is the way to end one early.
   var stop=byId("askStopBtn");
   if(stop)stop.hidden=next!=="speaking";
   var orb=byId("askOrb");
-  // The orb carries the state: resting, reaching, listening, speaking. It is the
-  // only thing on screen during a call, so it has to say which of those it is
-  // without being read.
-  if(orb)orb.dataset.state=next==="off"?"idle":next;
+  if(orb)orb.dataset.state=next==="off"?"idle":shown;
+  var words=VOICE_STATE[shown]||VOICE_STATE.off;
+  var heading=byId("askVoiceState");
+  if(heading)heading.textContent=words[0];
   var status=byId("askVoiceStatus");
-  if(status)status.textContent=detail||VOICE_STATUS[next]||VOICE_STATUS.off;
+  if(status)status.textContent=detail||words[1];
+}
+
+// Stops the microphone without ending the call. Nothing in the conversation is
+// touched: the transcript, the result sets and the context all stand.
+function setVoiceMuted(muted){
+  voice.muted=!!muted;
+  if(voice.mic)voice.mic.getAudioTracks().forEach(function(track){track.enabled=!voice.muted});
+  setVoiceState(voice.state,voice.muted?"The microphone is off. Nothing is being heard.":"");
 }
 
 // Quiet chat or Voice. The transcript is the same either way: a spoken question
@@ -1542,6 +1579,8 @@ function stopSpeaking(){
     voice.channel.send(JSON.stringify({type:"output_audio_buffer.clear"}));
   }catch(e){}
   voice.responding=false;
+  // Only the audio stops. The question and the answer stay in the transcript
+  // and the records stay in the panel: this ends a sentence, not a turn.
   setVoiceState("listening","Stopped. Ask something else when you are ready.");
 }
 
@@ -1551,6 +1590,9 @@ function stopVoice(detail){
   if(voice.mic){voice.mic.getTracks().forEach(function(track){try{track.stop()}catch(e){}})}
   if(voice.audio){try{voice.audio.srcObject=null}catch(e){}}
   voice.pc=null;voice.mic=null;voice.channel=null;voice.responding=false;voice.heard="";
+  voice.muted=false;
+  // The call ends; the conversation does not. askTurns, askSets and the context
+  // are untouched, so the transcript and the records are still there to read.
   setVoiceState("off",detail||"");
 }
 
@@ -1616,6 +1658,10 @@ function wireVoiceChannel(channel,session){
     if(message.type==="response.function_call_arguments.done"&&message.name==="ask_tracker"){
       var args={};
       try{args=JSON.parse(message.arguments||"{}")}catch(e){}
+      // The lookup has started. Between the speaker finishing and the answer
+      // being spoken there was no state at all, which read as the call having
+      // missed the question.
+      if(voice.state==="listening")setVoiceState("thinking");
       var answer=await voiceAskTracker(String(args.question||"").trim()||"show me the projects");
       channel.send(JSON.stringify({type:"conversation.item.create",item:{
         type:"function_call_output",call_id:message.call_id,
@@ -1627,23 +1673,38 @@ function wireVoiceChannel(channel,session){
       // output arrives.
       if(!voice.responding)channel.send(JSON.stringify({type:"response.create"}));
     }
+    // The caller has started and stopped speaking. Shown so the bar reacts to
+    // them rather than sitting still until the answer arrives.
+    if(message.type==="input_audio_buffer.speech_started"&&voice.state==="listening"){
+      setVoiceState("listening","Hearing you.");
+    }
+    if(message.type==="input_audio_buffer.speech_stopped"&&voice.state==="listening"){
+      setVoiceState("thinking");
+    }
     // Event names differ between realtime API revisions, so the orb follows the
     // shape of the type rather than an exact string: anything that is audio
     // arriving means speaking, and the end of a response means listening again.
-    if(/audio/.test(message.type||"")&&/delta|started/.test(message.type||"")){
-      if(voice.state==="listening")setVoiceState("speaking");
+    if(/audio/.test(message.type||"")&&/delta|started/.test(message.type||"")
+      &&!/input_audio/.test(message.type||"")){
+      if(voice.state==="listening"||voice.state==="thinking")setVoiceState("speaking");
     }
     if(/^response\.(done|completed)$/.test(message.type||"")||/audio.*(done|stopped)/.test(message.type||"")){
-      if(voice.state==="speaking")setVoiceState("listening");
+      // Listening resumes by itself. A call is a conversation, not a series of
+      // separate questions, so nothing has to be pressed between them.
+      if(voice.state==="speaking"||voice.state==="thinking")setVoiceState("listening");
     }
     // What the listener actually said, when the session is transcribing it.
     if(/input_audio_transcription/.test(message.type||"")&&message.transcript){
-      voice.heard=String(message.transcript);
+      // Only if it has words. A cough or a door transcribes to "" or ".", and
+      // letting that overwrite what was said put punctuation on screen as the
+      // listener's question.
+      var heard=String(message.transcript).trim();
+      if(/[a-z0-9]/i.test(heard))voice.heard=heard;
     }
     if(message.type==="response.created")voice.responding=true;
     if(/^response\.(done|completed|cancelled|incomplete)$/.test(message.type||"")){
       voice.responding=false;
-      if(voice.state==="speaking")setVoiceState("listening");
+      if(voice.state==="speaking"||voice.state==="thinking")setVoiceState("listening");
     }
 
     if(message.type==="error"){
@@ -2059,9 +2120,12 @@ document.addEventListener("click",function(event){
   if(event.target&&event.target.id==="askClear"){
     askTurns=[];askSets=[];askIndex=-1;askSave();renderAsk();return;
   }
-  var orbCall=closest("#askVoiceBtn");
-  if(orbCall){startVoice();return}
+  // One control starts and ends the call, and says which it will do.
+  var call=closest("#askVoiceBtn");
+  if(call){startVoice();return}
   if(event.target&&event.target.id==="askStopBtn"){stopSpeaking();return}
+  var mute=closest("#askMuteBtn");
+  if(mute){setVoiceMuted(!voice.muted);return}
   if(event.target&&event.target.id==="askQuietMode"){setAskMode("quiet");return}
   if(event.target&&event.target.id==="askVoiceMode"){setAskMode("voice");return}
 });

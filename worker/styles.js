@@ -178,30 +178,54 @@ ${ENHANCED_STYLES}
   box-shadow:0 1px 4px #16354818}
 .ask-scope{font-size:11px;color:#728894;text-align:right;min-width:0}
 
-/* Voice. The orb is the state indicator; the phone button starts and ends a
-   call; Stop interrupts speech without ending the call. */
-.ask-voice-panel{padding:22px 20px;text-align:center;background:#f3f8fa;
-  border-bottom:1px solid var(--ask-line)}
-.ask-orb{width:92px;height:92px;border-radius:50%;margin:0 auto 14px;position:relative;
-  background:radial-gradient(circle at 50% 40%,#d9eef0,#bfe2e5);display:grid;place-items:center}
-.ask-orb-skin{width:62px;height:62px;border-radius:50%;
-  background:linear-gradient(145deg,#1aa0a8,#0b6d78);box-shadow:0 6px 18px #0b6d7833}
-.ask-orb[data-state=connecting] .ask-orb-skin{animation:askPulse 1.1s ease-in-out infinite}
-.ask-orb[data-state=listening]{background:radial-gradient(circle at 50% 40%,#d6f1ef,#a9e0dc)}
-.ask-orb[data-state=listening] .ask-orb-skin{animation:askPulse 1.9s ease-in-out infinite}
-.ask-orb[data-state=speaking] .ask-orb-skin{animation:askPulse .8s ease-in-out infinite}
-.ask-orb[data-state=error]{background:radial-gradient(circle at 50% 40%,#f7dcd6,#eabcb2)}
-.ask-orb[data-state=error] .ask-orb-skin{background:linear-gradient(145deg,#c9705c,#9a3e2b)}
-@keyframes askPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.11)}}
-.ask-orb-call{width:48px;height:48px;border-radius:50%;border:0;background:#007c83;
-  color:#fff;display:inline-grid;place-items:center;cursor:pointer}
-.ask-orb-call:hover{background:#006970}
-.ask-orb-call svg{width:22px;height:22px;fill:currentColor}
-.ask-orb-call[data-live=true]{background:#9a3e2b}
-.ask-stop{margin-left:8px;border:1px solid #cbd9e1;background:#fff;color:#284e63;
-  border-radius:6px;padding:8px 13px;font-size:13px;font-weight:600;cursor:pointer}
-.ask-stop:hover{background:#eaf4f6}
-.ask-voice-status{margin:12px auto 0;font-size:13px;color:#526f7f;max-width:40ch}
+/* Voice.
+   A bar under the conversation, not a screen in front of it. The transcript is
+   what the user is reading; this says what the call is doing and offers the
+   three controls it needs. The orb is a state indicator, not the subject. */
+.ask-voice-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  flex-wrap:wrap;margin:0 16px 16px;padding:12px 14px;background:#f3f8fa;
+  border:1px solid #cfe2e6;border-radius:9px}
+.ask-voice-live{display:flex;align-items:center;gap:12px;min-width:0}
+.ask-voice-state{display:flex;flex-direction:column;min-width:0}
+.ask-voice-state strong{font-size:13px;color:#10495c;line-height:1.3}
+.ask-voice-state span{font-size:12px;color:#55707e;line-height:1.4;overflow-wrap:anywhere}
+
+/* Five bars that say which of the four states the call is in without being
+   read: still when idle, a slow breath while listening, a quick one while the
+   assistant speaks, flat and grey when muted. */
+.ask-voice-orb{display:inline-flex;align-items:center;justify-content:center;gap:3px;
+  width:42px;height:42px;border-radius:50%;background:#dceef0;flex:none}
+.ask-voice-orb i{width:3px;height:9px;border-radius:2px;background:#238b92;display:block}
+.ask-voice-orb i:nth-child(2),.ask-voice-orb i:nth-child(4){height:15px}
+.ask-voice-orb i:nth-child(3){height:21px}
+.ask-voice-orb[data-state=connecting] i{animation:askBar 1.1s ease-in-out infinite}
+.ask-voice-orb[data-state=listening] i{animation:askBar 1.8s ease-in-out infinite}
+.ask-voice-orb[data-state=thinking]{background:#e8eef0}
+.ask-voice-orb[data-state=thinking] i{animation:askBar .9s ease-in-out infinite;background:#55707e}
+.ask-voice-orb[data-state=speaking] i{animation:askBar .62s ease-in-out infinite}
+.ask-voice-orb[data-state=muted]{background:#e8ecee}
+.ask-voice-orb[data-state=muted] i{background:#9aabb3;animation:none}
+.ask-voice-orb[data-state=error]{background:#f7dcd6}
+.ask-voice-orb[data-state=error] i{background:#9a3e2b;animation:none}
+.ask-voice-orb i:nth-child(2){animation-delay:.12s}
+.ask-voice-orb i:nth-child(3){animation-delay:.24s}
+.ask-voice-orb i:nth-child(4){animation-delay:.36s}
+.ask-voice-orb i:nth-child(5){animation-delay:.48s}
+@keyframes askBar{0%,100%{transform:scaleY(.55)}50%{transform:scaleY(1)}}
+
+.ask-voice-controls{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.ask-voice-btn{display:inline-flex;align-items:center;gap:6px;background:#fff;color:#284e63;
+  border:1px solid #cbd9e1;border-radius:7px;padding:8px 12px;font-size:13px;font-weight:600;
+  cursor:pointer;white-space:nowrap}
+.ask-voice-btn:hover{background:#eaf4f6;border-color:#9ac8ca}
+.ask-voice-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round}
+.ask-voice-btn[aria-pressed=true]{background:#e7edf0;border-color:#9aabb3;color:#44606e}
+.ask-voice-start{background:var(--ask-teal);border-color:var(--ask-teal);color:#fff}
+.ask-voice-start:hover{background:#00676d;border-color:#00676d}
+.ask-voice-start svg{fill:currentColor;stroke:none}
+.ask-voice-start[data-live=true]{background:#9a3e2b;border-color:#9a3e2b}
+.ask-voice-start[data-live=true]:hover{background:#86341f;border-color:#86341f}
 
 /* The conversation. */
 .ask-messages{flex:1;min-height:150px;overflow:auto;padding:22px 20px 6px;
@@ -420,7 +444,7 @@ ${ENHANCED_STYLES}
   .ask-composer{margin:0 12px 12px}
 }
 @media (prefers-reduced-motion:reduce){
-  .ask-orb-skin,.ask-dots i{animation:none!important}
+  .ask-voice-orb i,.ask-dots i{animation:none!important}
   .ask-messages{scroll-behavior:auto}
 }
 

@@ -65,11 +65,29 @@ export async function mintVoiceSession(env, { instructions, tools, model, fetchI
           ...(withTranscription
             ? { transcription: { model: env.ASSISTANT_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe" } }
             : {}),
-          // The assistant finishes what it is saying. Speech from the listener
-          // no longer cancels a reply in progress - a figure read out half way
-          // is worse than waiting - so stopping it is a deliberate act, served
-          // by the Stop button rather than by a cough.
-          turn_detection: { type: "server_vad", create_response: true, interrupt_response: false },
+          // Turn detection, tuned for a room with other people in it.
+          //
+          // create_response is on, so a question is answered when the speaker
+          // stops: there is nothing to press. interrupt_response stays off, so
+          // a reply in progress is never cancelled by a noise - a figure read
+          // out half way is worse than waiting - and stopping it is a
+          // deliberate act served by the Stop button.
+          //
+          // The three thresholds are what keep a passing conversation from
+          // becoming a question. The default threshold of 0.5 and 200ms of
+          // silence will trigger on someone else's sentence across a desk;
+          // 0.75 needs speech that is clearly addressed to the microphone, and
+          // 900ms of silence lets a speaker pause mid-thought without the turn
+          // being taken from them. The padding keeps the first syllable, which
+          // a higher threshold would otherwise clip.
+          turn_detection: {
+            type: "server_vad",
+            create_response: true,
+            interrupt_response: false,
+            threshold: 0.75,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 900,
+          },
         },
         output: { voice: "alloy" },
       },
