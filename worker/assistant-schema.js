@@ -262,7 +262,19 @@ export function scopedViews(scope) {
       -- Computed, shadowing the stored column of the same name, which is stale
       -- on 24 production rows. The model cannot reach the stored one.
       ${DAY_VARIANCE_SQL} AS duration_change_days,
-      p.reporting_period, p.updated_at, p.source_sort_order
+      p.reporting_period, p.updated_at, p.source_sort_order,
+      -- Everything a person might call this project by, in one lowercase
+      -- string. A question names a place far more often than a title: 63 of
+      -- the 74 live projects do not contain their venue anywhere in their
+      -- name, and only 4 of 25 venues appear in any name at all. Asked about
+      -- "Central City", a model guessing between name, venue and section_name
+      -- gets it right by luck, and a wrong guess returns nothing at all.
+      -- Matching one column removes the guess.
+      lower(
+        COALESCE(p.name, '') || ' ' || COALESCE(p.venue, '') || ' '
+        || COALESCE(p.section_name, '') || ' ' || COALESCE(p.capp_number, '') || ' '
+        || COALESCE(p.initiative_number, '')
+      ) AS identity
     FROM main.projects p
     JOIN main.business_units b ON b.id = p.business_unit_id
     WHERE ${LIVE_PROJECT_SQL}${where}
@@ -304,9 +316,42 @@ not write any permission condition yourself.
 projects - one row per project, archived projects already excluded
   id                     integer, the project's key
   business_unit          text, the owning business unit's name${units && units.length ? ` (one of: ${units.join(", ")})` : ""}
-  name                   text, the project's title
-  venue                  text, the property or site
-  section_name           text, the area within the venue
+  identity               text, lowercase: the project's name, venue, section,
+                         CAPP number and initiative number joined together.
+                         This is how you find a project someone has named.
+                         When a question refers to a project, a property, a
+                         venue, a section, a CAPP number or an initiative
+                         number without saying which of those it is, match it
+                         here, in lowercase, because the column is lowercase:
+                           WHERE identity LIKE '%central city%'
+                         "Tell me about the Central City project", "Show
+                         Central City" and "What is happening at Central City?"
+                         are the same question and must all find the same
+                         project. Do not choose between name, venue and
+                         section_name yourself: people name the place far more
+                         often than the title, and most projects here are not
+                         named after the place they are at, so a wrong guess
+                         returns nothing and reads as the project not existing.
+                         Search for the identifying words only, never the
+                         label around them. "CAPP 08727" is LIKE '%08727%',
+                         not '%capp 08727%': this column holds the number, not
+                         the word CAPP. "The Central City project" is
+                         '%central city%', not '%central city project%'. Drop
+                         words like project, site, property, venue, number,
+                         CAPP and initiative from what you search for, and drop
+                         any punctuation around it.
+                         Use a single column below only when the question says
+                         which one it means, such as "projects whose name
+                         contains refresh", or when you are matching an exact
+                         value you were given, such as capp_number = '08727'.
+  name                   text, the project's title. Usually says what the work
+                         is rather than where it is: "New Construction Complex".
+  venue                  text, the property or site, such as "CENTRAL CITY".
+                         This is usually what someone means by "the Central
+                         City project". Stored in capitals on many rows, which
+                         LIKE ignores.
+  section_name           text, the area within the venue, and on most rows the
+                         same words as the venue.
   project_type           text: 'Capital' or 'Development'
   capp_number            text, capital appropriation number; Capital projects have one
   initiative_number      text, Development projects have one instead

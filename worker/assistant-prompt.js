@@ -227,8 +227,12 @@ Writing the query:
   NOT EXISTS, since a project with no updates has no row to be null.
 - Dates are 'YYYY-MM-DD' text. Compare them directly. Work out a month, quarter
   or year from today's date, which you are given.
-- Match a name, venue or number with LIKE and % around the words. A project
-  named in the question is usually the subject, not a filter on everything else.
+- To find a project someone has named - by project, property, venue, section,
+  CAPP number or initiative number - match the identity column, in lowercase:
+  WHERE identity LIKE '%central city%'. Do not guess between name, venue and
+  section_name; a wrong guess returns nothing and reads as the project not
+  existing. Use a single column only when the question says which one it means.
+  A project named in the question is the subject, not a filter on everything else.
 - Keep LIMIT off unless the question asks for a specific number. The worker caps
   the rows either way and reports the true total.`;
 
@@ -365,7 +369,11 @@ Write a short, direct answer in the reader's language. Rules:
   rows are all of them.
 - When a figure is null or missing, say it is not recorded. Do not treat a
   missing value as zero.
-- When nothing matched, say so plainly and do not speculate about why.
+- When nothing matched, say that the search found no matching records. Say it
+  about the search, not about the world: "no records matched that" is true,
+  "there is no information about that project" is a claim about the data that
+  you are not in a position to make, and it has been wrong. Do not speculate
+  about why, and do not suggest the thing asked about does not exist.
 - Do not list more than about five projects by name. The records are shown
   beside your answer, so naming them all repeats what the reader can already see.
 - Do not mention SQL, queries, tables or columns. Talk about projects, budgets,

@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateSql, composeQuery, runSql, SqlRejected, tokenise } from "../worker/assistant-sql.js";
-import { QUERY_TABLES, FORBIDDEN_COLUMNS } from "../worker/assistant-schema.js";
+import { QUERY_TABLES, QUERY_COLUMNS, FORBIDDEN_COLUMNS } from "../worker/assistant-schema.js";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const database = new DatabaseSync(":memory:");
@@ -307,6 +307,50 @@ await check("a GROUP BY total counts groups, not rows", async () => {
   const result = await run("SELECT business_unit, COUNT(*) AS n FROM projects GROUP BY business_unit", null);
   assert.equal(result.total, 2, "two units in the live data");
   assert.equal(result.rows.length, 2);
+});
+
+// --- Finding a project someone has named -------------------------------------
+
+await check("identity holds every way a project can be referred to", async () => {
+  // The fixture's project 1 is "Gaming Over" at "Venue A" with CAPP-1, which is
+  // the shape that broke: the place is not in the name.
+  const rows = await run("SELECT id, identity FROM projects WHERE id = 1", null);
+  const identity = rows.rows[0].identity;
+  assert.equal(identity, identity.toLowerCase(), "it is lowercase, so a lowercase search matches");
+  for (const part of ["gaming over", "venue a", "capp-1"]) {
+    assert.ok(identity.includes(part), `identity carries ${part}`);
+  }
+});
+
+await check("a venue that appears nowhere in the name is still found", async () => {
+  // Searching the name alone is what returned nothing for Central City.
+  const byName = await run("SELECT id FROM projects WHERE name LIKE '%Venue A%'", null);
+  assert.equal(byName.total, 0, "the place is genuinely not in the name");
+  const byIdentity = await run("SELECT id FROM projects WHERE identity LIKE '%venue a%'", null);
+  assert.equal(byIdentity.total, 1, "but identity finds it");
+  assert.equal(byIdentity.rows[0].id, 1);
+});
+
+await check("identity finds a project by name, venue, section or number alike", async () => {
+  for (const [term, id] of [["gaming over", 1], ["venue a", 1], ["capp-1", 1], ["gaming fine", 2], ["venue c", 3]]) {
+    const found = await run(`SELECT id FROM projects WHERE identity LIKE '%${term}%'`, null);
+    assert.equal(found.total, 1, `"${term}" finds one project`);
+    assert.equal(found.rows[0].id, id, `"${term}" finds project ${id}`);
+  }
+});
+
+await check("identity obeys scope and soft deletes like every other column", async () => {
+  // Project 3 is Corporate; project 4 is archived.
+  const corporate = await run("SELECT id FROM projects WHERE identity LIKE '%venue c%'", GAMING);
+  assert.equal(corporate.total, 0, "a Gaming reader cannot reach Corporate through identity");
+  const archived = await run("SELECT id FROM projects WHERE identity LIKE '%gaming archived%'", null);
+  assert.equal(archived.total, 0, "and an archived project is not reachable either");
+});
+
+await check("identity is not handed to the records panel", async () => {
+  // It is a lowercase blob for matching, not something to render.
+  assert.ok(!QUERY_COLUMNS.projects.includes("identity"),
+    "identity stays out of the columns the UI is given");
 });
 
 console.log(`Assistant SQL safety tests passed: ${checks} checks — writes, schema escapes, forbidden tables and columns, scope enforcement through joins, subqueries, UNION and CTEs, and result bounding.`);
