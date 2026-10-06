@@ -38,7 +38,7 @@ const DB = {
 };
 const env = {
   DB, ADMIN_EMAILS: "e2e@example.invalid", ALLOW_PLATFORM_AUTH: "true",
-  OPENAI_API_KEY: KEY, ASSISTANT_DEBUG: "true",
+  OPENAI_API_KEY: KEY, ASSISTANT_DEBUG: "true", ASSISTANT_CONTEXT_SECRET: "e2e-sealing-secret",
 };
 const headers = {
   "oai-authenticated-user-id": "e2e", "oai-authenticated-user-email": "e2e@example.invalid",
@@ -183,12 +183,15 @@ for (const testCase of CASES) {
   for (const question of questions) {
     answer = await ask(question, context, history,
       testCase.scoped ? viewerCookie : null, testCase.scoped ? viewerCsrf : null);
-    history.push({ question, intent: answer.intent, total: answer.total, sql: answer.debug?.generated });
+    history.push({ question, intent: answer.intent, total: answer.total, token: answer.token });
     if (answer.rows && answer.rows.length) {
       context = {
         ids: answer.rows.map((r) => r.id).filter(Number.isInteger),
         total: answer.total,
-        sql: answer.debug?.generated,
+        // The sealed token, exactly as the browser carries it. The suite runs
+        // with ASSISTANT_DEBUG on for the failure output, but continuity here
+        // comes through the same path production uses.
+        token: answer.token,
       };
     }
   }

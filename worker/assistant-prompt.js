@@ -321,6 +321,10 @@ Write a short, direct answer in the reader's language. Rules:
 - Use the figures exactly as given. Never calculate a new one, never round a
   total into a different number, and never state a figure that is not in the
   result.
+- each_row_is tells you what one row of the result is. Count rows as that, and
+  nothing else. If it says "activity updates", then 40 rows are 40 updates, not
+  40 projects. When distinct_projects_matched is given, that is how many
+  projects those rows are about: "40 updates across 30 projects".
 - When the result was truncated, say how many matched and how many are shown:
   "74 projects match; the 20 most recent are listed." Never imply the shown
   rows are all of them.

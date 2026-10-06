@@ -16,6 +16,7 @@ import { availableUnits } from "./assistant-schema.js";
 import { mintVoiceSession, PlannerError, sqlGeneratorFor, answererFor } from "./assistant-model.js";
 import { voiceInstructions, VOICE_TOOLS, messageFor } from "./assistant-prompt.js";
 import { runSql, hydrateProjects, SqlRejected } from "./assistant-sql.js";
+import { sealTurn, openTurn } from "./assistant-context.js";
 import { legacyPlanRoutes } from "./legacy/assistant-plan-route.js";
 
 const BACK_REFERENCE = /\b(these|those|them|they|their|theirs|it|its|that|this|same|ones|above|previous|earlier|instead|also|narrow|exclude|just those|of the above)\b/i;
@@ -203,25 +204,37 @@ async function askWithSql(request, env, user, role, scope, helpers) {
   // from the browser and are therefore untrusted, but neither can widen what
   // this reader sees: the scoped views are applied to whatever query comes
   // back, so a forged id reaches nothing they could not already open.
+  // The previous turns, which the browser carries. Each one is a sealed token
+  // this worker issued: the query inside it never reached the page, so a
+  // follow-up works with ASSISTANT_DEBUG off exactly as it does with it on.
+  // Opening one proves only that we sealed it; nothing in it widens what this
+  // reader may see, because the scoped views are applied to whatever query
+  // comes back regardless.
   const raw = body.context && typeof body.context === "object" ? body.context : null;
+  const sealed = raw && typeof raw.token === "string" ? await openTurn(env, raw.token, user) : null;
   const context = raw
     ? {
+      // The ids are the browser's own copy of what it was shown, so they are
+      // taken either way; the conditions only come from a token we sealed.
       ids: Array.isArray(raw.ids)
-        ? raw.ids.filter((id) => Number.isInteger(id) && id > 0).slice(0, 50) : [],
-      total: Number.isInteger(raw.total) ? raw.total : undefined,
-      sql: typeof raw.sql === "string" ? raw.sql.slice(0, 2000) : undefined,
+        ? raw.ids.filter((id) => Number.isInteger(id) && id > 0).slice(0, 50)
+        : (sealed ? sealed.ids : []),
+      total: Number.isInteger(raw.total) ? raw.total : (sealed ? sealed.total : undefined),
+      sql: sealed ? sealed.sql : undefined,
+      entity: sealed ? sealed.entity : undefined,
     }
     : null;
-  const history = Array.isArray(body.history)
-    ? body.history.slice(-6)
-      .filter((turn) => turn && typeof turn.question === "string" && turn.question.trim())
-      .map((turn) => ({
-        question: turn.question.trim().slice(0, 300),
-        intent: typeof turn.intent === "string" ? turn.intent.slice(0, 20) : undefined,
-        total: Number.isInteger(turn.total) ? turn.total : undefined,
-        sql: typeof turn.sql === "string" ? turn.sql.slice(0, 1000) : undefined,
-      }))
-    : [];
+  const history = [];
+  for (const turn of Array.isArray(body.history) ? body.history.slice(-6) : []) {
+    if (!turn || typeof turn.question !== "string" || !turn.question.trim()) continue;
+    const opened = typeof turn.token === "string" ? await openTurn(env, turn.token, user) : null;
+    history.push({
+      question: turn.question.trim().slice(0, 300),
+      intent: typeof turn.intent === "string" ? turn.intent.slice(0, 20) : undefined,
+      total: Number.isInteger(turn.total) ? turn.total : (opened ? opened.total : undefined),
+      sql: opened ? opened.sql : undefined,
+    });
+  }
 
   const units = await availableUnits(env.DB, scope);
   // The date comes from the runtime, never from the model. Without it "this
@@ -326,6 +339,14 @@ async function askWithSql(request, env, user, role, scope, helpers) {
 
   await recordAsk(env, user, { ...outcome, plan: null, answerUsage }, result, scope);
 
+  // Sealed for the next question. The browser stores it with the transcript and
+  // hands it back; it cannot read it, and neither can anything else.
+  const token = await sealTurn(env, {
+    question, sql: result.inner, total: result.total, intent: outcome.intent,
+    entity: result.entity,
+    ids: records.length ? records.map((row) => row.id) : result.rows.map((row) => row.id),
+  }, user);
+
   // Two separate things: the sentence for the conversation, and the records for
   // the evidence panel. A list of rows does not belong in the sentence.
   return json({
@@ -339,6 +360,14 @@ async function askWithSql(request, env, user, role, scope, helpers) {
     truncated: result.truncated,
     limit: result.limit,
     aggregate: result.aggregate,
+    token,
+    // What one matched row is, and how many distinct projects those rows are
+    // about. A query joined to activity updates matches update rows: saying
+    // "40 projects" of 40 updates across 30 projects is exactly the confident
+    // wrong answer this feature exists to avoid.
+    entity: result.entity,
+    entityLabel: result.entityLabel,
+    projects: result.projects || undefined,
     // The structured records the UI builds its cards from. When a question is
     // not about projects at all - a count, a group, a list of updates - there
     // are none, and the answer stands on its own.

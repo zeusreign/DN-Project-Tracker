@@ -1726,12 +1726,11 @@ async function submitAsk(question){
             return typeof id==="number"}),
           total:prior.answer.total,
           description:prior.answer.description||[],
-          // The query behind the previous answer, so "what about Patina?" can
-          // ask the same question about somewhere else rather than starting
-          // from nothing. Present only while developing: the worker withholds
-          // it otherwise, and a follow-up then narrows by the ids and the
-          // question history instead.
-          sql:(prior.answer.debug&&prior.answer.debug.generated)||null
+          // The worker's sealed record of the previous turn. It carries the
+          // conditions that produced this answer, which is what "what about
+          // Patina?" needs, and it is opaque here: the page stores it and
+          // hands it back without being able to read it.
+          token:prior.answer.token||null
         };
         break;
       }
@@ -1747,7 +1746,7 @@ async function submitAsk(question){
         question:prior.question,
         intent:prior.answer.intent,
         total:typeof prior.answer.total==="number"?prior.answer.total:undefined,
-        sql:(prior.answer.debug&&prior.answer.debug.generated)||undefined
+        token:prior.answer.token||undefined
       };
     });
     var payload={question:text};

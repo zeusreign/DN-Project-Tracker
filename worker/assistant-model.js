@@ -211,10 +211,20 @@ export function openAiAnswerer({ apiKey, model = DEFAULT_ANSWER_MODEL, fetchImpl
         question,
         language: language || "English",
         today,
+        // What one row is. Without this the model reads a row count as a
+        // project count, and 40 activity updates across 30 projects becomes
+        // "40 projects".
+        each_row_is: result.entityLabel || "records",
         matched_rows: result.total,
         returned_rows: result.returned,
         truncated: result.truncated,
         is_single_figure: !!result.aggregate,
+        ...(result.projects && result.projects.matched !== null
+          ? {
+            distinct_projects_matched: result.projects.matched,
+            distinct_projects_returned: result.projects.returned,
+          }
+          : {}),
         result: result.rows,
       };
       const { text, usage } = await callModel(apiKey, call, {

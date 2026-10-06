@@ -187,9 +187,20 @@ export function validateSql(sql) {
     throw new SqlRejected(`The function "${fn.raw}" is not available.`, fn.raw);
   }
 
-  return { sql: body.map(renderToken).join(" ").replace(/\s+([,)])/g, "$1").replace(/\(\s+/g, "("),
-    tables: [...new Set(names.tables.map((t) => t.lower))],
-    ctes: [...names.ctes], aggregate: isAggregate(body, names) };
+  const tables = [...new Set(names.tables.map((t) => t.lower))];
+  return {
+    sql: body.map(renderToken).join(" ").replace(/\s+([,)])/g, "$1").replace(/\(\s+/g, "("),
+    tables,
+    ctes: [...names.ctes],
+    aggregate: isAggregate(body, names),
+    grouped: body.some((t, i) => t.type === "word" && t.lower === "group"
+      && body[i + 1] && body[i + 1].type === "word" && body[i + 1].lower === "by"),
+    // What the query is counting. The first table after FROM is the one each
+    // row is one of; a join to project_updates makes rows that are updates,
+    // not projects, and saying "40 projects" of 40 updates is the kind of
+    // confident wrong answer this whole feature exists to avoid.
+    driving: names.tables.length ? names.tables[0].lower : null,
+  };
 }
 
 function renderToken(token) {
@@ -322,6 +333,23 @@ export async function runSql(db, sql, scope, { limit } = {}) {
   ]);
   const results = rows.results || [];
   const total = count && typeof count.total === "number" ? count.total : results.length;
+
+  // How many distinct projects those rows are about, which is a different
+  // number from how many rows there are whenever the query joined a child
+  // table. Counted over the same subquery, so it is exact rather than inferred
+  // from the page that came back.
+  const key = projectKey(validated, results);
+  let projects = null;
+  if (key) {
+    const distinct = await db.prepare(
+      `${scopedViews(scope).sql}\nSELECT COUNT(DISTINCT ${key}) AS n FROM (\n${validated.sql}\n)`,
+    ).bind(...scopedViews(scope).bindings).first().catch(() => null);
+    projects = {
+      matched: distinct && typeof distinct.n === "number" ? distinct.n : null,
+      returned: new Set(results.map((row) => row[key]).filter((id) => id !== null && id !== undefined)).size,
+    };
+  }
+
   return {
     rows: results,
     returned: results.length,
@@ -329,11 +357,51 @@ export async function runSql(db, sql, scope, { limit } = {}) {
     truncated: total > results.length,
     limit: query.limit,
     aggregate: query.aggregate,
+    grouped: validated.grouped,
+    // What one row is. The answerer and the UI are both told, so neither has
+    // to guess from the column names.
+    entity: entityOf(validated),
+    entityLabel: ENTITY_LABELS[entityOf(validated)] || "records",
+    projects,
+    projectKey: key,
     sql: query.rows.sql,
     inner: validated.sql,
     tables: validated.tables,
   };
 }
+
+// Which column in the result identifies a project, if any. project_id is
+// unambiguous. A bare id is only a project's when projects is what the query
+// is driven from: on a query over project_updates, id is the update's.
+function projectKey(validated, results) {
+  // Read off the result's own columns rather than assumed: a query may be
+  // driven from projects and still not select an id, and counting a column
+  // that is not there turns a good answer into an error.
+  if (!results.length) return null;
+  const columns = Object.keys(results[0]);
+  if (columns.includes("project_id")) return "project_id";
+  if (columns.includes("id") && validated.driving === "projects") return "id";
+  return null;
+}
+
+function entityOf(validated) {
+  if (validated.aggregate) return "figure";
+  if (validated.grouped) return "group";
+  return validated.driving || "row";
+}
+
+const ENTITY_LABELS = {
+  projects: "projects",
+  project_updates: "activity updates",
+  project_photos: "photographs",
+  development_details: "development records",
+  business_units: "business units",
+  figure: "a single figure",
+  group: "grouped totals",
+  row: "records",
+};
+
+export { ENTITY_LABELS };
 
 export { RESULT_LIMIT_MAX };
 

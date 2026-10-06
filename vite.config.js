@@ -125,7 +125,10 @@ function trackerPreview(previewAdmin) {
             // Until the SQL-generating engine lands, the preview answers
             // questions through the legacy planner so the pane stays usable.
             // Production asserts this off too.
-            ASSISTANT_LEGACY_PLANNER: "true" }, {});
+            ASSISTANT_LEGACY_PLANNER: "true",
+            // A fixed key for the preview, so a sealed conversation survives a
+            // server restart while developing.
+            ASSISTANT_CONTEXT_SECRET: "dn-dc-local-preview-context" }, {});
           response.statusCode = result.status;
           result.headers.forEach((value, name) => response.setHeader(name, value));
           response.end(Buffer.from(await result.arrayBuffer()));
