@@ -216,13 +216,21 @@ step(23,"Print / PDF shows the briefing then prints",()=>{
   assert.ok(printed>=1,"the print dialog was asked for");
 });
 
+const recordsBeforeEmpty=cls("askEvidence",".ask-record").length;
+const railBeforeEmpty=browser.text("askRailLabel");
+const titleBeforeEmpty=browser.text("askEvidenceTitle");
 await ask("show me nothing at all");
-step(24,"an empty result explains itself rather than looking broken",()=>{
-  const body=browser.byId("askEvidence").textContent;
-  assert.match(body,/No records match that question/);
-  assert.match(body,/CAPP number/,"and says what to try instead");
-  assert.match(browser.byId("askThread").textContent,/Try a project name/);
-  assert.equal(browser.byId("askDownload").disabled,true,"a briefing is not offered for nothing");
+step(24,"an empty result answers in the conversation and leaves the records alone",()=>{
+  // The answer belongs in the conversation. The records already on screen are
+  // usually what the next question is about, so a miss must not take them.
+  assert.match(browser.byId("askThread").textContent,/nothing at all/,"the question is in the transcript");
+  assert.match(browser.byId("askThread").textContent,/No records matched/i,"and so is the answer");
+  assert.equal(cls("askEvidence",".ask-record").length,recordsBeforeEmpty,
+    "the records that were on screen are still on screen");
+  assert.equal(browser.text("askEvidenceTitle"),titleBeforeEmpty,"still labelled with their own question");
+  assert.equal(browser.text("askRailLabel"),railBeforeEmpty,"and the rail has not moved");
+  assert.equal(browser.byId("askDownload").disabled,false,
+    "the briefing still refers to the records that are showing");
 });
 failNext=true;
 await ask("this one will fail");

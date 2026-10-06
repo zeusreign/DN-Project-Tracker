@@ -2044,7 +2044,14 @@ for (const [parent, child] of [
   // Deterministic stubs, so what this block tests is the pane rather than the
   // model. The answerer writes the sentence the engine would ask it for.
   const askSql = {
-    async generate() {
+    async generate(question) {
+      if (String(question).includes("nothing at all")) {
+        return {
+          intent: "search", language: "English", message: null,
+          sql: "SELECT id, name FROM projects WHERE name LIKE '%zzzz-no-such-project%'",
+          usage: { model: "stub" },
+        };
+      }
       return {
         intent: "search", language: "English", message: null,
         sql: "SELECT id, name, business_unit, status, budget_risk, schedule_risk, "
@@ -2103,9 +2110,19 @@ for (const [parent, child] of [
   assert.match(thread.textContent, /I found \d+ projects? that slipped 30 days or more/,
     "the answer says what it searched for, not only how many it found");
   assert.match(thread.textContent, /AI Tracker/, "replies are attributed to the assistant");
-  assert.match(thread.textContent, /source records?/, "and say how many records stand behind them");
-  assert.ok(thread.querySelectorAll(".ask-result").length > 0,
-    "the results are listed in the answer itself, not only in the evidence panel");
+  // How many, and what they are. The entity comes from the engine, so a query
+  // over activity updates says updates rather than quietly calling them projects.
+  assert.match(thread.textContent, /\d+ projects?/,
+    "the answer says how many records stand behind it, and what they are");
+  // The conversation is not a record list. The records are in the panel, where
+  // they can be opened, sorted and exported; restating them here would make
+  // the chat a worse version of the thing beside it.
+  assert.equal(thread.querySelectorAll(".ask-record").length, 0,
+    "no project cards in the conversation");
+  assert.equal(thread.querySelectorAll(".ask-result").length, 0,
+    "and no record list either");
+  assert.ok(thread.querySelectorAll("[data-ask-set]").length > 0,
+    "just a way back to the records this answer produced");
   assert.equal(browser.byId("askInput").value, "", "the box is cleared ready for the next question");
 
   // The evidence panel carries the records behind the answer, and only ones this
@@ -2134,25 +2151,40 @@ for (const [parent, child] of [
   // A result opens the project it names. It reuses the data-details handler the
   // tables already use rather than a second path, so a Development record still
   // routes to its own dialog and the two cannot drift apart.
-  const firstResult = thread.querySelector(".ask-result-name");
-  assert.ok(firstResult, "an answer lists results");
-  const openedId = Number(firstResult.getAttribute("data-ask-record"));
+  const firstResult = evidence.querySelector(".ask-record-name");
+  assert.ok(firstResult, "the panel lists the records");
+  const openedId = Number(firstResult.getAttribute("data-ask-open"));
   assert.ok(openedId > 0, "a result carries the project it names");
   const openedName = database.prepare("SELECT name FROM projects WHERE id = ?").get(openedId).name;
 
   await browser.fire(firstResult, "click").results;
   await browser.settle();
 
-  // It opens a read-only view, not the edit form. The assistant does not write,
-  // and a Save button on a pane that cannot save is a promise it does not keep.
-  assert.equal(browser.byId("askRecordDialog").open, true,
-    "clicking a result opens the record view");
-  assert.equal(browser.byId("detailsDialog").open, false,
-    "and never the edit form");
+  // A record in the panel opens in the panel, where there is a way back to the
+  // results it came from. It is a read-only view either way: the assistant does
+  // not write, and a Save button on a pane that cannot save is a promise it
+  // does not keep.
+  assert.equal(browser.text("askEvidenceTitle"), "Project source record",
+    "clicking a record opens it in the panel");
+  assert.equal(browser.byId("detailsDialog").open, false, "and never the edit form");
+  assert.match(browser.text("askCrumb"), new RegExp(openedName.slice(0, 10)
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the breadcrumb names the project opened");
+  assert.ok(browser.byId("askEvidence").querySelectorAll(".ask-field-grid").length > 0,
+    "the record view is populated rather than blank");
+  assert.equal(browser.byId("askEvidence").querySelectorAll("input").length, 0,
+    "nothing in it can be typed into");
+
+  // The full activity history is the one thing that still uses the dialog,
+  // because six entries in the panel is not always all of them.
+  const fullHistory = browser.byId("askToolbar").querySelector("[data-ask-record-full]");
+  assert.ok(fullHistory, "the record view offers its full history");
+  await browser.fire(fullHistory, "click").results;
+  await browser.settle();
+  assert.equal(browser.byId("askRecordDialog").open, true, "which opens the record dialog");
   assert.equal(browser.text("askRecordTitle"), openedName,
     "it shows the project that was clicked, not another");
   assert.ok(browser.byId("askRecordGrid").querySelectorAll(".ask-record-field").length > 5,
-    "the record view is populated rather than blank");
+    "the dialog is populated rather than blank");
 
   // Nothing in it can be typed into or saved.
   const dialog = browser.byId("askRecordDialog");
@@ -2175,10 +2207,29 @@ for (const [parent, child] of [
   assert.equal(browser.byId("askRecordDialog").open, false,
     "a click on the backdrop closes it");
 
-  // The evidence panel names the question its records belong to, so a panel
-  // left over from an earlier answer can never be read as this one's.
+  // Back to the records, and the panel names the question they belong to, so a
+  // panel left over from an earlier answer can never be read as this one's.
+  const backToResults = browser.byId("askToolbar").querySelector("[data-ask-action=back]");
+  assert.ok(backToResults, "the record view offers the way back");
+  await browser.fire(backToResults, "click").results;
+  await browser.settle();
   assert.match(browser.text("askEvidenceTitle"), /slipped more than 30 days/,
     "the evidence panel says which question it is showing");
+
+  // An answer that finds nothing says so in the conversation and leaves the
+  // records alone. The previous answer's records are usually what the next
+  // question is about, and clearing them for a miss loses that.
+  const recordsBefore = browser.byId("askEvidence").querySelectorAll(".ask-record").length;
+  const railBefore = browser.text("askRailLabel");
+  browser.type("askInput", "a question that matches nothing at all");
+  await browser.fire("askForm", "submit").results;
+  await browser.settle();
+  assert.match(browser.byId("askThread").textContent, /nothing at all/,
+    "the question is in the transcript");
+  assert.equal(browser.byId("askEvidence").querySelectorAll(".ask-record").length, recordsBefore,
+    "and the records that were on screen are still on screen");
+  assert.equal(browser.text("askRailLabel"), railBefore,
+    "an empty answer makes no result set, so the rail does not move");
 
   // The voice control is present and degrades honestly. The harness has no
   // WebRTC and no microphone, which is exactly the condition a locked-down

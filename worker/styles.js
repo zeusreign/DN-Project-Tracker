@@ -329,6 +329,15 @@ ${ENHANCED_STYLES}
 .ask-empty{padding:24px 0;color:#667d8b;font-size:14px;line-height:1.7}
 .ask-empty strong{display:block;color:#1d4a5e;font-size:15px;margin-bottom:6px}
 
+/* A calculated figure, shown as a figure rather than as a record with no name
+   in it. One or two of these per answer, so they get room. */
+.ask-figures{display:grid;gap:12px;margin:4px 0 16px}
+.ask-figure{background:#fff;border:1px solid #dce6eb;border-radius:8px;padding:16px 18px}
+.ask-figure span{display:block;font-size:11px;letter-spacing:.7px;text-transform:uppercase;
+  color:#6b818e}
+.ask-figure strong{display:block;font-size:30px;letter-spacing:-1px;font-weight:600;
+  color:#103f54;margin-top:6px;line-height:1.15;overflow-wrap:anywhere}
+
 /* One record, and a briefing. */
 .ask-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:15px 0;
   padding:0}

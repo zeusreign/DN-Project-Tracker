@@ -836,14 +836,22 @@ function activeSet(){return askIndex>=0&&askIndex<askSets.length?askSets[askInde
 function recordSet(question,answer){
   var set={
     question:question,
+    // The answer in words, kept with the set so moving the chevrons back shows
+    // the sentence that went with those records.
+    summary:answer.summary||answer.message||"",
     rows:(answer.rows||[]).slice(),
     total:answer.total,
     returned:answer.returned,
     truncated:!!answer.truncated,
     limit:answer.limit,
-    plan:answer.plan||null,
     intent:answer.intent,
-    summary:answer.summary||"",
+    // What one row is, from the engine. The panel presents a figure, a set of
+    // grouped totals and a list of projects differently, and guessing from the
+    // column names is how a count ends up rendered as an empty project card.
+    entity:answer.entity||"projects",
+    entityLabel:answer.entityLabel||"records",
+    aggregate:!!answer.aggregate,
+    projects:answer.projects||null,
     filters:(answer.description||[]).slice(),
     sources:(answer.sources||[]).slice(),
     // The scope the question was asked under, so a restored set is labelled
@@ -858,6 +866,10 @@ function recordSet(question,answer){
   askSets.push(set);
   askIndex=askSets.length-1;
   return set;
+}
+
+function askTitleCase(text){
+  return String(text||"").replace(/^\w/,function(c){return c.toUpperCase()});
 }
 
 function askUnit(){var pick=byId("askUnitScope");return pick&&pick.value?pick.value:"All"}
@@ -943,12 +955,18 @@ function renderEvidence(){
     // The question, not "Matching projects". With several result sets kept at
     // once the panel has to say which one it is showing, or the rail moves and
     // nothing on screen changes its mind about what it is.
-    head={title:set.question,count:String(set.total),crumb:"Matching projects"};
-    bar.innerHTML=set.rows.length
+    head={title:set.question,
+      count:set.entity==="figure"?"1":String(set.total),
+      crumb:set.entity==="figure"?"Figure":set.entity==="group"?"Grouped totals"
+        :set.entity==="projects"?"Matching projects":askTitleCase(set.entityLabel)};
+    // A briefing and a CSV are built from project records. A figure has none,
+    // so offering them would produce an empty file.
+    var exportable=set.rows.length&&set.entity!=="figure";
+    bar.innerHTML=(exportable
       ?'<button type="button" class="ask-btn" data-ask-action="briefing">Draft briefing</button>'
        +'<button type="button" class="ask-btn" data-ask-action="csv">Export CSV</button>'
-       +'<button type="button" class="ask-btn" data-ask-action="browse">Browse records</button>'
-      :'<button type="button" class="ask-btn" data-ask-action="browse">Browse records</button>';
+      :"")
+      +'<button type="button" class="ask-btn" data-ask-action="browse">Browse records</button>';
   }
 
   if(title)title.textContent=head.title;
@@ -998,24 +1016,120 @@ function askOverviewHtml(){
 // The records an answer found, as cards. The figures on each card are the two a
 // reader checks first, and the update excerpt is what makes a card worth
 // reading rather than a row of labels.
+// What a result set looks like in the panel. The engine says what one row is,
+// and each kind is shown as itself: a figure is a figure, grouped totals are a
+// comparison, projects are cards. Rendering a COUNT as a project card with no
+// name in it was the thing to avoid.
 function askRecordsHtml(set){
   if(!set.rows.length){
-    return '<div class="ask-chips">'+set.filters.map(function(f){
-        return '<span class="ask-chip">'+esc(f)+'</span>'}).join("")+'</div>'
-      +'<div class="ask-empty"><strong>No records match that question.</strong>'
-      +'The conditions that were applied are listed above, so you can see what was searched for. '
+    return '<div class="ask-empty"><strong>No records match that question.</strong>'
       +'Try a project name, a venue, a CAPP number, or a wider business unit.</div>';
   }
+  if(set.entity==="figure")return askFigureHtml(set);
+  if(set.entity==="group")return askGroupHtml(set);
+  if(set.entity!=="projects")return askChildHtml(set);
+
   var shown=set.rows.slice(0,set.shown);
   var more=set.rows.length-shown.length;
-  return '<div class="ask-chips">'+set.filters.map(function(f){
-      return '<span class="ask-chip">'+esc(f)+'</span>'}).join("")+'</div>'
+  return askSetHeadHtml(set)
     +shown.map(function(p){return askCardHtml(p,set)}).join("")
     +(more>0?'<button type="button" class="ask-btn" data-ask-action="more">Show '
       +Math.min(ASK_PAGE,more)+' more</button>':"")
-    +(set.truncated?'<div class="ask-note">'+esc(String(set.total))+' records match. '
-      +esc(String(set.returned))+' were returned, which is the cap on one answer. '
-      +'Narrow the question to see a different part of the set.</div>':"");
+    +askTruncationNote(set);
+}
+
+// The question's own conditions, and what the set is of.
+function askSetHeadHtml(set){
+  var chips=set.filters.map(function(f){
+    return '<span class="ask-chip">'+esc(f)+'</span>'}).join("");
+  return chips?'<div class="ask-chips">'+chips+'</div>':"";
+}
+
+function askTruncationNote(set){
+  if(!set.truncated)return "";
+  return '<div class="ask-note">'+esc(String(set.total))+' '+esc(set.entityLabel)
+    +' match. '+esc(String(set.returned))+' were returned, which is the cap on one answer. '
+    +'Narrow the question to see a different part of the set.</div>';
+}
+
+// A single figure. One number, named, with what it was counted over.
+function askFigureHtml(set){
+  var row=set.rows[0]||{};
+  var entries=Object.keys(row).map(function(key){
+    var value=row[key];
+    var looksLikeMoney=/budget|cost|variance|estimate|capp|expense/.test(key)&&askNum(value)!==null;
+    return {
+      label:key.replace(/_/g," ").replace(/\b\w/g,function(c){return c.toUpperCase()}),
+      value:value===null||value===undefined?"Not recorded"
+        :looksLikeMoney?askMoney(value)
+        :typeof value==="number"?value.toLocaleString("en-US"):String(value)
+    };
+  });
+  return askSetHeadHtml(set)
+    +'<div class="ask-figures">'+entries.map(function(entry){
+      return '<div class="ask-figure"><span>'+esc(entry.label)+'</span>'
+        +'<strong>'+esc(entry.value)+'</strong></div>';
+    }).join("")+'</div>'
+    +'<div class="ask-note">This is a calculated figure, not a list of records. '
+      +'Projects with no value recorded are not included in it, so a total covers '
+      +'only the projects that have the figure.</div>';
+}
+
+// Grouped totals. A bar each, so the comparison is the point rather than the
+// numbers being read one at a time.
+function askGroupHtml(set){
+  var rows=set.rows;
+  var keys=Object.keys(rows[0]||{});
+  var labelKey=keys.find(function(k){return typeof rows[0][k]==="string"})||keys[0];
+  var valueKey=keys.find(function(k){return k!==labelKey&&askNum(rows[0][k])!==null})||keys[1]||keys[0];
+  var biggest=rows.reduce(function(max,row){
+    var n=Math.abs(askNum(row[valueKey])||0);return n>max?n:max},1);
+  var money=/budget|cost|variance|estimate|expense/.test(valueKey);
+  return askSetHeadHtml(set)
+    +'<div class="ask-section-label">'+esc(String(valueKey).replace(/_/g," "))+' by '
+      +esc(String(labelKey).replace(/_/g," "))+'</div>'
+    +rows.map(function(row){
+      var n=askNum(row[valueKey])||0;
+      return '<div class="ask-unit-row">'
+        +'<button type="button" data-ask-ask="Show '+esc(String(row[labelKey]))+' projects">'
+          +esc(String(row[labelKey]===null||row[labelKey]===undefined?"Not recorded":row[labelKey]))+'</button>'
+        +'<div class="ask-unit-track"><div class="ask-unit-fill" style="width:'
+          +Math.max(3,Math.round(Math.abs(n)/biggest*100))+'%"></div></div>'
+        +'<b>'+esc(money?askShortMoney(n):String(n))+'</b></div>';
+    }).join("")
+    +askTruncationNote(set);
+}
+
+// Activity updates, photographs or development records: child rows, shown as
+// entries rather than as cards, with the project they belong to.
+function askChildHtml(set){
+  var shown=set.rows.slice(0,set.shown);
+  var more=set.rows.length-shown.length;
+  var projectName=function(row){
+    var id=row.project_id||row.id;
+    var p=askRecordById(id);
+    return p?p.name:("Project "+id);
+  };
+  return askSetHeadHtml(set)
+    +(set.projects&&set.projects.matched!==null&&set.projects.matched!==undefined
+      ?'<p class="ask-source-meta">'+esc(String(set.total))+' '+esc(set.entityLabel)
+        +' across '+esc(String(set.projects.matched))+' project'
+        +(set.projects.matched===1?"":"s")+'.</p>'
+      :"")
+    +shown.map(function(row){
+      var when=row.reporting_period||row.date_taken||row.request_date||row.created_at;
+      var text=row.current_summary||row.caption||row.notes||row.consultants||"";
+      return '<div class="ask-history-entry">'
+        +'<time>'+esc(when?dateText(when):"No date")+'</time>'
+        +(row.project_id||row.id
+          ?' <button type="button" class="ask-text-link" data-ask-open="'
+            +esc(String(row.project_id||row.id))+'">'+esc(projectName(row))+'</button>':"")
+        +(text?'<p>'+esc(String(text).slice(0,400))+'</p>':"")
+        +'</div>';
+    }).join("")
+    +(more>0?'<button type="button" class="ask-btn" data-ask-action="more">Show '
+      +Math.min(ASK_PAGE,more)+' more</button>':"")
+    +askTruncationNote(set);
 }
 
 function askCardHtml(p,set){
@@ -1208,64 +1322,8 @@ function askAiLabel(){
   return '<div class="ask-label ask-label-ai"><span class="ask-ai-mark">'+ASK_SPARK+'</span>AI Tracker</div>';
 }
 
-// The results as the answer itself, not only as a count. A list the reader can
-// scan is what makes the figure checkable; the evidence panel then carries the
-// detail for whichever record they want to look at.
-// The answer's own list. A name here opens the record dialog: a quick look
-// that keeps the reader's place in the conversation. The records panel opens
-// the same project in the panel instead, where there is a way back.
-function askResultListHtml(answer){
-  var rows=answer.rows||[];
-  if(!rows.length)return "";
-  var html='<ul class="ask-results">'+rows.slice(0,5).map(function(p){
-    var lead=p.section_name||p.venue||"";
-    var who=p.project_manager||p.development_lead||"Manager not recorded";
-    var meta=[p.business_unit,p.status,who].filter(Boolean).map(esc).join(" · ");
-    return '<li class="ask-result">'
-      +'<button type="button" class="ask-result-name" data-ask-record="'+esc(String(p.id))+'">'
-      +(lead?esc(lead)+' · ':"")+esc(p.name)+'</button>'
-      +'<small class="ask-result-meta">'+meta+'</small>'
-      +'</li>';
-  }).join("")+'</ul>';
-  if(rows.length>5){
-    html+='<p class="ask-source-line">'+(rows.length-5)
-      +' more are listed in the records panel. A briefing includes all '+rows.length+'.</p>';
-  }
-  return html;
-}
 
-// What the answer rests on: how many records, over what reporting dates. A
-// figure nobody can date is a figure nobody can check.
-function askSourceLine(answer){
-  var rows=answer.rows||[];
-  var periods=rows.map(function(p){return p.reporting_period}).filter(Boolean).sort();
-  var dates=periods.length
-    ?"saved updates "+dateText(periods[0])
-      +(periods[periods.length-1]!==periods[0]?" to "+dateText(periods[periods.length-1]):"")
-    :"no dated updates";
-  return '<div class="ask-sources">'+esc(String(answer.total))+' source record'
-    +(answer.total===1?"":"s")+' · '+esc(dates)
-    +(answer.truncated?' · showing the first '+esc(String(answer.returned)):"")+'</div>';
-}
 
-// Notes that explain a derived figure, shown only when the question used it.
-// Without them "behind schedule" reads as a judgement rather than as the date
-// subtraction it actually is.
-function askPlanNotes(plan){
-  if(!plan)return "";
-  var notes=[];
-  if(plan.delayed||plan.minDelayDays!==undefined){
-    notes.push("“Slipped” means the current turnover date is later than the original. "
-      +"A project without both dates cannot be included in that comparison.");
-  }
-  if(plan.overBudget||plan.underBudget||plan.minVariance!==undefined||plan.maxVariance!==undefined){
-    notes.push("Only projects with both an approved budget and a forecast are compared.");
-  }
-  if(plan.risk==="either"){
-    notes.push("High risk with no further qualification means either the budget or the schedule rating is High.");
-  }
-  return notes.map(function(n){return '<div class="ask-note">'+esc(n)+'</div>'}).join("");
-}
 
 // The query behind an answer, for whoever is building this. Present only when
 // the environment turned it on, so there is nothing to hide in the client: if
@@ -1304,32 +1362,16 @@ function askTurnHtml(turn,index){
       +esc(turn.message||"That question could not be answered.")
       +'<br>Your records have not changed. Try asking again.</div></div>';
   }else{
+    // The answer, in words. The records are not repeated here: they are in the
+    // panel beside this, where they can be sorted, opened and exported. A
+    // conversation that restates the database is a worse way to read the
+    // database than the database.
     var html="";
     if(answer.message)html+='<p>'+esc(answer.message)+'</p>';
-    if(answer.rows){
-      if(answer.total){
-        // No filter chips here. The pilot shows them beside the answer because
-        // it has no sentence; ours does, and it says the same thing in words -
-        // "I found 5 projects that slipped 30 days or more" beside a chip
-        // reading "Slipped 30 days or more" is the same fact twice. The chips
-        // stay where there is no sentence: the records panel and the briefing.
-        // Written by the worker from the plan it ran, so it says what was
-        // searched for rather than only how many turned up.
-        html+='<p>'+esc(answer.summary
-          ||("I found "+answer.total+" project"+(answer.total===1?"":"s")+"."))+'</p>';
-        html+=askResultListHtml(answer);
-        html+=askPlanNotes(answer.plan);
-        html+=askSourceLine(answer);
-        if(turn.setIndex!==undefined&&turn.setIndex!==null){
-          html+='<div class="ask-buttons">'
-            +'<button type="button" class="ask-btn" data-ask-set="'+turn.setIndex+'">Show these records</button>'
-            +'<button type="button" class="ask-btn" data-ask-brief="'+turn.setIndex+'">Draft briefing</button>'
-            +'</div>';
-        }
-      }else if(!answer.message){
-        html+='<p>'+esc(answer.summary||"I found no projects.")+'</p>'
-          +'<p>Try a project name, a venue, a CAPP number, or a wider business unit.</p>';
-      }
+    if(answer.summary)html+='<p>'+esc(answer.summary)+'</p>';
+    if(!answer.message&&!answer.summary&&answer.rows)html+='<p>No records matched that question.</p>';
+    if(answer.rows&&answer.rows.length){
+      html+=askEvidenceLine(answer,turn);
     }
     body='<div class="ask-bubble">'+html+'</div>';
   }
@@ -1337,6 +1379,28 @@ function askTurnHtml(turn,index){
     +'<div class="ask-turn-user"><div class="ask-bubble">'+esc(turn.question)+'</div></div>'
     +'</article><article class="ask-turn">'+askAiLabel()+body
     +askDebugHtml(answer&&answer.debug)+'</article>';
+}
+
+// One line pointing at the panel, and the way back to this set once the
+// chevrons have moved on. Not a list: a count, what those rows are, and what
+// can be done with them.
+function askEvidenceLine(answer,turn){
+  var what=answer.entityLabel||"records";
+  var line=esc(String(answer.total))+" "+esc(what)
+    +(answer.truncated?" · showing the first "+esc(String(answer.returned)):"");
+  if(answer.projects&&answer.projects.matched!==null&&answer.projects.matched!==undefined
+    &&answer.entity!=="projects"&&answer.entity!=="figure"){
+    line+=" · across "+esc(String(answer.projects.matched))+" project"
+      +(answer.projects.matched===1?"":"s");
+  }
+  var html='<div class="ask-sources">'+line+'</div>';
+  if(turn&&turn.setIndex!==undefined&&turn.setIndex!==null){
+    html+='<div class="ask-buttons">'
+      +'<button type="button" class="ask-btn" data-ask-set="'+turn.setIndex+'">Show these records</button>'
+      +'<button type="button" class="ask-btn" data-ask-brief="'+turn.setIndex+'">Draft briefing</button>'
+      +'</div>';
+  }
+  return html;
 }
 
 // A read-only view of one project. The assistant reads and does not write, so
@@ -1495,35 +1559,33 @@ async function voiceAskTracker(question){
   // argument is only the fallback when transcription is unavailable.
   var spoken=voice.heard&&voice.heard.trim()?voice.heard.trim():question;
   voice.heard="";
-  var turn={question:spoken,state:"pending",answer:null,spoken:true};
-  askTurns.push(turn);
-  renderAsk();
-  try{
-    var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify({question:spoken})});
-    turn.state="done";turn.answer=answer;
-    askSave();renderAsk();
-    return answer;
-  }catch(error){
-    turn.state="error";turn.message=error&&error.message?error.message:"That question could not be answered.";
-    askSave();renderAsk();
-    return {ok:false,error:turn.message};
-  }
+  // The same path a typed question takes: same endpoint, same sealed context,
+  // same result set. A spoken follow-up therefore means what a typed one
+  // means, and the evidence panel follows the conversation either way.
+  var turn=await askEngine(spoken,{spoken:true});
+  if(turn.state==="error")return {ok:false,error:turn.message};
+  return turn.answer;
 }
 
 // What the model is given back. The rows are already on screen, so this is kept
 // short: a long list spoken aloud is worse than a count and a few names.
+// What the model is given back. It is handed the answer the worker already
+// wrote, not the rows, because the rows are on screen beside it and because
+// the spoken answer and the written one have to be the same answer. Asking the
+// model to compose its own from the data would give the listener a different
+// reply from the reader, and only one of the two would have been checked.
 function voiceToolResult(answer){
   if(!answer||answer.ok===false)return {error:answer&&answer.error?answer.error:"The lookup failed."};
-  if(!answer.rows||!answer.rows.length){
-    return {summary:answer.summary||answer.message||"Nothing matched.",total:answer.total||0,projects:[]};
-  }
+  var text=answer.summary||answer.message||"Nothing matched that question.";
   return {
-    summary:answer.summary,
-    total:answer.total,
-    projects:answer.rows.slice(0,8).map(function(p){
-      return {name:p.name,business_unit:p.business_unit,status:p.status,
-        days:p.duration_change_days,variance:p.forecast_variance};
-    })
+    answer:text,
+    // Enough to let it handle a short follow-up without another lookup, and
+    // no more. Never the records: reading a list aloud is worse than saying
+    // how many there are and letting the reader look.
+    matched:answer.total||0,
+    showing:answer.returned||0,
+    each_row_is:answer.entityLabel||"records",
+    truncated:!!answer.truncated
   };
 }
 
@@ -1705,72 +1767,85 @@ function renderAskUnits(){
   pick.dataset.filled="true";
 }
 
-async function submitAsk(question){
-  var text=String(question||"").trim();
-  if(!text)return;
-  var turn={question:text,state:"pending",answer:null};
+// The conversation's context, which is not the result-set history. This
+// answers "what does 'those' mean?" - it is always the most recent answer that
+// found something, whatever the chevrons are showing. The history answers
+// "what did result set 2 contain?", and moving between sets does not change
+// what the next question follows on from.
+function askConversationContext(){
+  for(var i=askTurns.length-1;i>=0;i--){
+    var prior=askTurns[i];
+    if(prior.state==="done"&&prior.answer&&prior.answer.rows&&prior.answer.rows.length){
+      return {
+        ids:prior.answer.rows.map(function(row){return row.id}).filter(function(id){
+          return typeof id==="number"}),
+        total:prior.answer.total,
+        // The worker's sealed record of that turn. It carries the conditions
+        // that produced the answer, which is what "what about Corporate?"
+        // needs, and it is opaque here: the page stores it and hands it back
+        // without being able to read it.
+        token:prior.answer.token||null
+      };
+    }
+  }
+  return null;
+}
+
+function askConversationHistory(){
+  return askTurns.filter(function(prior){
+    return prior.state==="done"&&prior.answer;
+  }).slice(-6).map(function(prior){
+    return {
+      question:prior.question,
+      intent:prior.answer.intent,
+      total:typeof prior.answer.total==="number"?prior.answer.total:undefined,
+      token:prior.answer.token||undefined
+    };
+  });
+}
+
+// One path for a question, whether it was typed or spoken. Both land in the
+// same transcript, carry the same context, and produce the same result set, so
+// the two modes are one conversation rather than two implementations.
+async function askEngine(text,options){
+  var spoken=options&&options.spoken;
+  var turn={question:text,state:"pending",answer:null,spoken:!!spoken};
   askTurns.push(turn);
   renderAsk();
-  byId("askSubmit").disabled=true;
   try{
-    // The ids the previous answer returned, so "which of these" narrows that
-    // result instead of starting again. Only a search that actually returned
-    // rows becomes context; a refusal or a definition leaves the previous one
-    // standing, which is what a person would expect.
-    var context=null;
-    for(var i=askTurns.length-2;i>=0;i--){
-      var prior=askTurns[i];
-      if(prior.state==="done"&&prior.answer&&prior.answer.rows&&prior.answer.rows.length){
-        context={
-          ids:prior.answer.rows.map(function(row){return row.id}).filter(function(id){
-            return typeof id==="number"}),
-          total:prior.answer.total,
-          description:prior.answer.description||[],
-          // The worker's sealed record of the previous turn. It carries the
-          // conditions that produced this answer, which is what "what about
-          // Patina?" needs, and it is opaque here: the page stores it and
-          // hands it back without being able to read it.
-          token:prior.answer.token||null
-        };
-        break;
-      }
-    }
-    // The questions asked so far. The transcript stays in the browser; what
-    // travels is the last few questions and what was done with them, which is
-    // what lets "I meant..." correct the previous question rather than narrow
-    // the answer it produced.
-    var history=askTurns.slice(0,-1).filter(function(prior){
-      return prior.state==="done"&&prior.answer;
-    }).slice(-6).map(function(prior){
-      return {
-        question:prior.question,
-        intent:prior.answer.intent,
-        total:typeof prior.answer.total==="number"?prior.answer.total:undefined,
-        token:prior.answer.token||undefined
-      };
-    });
     var payload={question:text};
+    var context=askConversationContext();
     if(context)payload.context=context;
+    var history=askConversationHistory();
     if(history.length)payload.history=history;
     var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify(payload)});
     turn.state="done";turn.answer=answer;
-    // Every search keeps its own set, including one that found nothing: "that
-    // question matched no records" is a result worth being able to go back to,
-    // and leaving the panel on the previous set would answer the wrong question
-    // with a straight face. Refusals and definitions carry no rows and make no
-    // set, so the records on screen stay where they were.
-    if(answer.rows){
+    // A result set is made only when records came back. An answer that found
+    // nothing is still an answer and still belongs in the conversation, but it
+    // must not take the evidence panel with it: the records already on screen
+    // are usually what the next question is about.
+    if(answer.rows&&answer.rows.length){
       recordSet(text,answer);
       turn.setIndex=askSets.length-1;
     }
   }catch(error){
     // api() throws with the worker's own message, which already explains a
     // refusal, a missing key or a rate limit in words a user can act on.
-    turn.state="error";turn.message=error&&error.message?error.message:"That question could not be answered.";
+    turn.state="error";
+    turn.message=error&&error.message?error.message:"That question could not be answered.";
   }
-  byId("askSubmit").disabled=false;
   askSave();
   renderAsk();
+  return turn;
+}
+
+async function submitAsk(question){
+  var text=String(question||"").trim();
+  if(!text)return;
+  var send=byId("askSubmit");
+  if(send)send.disabled=true;
+  await askEngine(text,{spoken:false});
+  if(send)send.disabled=false;
 }
 
 // --- Briefing, CSV and printing ---------------------------------------------
