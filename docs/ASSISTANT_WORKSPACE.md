@@ -208,56 +208,72 @@ business question needs. `interrupt_response: true`, because the brief asks for
 natural interruption — note this reverses an earlier deliberate choice, where
 interruption was off so a figure being read aloud could not be cut in half.
 
-### Voice presence
+### The voice stage
 
-A call has one visual: an orb in the conversation column, drawn by a fragment
-shader, alive only while the call is.
+A call does not happen inside the chat. The left panel becomes a place for it.
 
-It is built on the approach the open-source ElevenLabs orb uses — a shader
-whose uniforms are *targets* that each state sets, eased toward rather than
-snapped to, with the measured audio level feeding some of them. Nothing of
-theirs is loaded or called. The shader, the easing and the state mapping are
-this product's own, written locally so the thing stays free of any dependency,
-which matters in a codebase with none.
+```
+┌──────────────────────┐
+│                      │   the conversation is still here,
+│                      │   still scrolled where it was,
+│         ◌            │   at 16% behind a soft surface
+│        ( ● )         │
+│         ◌            │   a small presence, fine rings,
+│                      │   one ambient wash
+│                      │
+│      ◍      ◉        │   two controls: mute, end
+└──────────────────────┘
+```
+
+**The conversation recedes rather than closing.** It stays in the DOM, stays
+scrolled where it was, and drops to 16% behind a near-opaque surface. Ending
+the call gives it back exactly as it was. The composer is the one thing that
+goes: it is not history, it is the other way of asking, and the two controls
+replace it.
+
+**The presence is small.** What carries the state is the light around it: two
+hairline rings that answer to the real audio, one slow arc for the wait, and
+an ambient wash that lifts when there is something to hear. Drawn in Canvas
+2D, not a shader — at this size rings want to be crisp, and a noise blob only
+looks like mush.
+
+The ElevenLabs orb is the reference for the idea of an ambient presence and
+for the shape of the code: states set targets, values ease toward them, audio
+feeds some of them. Nothing of theirs is loaded. There is no floating ball, no
+spinning, no particles.
 
 **It has no state of its own.** `voice.state` is the state machine and
-`setVoiceState()` is its only writer; the orb reads it there. There is no
-second machine to drift out of step with the first.
+`setVoiceState()` is its only writer; the stage reads it there.
 
-| `voice.state` | How it reads | Follows |
-|---|---|---|
-| `connecting` | dim, emerging, slow | — |
-| `listening` | calm, breathing | the microphone |
-| `thinking` | a slow lobe orbiting inside it, no audio reaction at all | — |
-| `speaking` | brightest, rim lit, rippling | the model's audio |
-| `off` | fades out, band closes, loop stops | — |
+| `voice.state` | Set by | How it reads | Follows |
+|---|---|---|---|
+| `connecting` | `startVoice()` | rings sit wide and faint, drawing in | — |
+| `listening` | channel `open`, `response.done`, `speech_started` | almost still, one slow breath | the microphone |
+| `thinking` | `speech_stopped`, `function_call_arguments.done` | one arc travelling the inner ring | — |
+| `speaking` | the first audio delta | brighter wash, rings answering | the model's audio |
+| `off` | `stopVoice()`, `error`, channel `close` | dissolves, conversation returns | — |
 
-The levels are real. The microphone stream from `getUserMedia` and the model's
-stream from `pc.ontrack` each get an `AnalyserNode`; the orb reads their RMS.
-Muted reads zero, because it is actually silent. Nothing is on a timer
+The levels are real: the microphone stream from `getUserMedia` and the model's
+stream from `pc.ontrack` each get an `AnalyserNode`, and the rings read their
+RMS. Muted reads zero because it is actually silent. Nothing is on a timer
 pretending to be a voice.
 
-Thinking is the one state that ignores audio entirely — there is none to react
-to, and a presence that goes still during the wait reads as a dropped call.
-That is why it has a motion of its own.
+Thinking is the one state that ignores audio — there is none, and a presence
+that goes still during the wait reads as a dropped call. That is why it is the
+only one with a movement of its own.
 
-**No words.** "Listening", "Thinking" and "Speaking" are gone from the screen:
-the orb says them. They survive in an `sr-only` live region for anyone who
-cannot see it. A *failure* is still written down, because a failure is not a
-status.
+**No words.** "Listening", "Thinking", "Speaking" and "Connected" are not on
+the screen; the light says them. They survive in an `sr-only` live region. A
+*failure* is still written out, because a failure is not a status.
 
-**One identity, not six colours.** The tracker's navy through its teal to its
-cyan, lit from inside with limb darkening and a rim light — three stops of one
-ramp.
+**One identity.** White surface, the tracker's teal presence, one restrained
+wash. The only second colour is the rose on the end control, which is already
+the palette's "this is destructive".
 
 **It is never the slow part.** The audio graph is built after the connection,
-never on it. The loop runs only during a call and stops when the orb has faded.
-The canvas is 172 px with the device ratio capped at 2. A measured frame costs
-0 ms median, 0.1 ms worst — on software rendering. If WebGL is missing or the
-context is lost, a CSS orb takes over and still moves to the same measured
-level.
-
-The right-hand workspace is untouched by any of this.
+never on it. The loop runs only during a call and stops once the presence has
+dissolved. A measured frame costs 0 ms median, 0.2 ms worst. No WebGL, so
+nothing to lose a context.
 
 ## Visual direction
 
@@ -338,7 +354,7 @@ running app:
 | Command | What it holds shut |
 |---|---|
 | `npm run check:layout` | the panel scrolls, not the page; the composer is always on screen; no wasted window; no sideways scroll — at eight window sizes |
-| `npm run check:voice` | the shader compiles; each state looks unlike the others; the orb moves to real microphone and real model audio; muted is silent; ending a call costs nothing |
+| `npm run check:voice` | the stage comes up and the conversation recedes; each state looks unlike the others; the presence moves to real microphone and real model audio; muted is silent; the whole arc from text to connecting to speaking to thinking and back is continuous; ending costs nothing |
 
 ## What does not change
 

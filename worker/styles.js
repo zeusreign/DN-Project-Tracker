@@ -185,19 +185,42 @@ ${ENHANCED_STYLES}
 @keyframes wsring{0%{transform:scale(.7);opacity:.45}100%{transform:scale(1.5);opacity:0}}
 @keyframes wsspeak{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}
 
-/* The voice presence. A band that opens when a call does and closes when it
-   ends, so going into and out of voice is one movement rather than a screen
-   change. The conversation stays underneath it throughout: nothing that was
-   said is taken away to make room for the picture of it. */
-.wsorb{flex:none;height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;
-  opacity:0;transition:height .52s cubic-bezier(.22,.61,.36,1),opacity .4s ease}
-.wsorb.is-live{height:188px;opacity:1}
-.wsorb canvas{width:172px;height:172px;display:block}
-/* Without WebGL the same measured level still moves something. */
-.wsorb-css{width:150px;height:150px;border-radius:50%;display:block;
-  background:radial-gradient(circle at 38% 33%,#22b2cf 0%,#0b8a86 42%,#042539 100%);
-  box-shadow:0 0 44px rgba(11,138,134,.38);will-change:transform,opacity}
-.wsp-presence.is-hidden{opacity:0;transition:opacity .3s ease}
+/* The voice stage. A call does not happen inside the chat; the panel becomes
+   a place for it. The conversation stays exactly where it is and recedes
+   behind a soft surface, so one glance says "this is a live call" without a
+   word being written. */
+.wsp-chat{position:relative}
+.wsstage{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .42s ease;
+  background:
+    radial-gradient(118% 62% at 50% 40%,rgba(11,138,134,.085),rgba(11,138,134,0) 64%),
+    linear-gradient(180deg,rgba(255,255,255,.965) 0%,rgba(247,251,251,.955) 52%,
+      rgba(238,246,246,.95) 100%)}
+.wsstage.is-live{opacity:1;pointer-events:auto}
+.wsstage-orb{width:180px;height:180px;display:block;margin-bottom:34px}
+/* Still there, still scrolled where it was, just no longer the thing being
+   looked at. Not greyed out, not disabled: behind glass. */
+.wsp-chat.is-voice .wsp-chat-head,
+.wsp-chat.is-voice .wsp-thread{opacity:.16;pointer-events:none;transition:opacity .42s ease}
+/* The composer is not history, it is the other way of asking. During a call
+   the two controls below replace it rather than ghosting behind them. */
+.wsp-chat.is-voice .wsstart,
+.wsp-chat.is-voice .wsp-composer{opacity:0;pointer-events:none;transition:opacity .3s ease}
+
+/* Two controls, and no more. */
+.wsstage-controls{position:absolute;left:0;right:0;bottom:26px;display:flex;
+  justify-content:center;gap:12px}
+.wsvbtn{width:46px;height:46px;border-radius:50%;border:1px solid rgba(16,40,56,.10);
+  background:rgba(255,255,255,.92);color:#44596a;display:grid;place-items:center;cursor:pointer;
+  box-shadow:0 2px 9px rgba(16,40,56,.07);transition:background .15s,color .15s,border-color .15s}
+.wsvbtn:hover{background:#fff;color:var(--w-ink);border-color:rgba(16,40,56,.18)}
+.wsvbtn .wsi{grid-area:1/1;stroke-width:1.9}
+.wsvbtn .wsi-slash{opacity:0;transition:opacity .15s}
+.wsvbtn.is-on{background:#eaf1f3;color:var(--w-ink);border-color:rgba(16,40,56,.14)}
+.wsvbtn.is-on .wsi-slash{opacity:1}
+.wsvbtn.is-end{background:var(--w-rose);border-color:var(--w-rose);color:#fff}
+.wsvbtn.is-end:hover{background:#9d3c4f;border-color:#9d3c4f;color:#fff}
+.wsvbtn.is-end .wsi-hang{transform:rotate(134deg)}
 
 .wsp-thread{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:2px 16px 8px;min-height:0}
 .wsturn{padding:14px 0;border-top:1px solid var(--w-line2)}
@@ -534,8 +557,7 @@ ${ENHANCED_STYLES}
 @media (prefers-reduced-motion:reduce){
   .wsp-presence i,.wsp-presence:after,.wsdots i,.wsact-i:before,.wsmic{animation:none!important}
   .wsp-thread{scroll-behavior:auto}
-  .wsorb{transition:none}
-  .wsorb-css{transition:none}
+  .wsstage{transition:none}
 }
 
 /* Print: only what was chosen in the download panel, laid out as a document. */

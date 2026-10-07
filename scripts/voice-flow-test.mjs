@@ -168,13 +168,27 @@ await settle();
 // follows the one state machine, and that it says nothing in words. That it
 // reacts to real audio, and how it looks doing it, is measured in a real
 // browser by scripts/orb-check.mjs.
-const orbLive = () => browser.byId("wsOrb").classList.contains("is-live");
-const dotHidden = () => browser.byId("wsPresence").classList.contains("is-hidden");
+const onStage = () => browser.byId("wsStage").classList.contains("is-live");
+const receded = () => browser.byId("wsChat").classList.contains("is-voice");
 
-await check("a call brings the presence up in the conversation column", () => {
-  assert.ok(browser.byId("wsOrb"), "the orb lives in the left column");
-  assert.equal(orbLive(), true, "and it is up while the call is");
-  assert.equal(dotHidden(), true, "one presence at a time: the small dot steps aside");
+await check("a call turns the left panel into a place for it", () => {
+  assert.ok(browser.byId("wsStage"), "the stage lives in the conversation column");
+  assert.equal(onStage(), true, "and it is up while the call is");
+  assert.equal(receded(), true, "with the conversation behind it rather than beside it");
+});
+
+await check("the conversation recedes but is never taken away", () => {
+  // Reduced, not destroyed. It is still rendered and still in flow, so
+  // ending the call gives it back exactly where it was.
+  assert.equal(browser.byId("wsThread").hidden, false, "still rendered, not hidden");
+  assert.equal(browser.byId("wsThread").closest("[data-pane]").hidden, false);
+});
+
+await check("the stage offers two controls and no others", () => {
+  const controls = browser.byId("wsStage").querySelectorAll("button");
+  assert.equal(controls.length, 2, "mute, and end");
+  assert.ok(browser.byId("wsMuteBtn") && browser.byId("wsEndBtn"));
+  assert.match(browser.byId("wsEndBtn").getAttribute("aria-label") || "", /end/i);
 });
 
 await check("the presence is the status, so nothing is written beside it", () => {
@@ -262,7 +276,7 @@ say("response.output_audio.delta", { delta:"x" }); await settle();
 await check("the dot says the assistant is speaking", () => assert.equal(presence(), "speaking"));
 
 await check("and the presence is still the only thing saying so", () => {
-  assert.equal(orbLive(), true);
+  assert.equal(onStage(), true);
   assert.equal(browser.byId("wsVoiceNote").hidden, true, "still no label beside it");
   assert.match(browser.byId("wsVoiceLive").textContent, /speaking/i);
 });
@@ -360,9 +374,11 @@ await check("a real error ends the call and says why", async () => {
 
 await check("ending a call releases the microphone", () => assert.equal(track.stopped, true));
 
-await check("and takes the presence down with it", () => {
-  assert.equal(orbLive(), false, "the band closes");
-  assert.equal(dotHidden(), false, "the small dot comes back");
+await check("and takes the stage down with it, restoring the conversation", () => {
+  assert.equal(onStage(), false, "the stage dissolves");
+  assert.equal(receded(), false, "and the conversation comes back out of recession");
+  assert.ok(browser.byId("wsThread").querySelectorAll(".wsturn").length > 0,
+    "with every turn of the call still in it");
   assert.equal(browser.byId("wsVoiceLive").textContent, "",
     "and it stops announcing a state there is no longer any of");
 });

@@ -1534,131 +1534,78 @@ async function submitAsk(question){
 var voice={state:"off",pc:null,channel:null,mic:null,audio:null,muted:false,
   responding:false,heard:"",pending:0,speech:"",lastSpoken:""};
 
-// --- The voice presence ------------------------------------------------------
-// One shader-drawn orb in the conversation column, alive only while a call is.
+// --- The voice stage ---------------------------------------------------------
+// A call does not happen inside the chat; the left panel becomes a place for
+// it. The conversation stays where it is and recedes behind a soft surface,
+// so a glance says "this is a live call" without a word being written.
 //
-// Built on the approach the ElevenLabs open-source orb uses - a fragment shader
-// whose uniforms are targets that each state sets, eased toward rather than
-// snapped to, with the audio level feeding some of them. Nothing of theirs is
-// loaded or called: the shader, the easing and the state mapping below are
-// this product's own, and the thing stays self-contained with no dependency.
+// The presence itself is small on purpose. What carries the state is the light
+// around it: two fine rings that answer to the real audio, one slow arc for
+// the wait, and an ambient wash that lifts when there is something to hear.
+// Drawn in 2D rather than a shader, because at this size rings want to be
+// crisp and a noise blob only looks like mush.
+//
+// The ElevenLabs orb is the reference for the idea of an ambient presence and
+// for the shape of the code - states set targets, values ease toward them,
+// audio feeds some of them. Nothing of theirs is loaded, and this is not their
+// widget: no floating ball, no spinning, no particles.
 //
 // It has no state of its own. voice.state is the state machine; this reads it.
-// The levels are the real streams - the microphone going out, the model's audio
-// coming back - so when the orb moves it is because something was actually
-// said. Nothing here is on the connection path: the audio graph is built after
-// the fact, the loop runs only during a call, and a failure anywhere falls back
-// to a CSS orb that still breathes with the same measured level.
+// The levels are the two real streams, so when the light moves it is because
+// something was actually said.
+
+var TAU = Math.PI * 2;
 
 var orb = {
-  canvas: null, gl: null, prog: null, uniforms: null, raf: 0, started: 0,
-  ac: null, inNode: null, outNode: null, inBuf: null, outBuf: null,
-  listen: "", dead: false, css: null,
-  // What is drawn, and what it is heading for. Every value is eased, which is
-  // what makes connecting -> listening -> thinking -> speaking read as one
-  // continuous presence rather than four appearances.
-  val: { emerge: 0, energy: 0, churn: 0.16, swirl: 0.10, rim: 0.30 },
-  tgt: { emerge: 0, energy: 0, churn: 0.16, swirl: 0.10, rim: 0.30 }
+  canvas: null, ctx: null, size: 0, dpr: 1, raf: 0, started: 0, dead: false,
+  ac: null, inNode: null, outNode: null, inBuf: null, outBuf: null, listen: "",
+  // Eased, never snapped: that is what makes connecting, listening, thinking
+  // and speaking read as one presence changing its mind rather than four
+  // different pictures.
+  val: { emerge: 0, energy: 0, arc: 0, glow: 0.4 },
+  tgt: { emerge: 0, energy: 0, arc: 0, glow: 0.4 }
 };
 
-var ORB_VERT = [
-  "attribute vec2 p;",
-  "varying vec2 v;",
-  "void main(){ v = p; gl_Position = vec4(p, 0.0, 1.0); }"
-].join("\\n");
-
-var ORB_FRAG = [
-  "precision highp float;",
-  "varying vec2 v;",
-  "uniform float t, emerge, energy, churn, swirl, rim;",
-  // Value noise, four octaves. Cheap enough to be free at this size and smooth
-  // enough that the surface never looks like static.
-  "float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }",
-  "float n(vec2 p){",
-  "  vec2 i = floor(p), f = fract(p);",
-  "  vec2 u = f * f * (3.0 - 2.0 * f);",
-  "  return mix(mix(h(i), h(i + vec2(1.0, 0.0)), u.x),",
-  "             mix(h(i + vec2(0.0, 1.0)), h(i + vec2(1.0, 1.0)), u.x), u.y);",
-  "}",
-  "float fbm(vec2 p){",
-  "  float s = 0.0, a = 0.5;",
-  "  for (int k = 0; k < 4; k++) { s += a * n(p); p *= 2.03; a *= 0.5; }",
-  "  return s;",
-  "}",
-  "void main(){",
-  "  vec2 q = v;",
-  "  float r = length(q);",
-  "  float ang = atan(q.y, q.x);",
-  // Domain warp: the surface drifts rather than pulsing on the spot.
-  "  vec2 w = vec2(fbm(q * 2.0 + t * churn), fbm(q * 2.0 - t * churn + 5.2));",
-  "  float warp = fbm(q * 2.6 + w * 1.3 + vec2(t * churn * 0.6, -t * churn * 0.4));",
-  // The processing motion: a slow band turning around the orb. It is the one
-  // movement that owes nothing to audio, which is what makes thinking read as
-  // thinking rather than as quiet.
-  "  float band = sin(ang + t * swirl * 2.2 + warp * 2.0) * 0.5 + 0.5;",
-  "  float breathe = sin(t * 0.9) * 0.012;",
-  "  float radius = 0.58 + breathe + energy * 0.10 + (warp - 0.5) * 0.035",
-  "               + band * swirl * 0.030;",
-  // A hemisphere normal, so the thing has a near side and a far side. Without
-  // it the orb is a flat disc with a ring round it, which is a logo, not a
-  // presence.
-  "  float rn = clamp(r / max(radius, 0.001), 0.0, 1.0);",
-  "  float z = sqrt(max(0.0, 1.0 - rn * rn));",
-  "  float fres = pow(1.0 - z, 1.15);",
-  // Lit from inside rather than from a lamp. A matte sphere reads as an
-  // object; light coming out of it reads as something that is on.
-  "  float inner = smoothstep(0.98, 0.02, length(q - vec2(-0.07, 0.09)) / max(radius, 0.001));",
-  "  float lumin = inner * (0.40 + warp * 0.80 + energy * 0.35);",
-  // One ramp, three stops: the tracker's navy, its teal, its cyan.
-  "  vec3 core = vec3(0.012, 0.094, 0.157);",
-  "  vec3 mid  = vec3(0.043, 0.541, 0.525);",
-  "  vec3 lip  = vec3(0.208, 0.796, 0.894);",
-  "  vec3 col = mix(core, mid, clamp(lumin, 0.0, 1.0));",
-  "  col = mix(col, lip, clamp(pow(inner, 3.2) * (0.30 + energy * 0.55), 0.0, 1.0));",
-  "  col += mid * band * band * swirl * 0.16;",
-  // Darker at the limb, then the rim light laid over it: the two together are
-  // what make a flat circle look like a sphere.
-  "  col *= 0.46 + 0.54 * z;",
-  "  col += lip * fres * fres * (0.55 + rim * 0.85 + energy * 0.70);",
-  "  float body = smoothstep(radius + 0.012, radius - 0.035, r);",
-  "  float glow = exp(-max(r - radius, 0.0) * 8.0) * (0.17 + energy * 0.38 + rim * 0.26);",
-  "  float a = clamp(body + glow, 0.0, 1.0) * emerge;",
-  // Premultiplied, to match the blend mode the context was made with.
-  "  gl_FragColor = vec4((col * body + lip * glow * 0.85) * emerge, a);",
-  "}"
-].join("\\n");
-
-// Each state sets where the values are heading, and how much of the level they
-// take. "follow" names which stream the energy comes from; nothing means the
-// orb ignores audio, which is what thinking needs.
 function orbState(state){
-  var box = byId("wsOrb");
   var live = state !== "off";
-  if (box){
-    box.hidden = false;
-    box.classList.toggle("is-live", live);
+  var stage = byId("wsStage");
+  var chat = byId("wsChat");
+  if (stage){
+    if (live) stage.hidden = false;
+    stage.classList.toggle("is-live", live);
   }
-  var dot = byId("wsPresence");
-  // One presence at a time: the small dot steps aside while the orb is up.
-  if (dot) dot.classList.toggle("is-hidden", live);
+  // The conversation recedes rather than disappearing. It is still there,
+  // still scrolled where it was, just no longer the thing being looked at.
+  if (chat) chat.classList.toggle("is-voice", live);
 
   if (state === "connecting"){
     orb.listen = "";
-    orb.tgt = { emerge: 0.85, energy: 0.05, churn: 0.10, swirl: 0.05, rim: 0.22 };
+    orb.tgt = { emerge: 1, energy: 0.02, arc: 0, glow: 0.30 };
   } else if (state === "listening"){
     orb.listen = "in";
-    orb.tgt = { emerge: 1, energy: 0, churn: 0.14, swirl: 0.06, rim: 0.34 };
+    orb.tgt = { emerge: 1, energy: 0, arc: 0, glow: 0.46 };
   } else if (state === "thinking"){
+    // The one state with a movement of its own. There is no audio to answer
+    // to, and a presence that goes still during the wait reads as a call that
+    // has dropped.
     orb.listen = "";
-    orb.tgt = { emerge: 1, energy: 0.06, churn: 0.30, swirl: 0.95, rim: 0.16 };
+    orb.tgt = { emerge: 1, energy: 0.05, arc: 1, glow: 0.38 };
   } else if (state === "speaking"){
     orb.listen = "out";
-    orb.tgt = { emerge: 1, energy: 0, churn: 0.26, swirl: 0.05, rim: 0.62 };
+    orb.tgt = { emerge: 1, energy: 0, arc: 0, glow: 0.70 };
   } else {
     orb.listen = "";
-    orb.tgt = { emerge: 0, energy: 0, churn: 0.12, swirl: 0.05, rim: 0.20 };
+    orb.tgt = { emerge: 0, energy: 0, arc: 0, glow: 0.30 };
   }
-  // The visual is the status. The words exist for anyone who cannot see it.
+
+  var mute = byId("wsMuteBtn");
+  if (mute){
+    mute.classList.toggle("is-on", !!voice.muted);
+    mute.setAttribute("aria-pressed", voice.muted ? "true" : "false");
+    mute.title = voice.muted ? "Unmute" : "Mute";
+    mute.setAttribute("aria-label", mute.title);
+  }
+  // The light is the status. The words exist only for anyone who cannot see it.
   var said = byId("wsVoiceLive");
   if (said){
     said.textContent = state === "off" ? ""
@@ -1670,8 +1617,8 @@ function orbState(state){
   if (live) orbStart();
 }
 
-// The audio graph, built from the streams the call already has. Deferred off
-// the connection path on purpose: a call must never wait for a picture.
+// The audio graph, from the streams the call already has. Deferred off the
+// connection path on purpose: a call must never wait for a picture.
 function orbListen(stream, which){
   if (!stream) return;
   var Ctx = window.AudioContext || window.webkitAudioContext;
@@ -1708,117 +1655,128 @@ function orbLevel(){
 }
 
 function orbInit(){
-  if (orb.dead || orb.gl || orb.css) return;
+  if (orb.dead || orb.ctx) return;
   var canvas = byId("wsOrbCanvas");
   if (!canvas || typeof canvas.getContext !== "function"){ orb.dead = true; return; }
-  var gl = null;
-  try{
-    gl = canvas.getContext("webgl", { alpha: true, antialias: false, depth: false,
-      stencil: false, premultipliedAlpha: true, powerPreference: "low-power" });
-  } catch (e) {}
-  if (!gl){ orbCssFallback(); return; }
-
-  var build = function(type, source){
-    var sh = gl.createShader(type);
-    gl.shaderSource(sh, source);
-    gl.compileShader(sh);
-    return gl.getShaderParameter(sh, gl.COMPILE_STATUS) ? sh : null;
-  };
-  var vs = build(gl.VERTEX_SHADER, ORB_VERT), fs = build(gl.FRAGMENT_SHADER, ORB_FRAG);
-  if (!vs || !fs){ orbCssFallback(); return; }
-  var prog = gl.createProgram();
-  gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)){ orbCssFallback(); return; }
-
-  gl.useProgram(prog);
-  var buffer = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
-  var loc = gl.getAttribLocation(prog, "p");
-  gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-
-  orb.canvas = canvas; orb.gl = gl; orb.prog = prog;
-  orb.uniforms = {};
-  ["t","emerge","energy","churn","swirl","rim"].forEach(function(name){
-    orb.uniforms[name] = gl.getUniformLocation(prog, name);
-  });
+  var ctx = null;
+  try { ctx = canvas.getContext("2d"); } catch (e) {}
+  // Without a canvas the stage still works: the surface, the receded
+  // conversation and the controls are all that is strictly needed.
+  if (!ctx){ orb.dead = true; return; }
+  orb.canvas = canvas; orb.ctx = ctx;
   orbSize();
-  // The context can be lost on a laptop waking or a GPU reset. Dropping to the
-  // CSS orb is better than a black square where the presence was.
-  canvas.addEventListener("webglcontextlost", function(event){
-    event.preventDefault();
-    orb.gl = null;
-    orbCssFallback();
-  });
-}
-
-function orbCssFallback(){
-  orb.gl = null;
-  var canvas = byId("wsOrbCanvas");
-  if (canvas) canvas.hidden = true;
-  orb.css = byId("wsOrbCss");
-  if (orb.css) orb.css.hidden = false;
 }
 
 function orbSize(){
-  if (!orb.gl || !orb.canvas) return;
-  // Capped: the orb is small and more pixels buy nothing anyone can see.
+  if (!orb.ctx || !orb.canvas) return;
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
-  var side = Math.round((orb.canvas.clientWidth || 188) * dpr);
-  if (orb.canvas.width === side) return;
-  orb.canvas.width = side; orb.canvas.height = side;
-  orb.gl.viewport(0, 0, side, side);
+  var side = orb.canvas.clientWidth || 180;
+  if (orb.size === side && orb.dpr === dpr) return;
+  orb.size = side; orb.dpr = dpr;
+  orb.canvas.width = Math.round(side * dpr);
+  orb.canvas.height = Math.round(side * dpr);
+}
+
+function orbRing(ctx, cx, cy, r, width, alpha){
+  if (alpha <= 0.002 || r <= 0) return;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, TAU);
+  ctx.strokeStyle = "rgba(11,138,134," + alpha.toFixed(3) + ")";
+  ctx.lineWidth = width;
+  ctx.stroke();
+}
+
+function orbDraw(t){
+  var ctx = orb.ctx;
+  if (!ctx) return;
+  orbSize();
+  var size = orb.size, v = orb.val;
+  ctx.setTransform(orb.dpr, 0, 0, orb.dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
+  if (v.emerge <= 0.004) return;
+
+  var cx = size / 2, cy = size / 2;
+  // Almost still. One slow breath, not a pulse.
+  var breath = Math.sin(t * 0.55) * 1.3;
+  var lvl = v.energy;
+  // While the presence is arriving the rings sit wide and faint, and draw in
+  // as it settles. That is the whole of the connecting animation.
+  var spread = 1 + (1 - v.emerge) * 0.55;
+
+  var halo = ctx.createRadialGradient(cx, cy, 6, cx, cy, size * 0.47);
+  halo.addColorStop(0, "rgba(11,138,134," + ((0.085 + v.glow * 0.055 + lvl * 0.10) * v.emerge).toFixed(3) + ")");
+  halo.addColorStop(0.55, "rgba(11,138,134," + ((0.03 + lvl * 0.04) * v.emerge).toFixed(3) + ")");
+  halo.addColorStop(1, "rgba(11,138,134,0)");
+  ctx.fillStyle = halo;
+  ctx.beginPath(); ctx.arc(cx, cy, size * 0.47, 0, TAU); ctx.fill();
+
+  var inner = (41 + breath + lvl * 15) * spread;
+  var outer = (59 + breath * 0.6 + lvl * 9) * spread;
+  orbRing(ctx, cx, cy, outer, 1, (0.085 + lvl * 0.15) * v.emerge);
+  orbRing(ctx, cx, cy, inner, 1.4, (0.185 + lvl * 0.34) * v.emerge);
+
+  // The wait: one arc travelling the inner ring, slowly, with a tail. Nothing
+  // else moves while it does.
+  if (v.arc > 0.01){
+    var head = t * 1.15;
+    ctx.lineCap = "round";
+    for (var i = 0; i < 3; i++){
+      var tail = 0.46 - i * 0.13;
+      ctx.beginPath();
+      ctx.arc(cx, cy, inner, head - tail, head - (i === 0 ? 0 : tail - 0.13));
+      ctx.strokeStyle = "rgba(31,167,180," + ((0.30 - i * 0.09) * v.arc * v.emerge).toFixed(3) + ")";
+      ctx.lineWidth = 1.7;
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
+  }
+
+  // The presence. Small, deep, lit slightly from the upper left so it reads
+  // as an object with a surface rather than a disc of colour.
+  var cr = 23 + breath * 0.35 + lvl * 3.5;
+  // Lit from within rather than from a lamp: the offset is slight, so it
+  // reads as something that is on and not as a polished marble.
+  var core = ctx.createRadialGradient(cx - cr * 0.16, cy - cr * 0.18, cr * 0.06, cx, cy, cr);
+  var lift = v.glow * 0.18 + lvl * 0.3;
+  core.addColorStop(0, "rgba(" + Math.round(22 + lift * 52) + "," + Math.round(138 + lift * 48)
+    + "," + Math.round(144 + lift * 48) + "," + v.emerge.toFixed(3) + ")");
+  core.addColorStop(0.55, "rgba(12,98,108," + (0.97 * v.emerge).toFixed(3) + ")");
+  core.addColorStop(1, "rgba(6,52,74," + (0.98 * v.emerge).toFixed(3) + ")");
+  ctx.fillStyle = core;
+  ctx.beginPath(); ctx.arc(cx, cy, cr, 0, TAU); ctx.fill();
+
+  // A hairline on the edge, so the presence has a definite boundary against
+  // the surface instead of fading into it.
+  ctx.beginPath();
+  ctx.arc(cx, cy, cr, 0, TAU);
+  ctx.strokeStyle = "rgba(31,167,180," + ((0.34 + lvl * 0.4) * v.emerge).toFixed(3) + ")";
+  ctx.lineWidth = 1;
+  ctx.stroke();
 }
 
 function orbFrame(now){
   orb.raf = 0;
   if (!orb.started) orb.started = now;
   var t = (now - orb.started) / 1000;
+  var v = orb.val, tgt = orb.tgt;
 
   var level = orbLevel();
-  var tgt = orb.tgt, val = orb.val;
-  // Energy rises fast and falls slowly, so a word reads as one movement rather
-  // than as a flicker per syllable.
-  if (level !== null){
-    var want = level;
-    val.energy += (want - val.energy) * (want > val.energy ? 0.34 : 0.08);
-  } else {
-    val.energy += (tgt.energy - val.energy) * 0.07;
-  }
-  val.emerge += (tgt.emerge - val.emerge) * (tgt.emerge > val.emerge ? 0.07 : 0.10);
-  val.churn  += (tgt.churn  - val.churn)  * 0.045;
-  val.swirl  += (tgt.swirl  - val.swirl)  * 0.045;
-  val.rim    += (tgt.rim    - val.rim)    * 0.06;
+  // Rises quickly and falls slowly, so a word reads as one movement rather
+  // than a flicker per syllable.
+  if (level !== null) v.energy += (level - v.energy) * (level > v.energy ? 0.32 : 0.075);
+  else v.energy += (tgt.energy - v.energy) * 0.07;
+  v.emerge += (tgt.emerge - v.emerge) * (tgt.emerge > v.emerge ? 0.065 : 0.085);
+  v.arc    += (tgt.arc    - v.arc)    * 0.055;
+  v.glow   += (tgt.glow   - v.glow)   * 0.05;
 
-  if (orb.gl && orb.uniforms){
-    orbSize();
-    var gl = orb.gl, u = orb.uniforms;
-    gl.uniform1f(u.t, t);
-    gl.uniform1f(u.emerge, val.emerge);
-    gl.uniform1f(u.energy, val.energy);
-    gl.uniform1f(u.churn, val.churn);
-    gl.uniform1f(u.swirl, val.swirl);
-    gl.uniform1f(u.rim, val.rim);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-  } else if (orb.css){
-    // The same measured level, drawn with what is left.
-    var scale = 0.86 + val.energy * 0.17 + Math.sin(t * 0.9) * 0.012;
-    orb.css.style.transform = "scale(" + scale.toFixed(3) + ")";
-    orb.css.style.opacity = val.emerge.toFixed(3);
-  }
+  orbDraw(t);
 
-  // Keep going while there is a call, and for the moment it takes to fade out.
-  if (voice.state !== "off" || val.emerge > 0.01){
+  if (voice.state !== "off" || v.emerge > 0.01){
     orb.raf = requestAnimationFrame(orbFrame);
   } else {
     orb.started = 0;
-    var box = byId("wsOrb");
-    if (box) box.hidden = true;
+    var stage = byId("wsStage");
+    if (stage) stage.hidden = true;
   }
 }
 
@@ -1831,16 +1789,15 @@ function orbStart(){
 }
 
 function orbStop(){
-  // The audio graph goes with the call; the loop keeps running until the orb
-  // has faded, which is what makes ending a call feel like one movement back
-  // to the conversation rather than a cut.
+  // The audio graph goes with the call. The loop keeps running until the
+  // presence has dissolved, which is what makes ending one movement back to
+  // the conversation rather than a cut.
   orb.inNode = null; orb.outNode = null; orb.inBuf = null; orb.outBuf = null;
   orb.listen = "";
-  if (orb.ac && orb.ac.state === "running" && orb.ac.suspend) {
+  if (orb.ac && orb.ac.state === "running" && orb.ac.suspend){
     try { orb.ac.suspend(); } catch (e) {}
   }
 }
-
 
 function setVoiceState(next,detail){
   voice.state=next;
@@ -1966,7 +1923,7 @@ function wireVoiceChannel(channel,session){
       // Interruption. Anything half-said is abandoned rather than stitched
       // onto whatever comes next.
       voice.speech="";
-      if(voice.state!=="off")setVoiceState("listening","Listening");
+      if(voice.state!=="off")setVoiceState("listening");
     }
     if(type==="input_audio_buffer.speech_stopped"&&voice.state==="listening"){
       setVoiceState("thinking");
@@ -2244,7 +2201,12 @@ document.addEventListener("click",function(event){
   if(closest("[data-ws-go]")){wsDownload();return}
   var tab=closest("[data-ws-tab]");
   if(tab){ws.tab=tab.dataset.wsTab;renderAsk();return}
-  if(closest("#wsMic")){startVoice();return}
+  if(closest("#wsMic")||closest("#wsEndBtn")){startVoice();return}
+  if(closest("#wsMuteBtn")){
+    setVoiceMuted(!voice.muted);
+    orbState(voice.state);
+    return;
+  }
   if(closest("#wsNew")){
     ws.turns=[];ws.views=[];ws.open=[];ws.subject=null;ws.thread=0;ws.activity=[];ws.tab="chat";
     askSave();renderAsk();return;

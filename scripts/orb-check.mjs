@@ -58,31 +58,35 @@ await sleep(600);
 const fail = (why) => { process.exitCode = 1; console.log("FAIL " + why); };
 const ok = (what) => console.log("ok   " + what);
 const seen = {};
-if (await run("!!document.createElement('canvas').getContext('webgl')")) ok("WebGL is available here");
-else console.log("note WebGL is unavailable; the CSS presence is what will be checked");
+if (!(await run("!!document.createElement('canvas').getContext('2d')")))
+  fail("no 2D canvas, so nothing can be drawn at all");
 
 const shot = async (name) => {
-  const clip = await run(`(() => { const b=document.getElementById('wsOrb').getBoundingClientRect();
+  // The stage is the unit now, not a cropped ball: what matters is how the
+  // whole left panel reads.
+  const clip = await run(`(() => { const b=document.querySelector('.wsp-chat').getBoundingClientRect();
     return JSON.stringify({x:b.x,y:b.y,width:b.width,height:b.height}); })()`);
   const box = JSON.parse(clip);
-  if (box.height < 10) { console.log("  (band closed, nothing to capture)"); return; }
   const img = await send("Page.captureScreenshot",
-    { format: "png", clip: { ...box, scale: 2 } });
+    { format: "png", clip: { ...box, scale: 1.5 } });
   writeFileSync(`${process.env.OUT}/orb-${name}.png`, Buffer.from(img.data, "base64"));
 };
 
 for (const state of ["connecting", "listening", "thinking", "speaking"]) {
   await run(`setVoiceState(${JSON.stringify(state)}); 1`);
   await sleep(state === "connecting" ? 900 : 1400);
-  const info = await run(`JSON.stringify({ state: voice.state, webgl: !!orb.gl,
-    fallback: !!orb.css, looping: orb.raf !== 0, listening: orb.listen,
+  const info = await run(`JSON.stringify({ state: voice.state, drawing: !!orb.ctx,
+    looping: orb.raf !== 0, listening: orb.listen,
+    staged: document.getElementById('wsStage').classList.contains('is-live'),
+    receded: document.getElementById('wsChat').classList.contains('is-voice'),
     val: { emerge:+orb.val.emerge.toFixed(2), energy:+orb.val.energy.toFixed(2),
-           churn:+orb.val.churn.toFixed(2), swirl:+orb.val.swirl.toFixed(2),
-           rim:+orb.val.rim.toFixed(2) } })`);
+           arc:+orb.val.arc.toFixed(2), glow:+orb.val.glow.toFixed(2) } })`);
   const got = JSON.parse(info);
   seen[state] = got;
-  if (!got.webgl && !got.fallback) fail(state + ": nothing is drawing");
+  if (!got.drawing) fail(state + ": nothing is drawing");
   if (!got.looping) fail(state + ": the loop is not running during a call");
+  if (!got.staged) fail(state + ": the stage is not up during a call");
+  if (!got.receded) fail(state + ": the conversation has not receded");
   console.log("ok   " + state.padEnd(11) + info);
   await shot(state);
 }
@@ -123,11 +127,13 @@ else ok("a muted microphone reads as silence");
 await run(`setVoiceState("off"); 1`);
 await sleep(1400);
 const ended = JSON.parse(await run(`JSON.stringify({ emerge:+orb.val.emerge.toFixed(3),
-  looping: orb.raf !== 0, bandHidden: document.getElementById('wsOrb').hidden,
-  live: document.getElementById('wsOrb').classList.contains('is-live') })`));
+  looping: orb.raf !== 0, bandHidden: document.getElementById('wsStage').hidden,
+  live: document.getElementById('wsStage').classList.contains('is-live'),
+  restored: !document.getElementById('wsChat').classList.contains('is-voice') })`));
 if (ended.emerge > 0.05) fail("the presence did not fade out");
 else if (ended.looping) fail("the loop keeps running after the call: it must cost nothing when idle");
-else if (!ended.bandHidden || ended.live) fail("the band is still open after the call");
+else if (!ended.bandHidden || ended.live) fail("the stage is still up after the call");
+else if (!ended.restored) fail("the conversation did not come back out of recession");
 else ok("ending a call returns to the conversation and stops costing anything");
 
 // It must never be the slow part of a call.
@@ -146,6 +152,37 @@ const cost = JSON.parse(await run(`(async () => {
 })()`));
 if (cost.worst > 6) fail("a frame costs " + cost.worst + "ms, which is too much of a budget");
 else ok("a frame costs " + cost.median + "ms, worst " + cost.worst + "ms");
+
+// The whole arc, in order, as a person would live it. What is being checked
+// is continuity: that this is one environment changing, and never a flicker
+// back to the chat or a presence that drops out between states.
+// A conversation to recede. Without one there is nothing to check is still
+// there, and "reduced, not removed" is the whole point of the arrangement.
+await run(`(() => { ws.turns = [{ question:"what slipped?", state:"done",
+  answer:"Four projects.", spoken:false }]; renderAsk(); return 1; })()`);
+const walk = ["off", "connecting", "listening", "speaking", "thinking", "speaking", "listening", "off"];
+const trail = [];
+for (let i = 0; i < walk.length; i++){
+  await run(`setVoiceState(${JSON.stringify(walk[i])}); 1`);
+  // Sampled across the easing, not after it: a cut would show up here.
+  for (let f = 0; f < 5; f++){
+    await sleep(90);
+    trail.push(JSON.parse(await run(`JSON.stringify({ step:${i}, state:voice.state,
+      emerge:+orb.val.emerge.toFixed(3),
+      staged:document.getElementById('wsStage').classList.contains('is-live'),
+      receded:document.getElementById('wsChat').classList.contains('is-voice'),
+      threadThere:document.getElementById('wsThread').children.length > 0 })`)));
+  }
+}
+const mid = trail.filter((x) => x.step > 0 && x.step < walk.length - 1);
+if (mid.some((x) => !x.staged)) fail("the stage dropped out part way through the call");
+else if (mid.some((x) => !x.receded)) fail("the conversation came back mid-call");
+else if (mid.some((x) => x.emerge < 0.3)) fail("the presence dissolved between states");
+else if (trail.some((x) => !x.threadThere)) fail("the conversation was taken away, not reduced");
+else ok("text to connecting to speaking to thinking and back is one continuous environment");
+const last = trail[trail.length - 1];
+if (last.staged || last.receded) fail("the call did not return to the text conversation");
+else ok("and it ends back in the text conversation");
 
 console.log(process.exitCode ? "\nVoice presence check FAILED." : "\nVoice presence check passed.");
 ws.close();
