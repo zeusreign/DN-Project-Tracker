@@ -2100,13 +2100,15 @@ for (const [parent, child] of [
   await browser.settle();
   assert.equal(browser.byId("wsInput").closest("[data-pane]").hidden, false,
     "the workspace pane is shown when its nav button is used");
-  assert.match(browser.text("pageTitle"), /Ask the Tracker/);
+  assert.match(browser.text("pageTitle"), /DNC Tracker/);
 
-  // The resting state offers questions. An empty box with a cursor in it tells
-  // a reader nothing about what this will answer.
-  const opening = browser.byId("wsSpace");
-  assert.ok(opening.querySelectorAll("[data-ws-ask]").length > 0,
-    "the workspace opens with questions rather than an empty box");
+  // The resting state offers questions, beside the box they would be typed
+  // into. An empty box with a cursor in it tells a reader nothing about what
+  // this will answer.
+  assert.ok(browser.byId("wsStart").querySelectorAll("[data-ws-ask]").length > 0,
+    "questions to start with sit next to the composer");
+  assert.equal(browser.byId("wsSpace").querySelectorAll(".wscard").length, 0,
+    "and nothing in the workspace is pretending to be a result");
 
   // Ask a question the way a person would.
   browser.type("wsInput", "which projects slipped more than 30 days?");
@@ -2146,13 +2148,13 @@ for (const [parent, child] of [
   }
   assert.ok(space.querySelectorAll(".wscard").length === 1,
     "exactly one card is in focus, and no card is nested inside another");
-  assert.ok(browser.text("wsSubject").trim().length > 0,
-    "the workspace says what is being looked at");
+  assert.ok(browser.byId("wsSpace").querySelectorAll(".wscard-head").length === 1,
+    "the result names itself at the top of the workspace");
 
-  // The conversation offers a way back to the result it produced, which is a
-  // link into the workspace rather than a copy of the data.
-  assert.ok(thread.querySelectorAll("[data-ws-show]").length > 0,
-    "each answer points at the view it put on screen");
+  // The newest result is already at the top of the workspace, so the newest
+  // answer carries no link to it. Only an older turn does.
+  assert.equal(thread.querySelectorAll(".wsalink").length, 0,
+    "a link pointing at what is already in front of the reader is noise");
 
   // The transcript is stored for this user, so a refresh keeps it.
   assert.equal(browser.sessionStorage.length, 1, "the transcript is kept in sessionStorage");
@@ -2163,24 +2165,25 @@ for (const [parent, child] of [
   // Progressive disclosure. A narrowing question refines what is on screen: the
   // previous result collapses to a strip above the new one rather than being
   // thrown away, and the subject grows rather than being replaced.
-  const firstTitle = browser.byId("wsSubject").textContent;
   browser.type("wsInput", "what are the budgets on those?");
   await browser.fire("wsForm", "submit").results;
   await browser.settle();
 
-  assert.ok(browser.byId("wsSpace").querySelectorAll(".wsstrip").length >= 1,
-    "the previous result collapses to a strip rather than disappearing");
-  assert.ok(browser.byId("wsSubject").textContent.length > firstTitle.length,
-    "the subject grows as the question follows on, rather than being replaced");
+  assert.ok(browser.byId("wsSpace").querySelectorAll(".wsold").length >= 1,
+    "the previous result collapses to a line rather than disappearing");
+  assert.ok(browser.byId("wsSpace").querySelectorAll(".is-follow").length >= 1,
+    "and the new one is drawn as following on from it");
+  assert.ok(/^\s*<article class="wscard/.test(browser.byId("wsSpace").innerHTML),
+    "with the newest result first");
   assert.ok(browser.byId("wsSpace").querySelectorAll(".wsmets").length > 0,
     "a budget question is shown as a budget component, not as a plain list");
 
-  // And the strip goes back. Nothing in the thread is lost by asking again.
-  const strip = browser.byId("wsSpace").querySelector(".wsstrip");
-  await browser.fire(strip, "click").results;
+  // And the earlier one opens again. Nothing is lost by asking another question.
+  const earlier = browser.byId("wsSpace").querySelector(".wsold");
+  await browser.fire(earlier, "click").results;
   await browser.settle();
-  assert.ok(browser.byId("wsSpace").querySelectorAll(".wsrow-name").length > 0,
-    "an earlier result can be brought back into focus");
+  assert.equal(browser.byId("wsSpace").querySelectorAll(".wscard").length, 2,
+    "an earlier result expands in place, beneath the newest");
 
   // Opening a project from a row is itself a question: it refines the subject
   // and stays in the workspace. It goes through the same scoped tool the voice
@@ -2204,22 +2207,19 @@ for (const [parent, child] of [
   assert.ok(pin, "anything in focus can be pinned");
   await browser.fire(pin, "click").results;
   await browser.settle();
-  assert.match(browser.byId("wsBriefSlot").textContent, /1 item/,
-    "pinning puts it in the briefing");
+  assert.match(browser.byId("wsSavedSlot").textContent, /Saved\s*1/,
+    "pinning keeps it, and says so without a bar across the screen");
 
   // An answer that finds nothing says so, and leaves the workspace alone. What
   // is already on screen is usually what the next question is about.
   const cardsBefore = browser.byId("wsSpace").querySelectorAll(".wscard").length;
-  const subjectBefore = browser.text("wsSubject");
   browser.type("wsInput", "a question that matches nothing at all");
   await browser.fire("wsForm", "submit").results;
   await browser.settle();
   assert.match(browser.byId("wsThread").textContent, /nothing at all/,
     "the question is in the conversation");
   assert.equal(browser.byId("wsSpace").querySelectorAll(".wscard").length, cardsBefore,
-    "and the card that was on screen is still on screen");
-  assert.equal(browser.text("wsSubject"), subjectBefore,
-    "an empty answer does not move the subject");
+    "and an empty result never joins the stack: it is not knowledge to keep");
 
   // Voice is one control on the same screen, not a second mode with its own
   // view. The harness has no WebRTC and no microphone, which is exactly what a
@@ -2254,7 +2254,7 @@ for (const [parent, child] of [
     "and the stored transcript is removed, not left for the next person");
 
 
-  console.log("Workspace UI: pane, conversation/workspace split, progressive disclosure, scoped rows, briefing and sign-out clearing covered.");
+  console.log("Workspace UI: the two surfaces, an accumulating stack, scoped rows, saving a result and sign-out clearing covered.");
 }
 
 console.log("Smoke test passed: source data, KPIs, development workflow, history, formulas, export, secure roles, directory, and PDF guide.");

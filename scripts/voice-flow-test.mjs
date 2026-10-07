@@ -146,6 +146,7 @@ win.RTCPeerConnection = FakePeer;
 Object.defineProperty(globalThis, "RTCPeerConnection", { configurable:true, value:FakePeer });
 
 const say = (type, extra={}) => channel.emit("message", { data: JSON.stringify({ type, ...extra }) });
+const voice_reset = () => { say("input_audio_buffer.speech_stopped"); };
 let callSeq = 0;
 const toolCall = async (name, args) => {
   callSeq += 1;
@@ -178,10 +179,14 @@ await check("what the listener said appears as their own words", () =>
 
 await check("a cough is not a question", async () => {
   const before = thread(".wsturn").length;
-  say("conversation.item.input_audio_transcription.completed", { transcript:"." });
-  await settle();
-  assert.equal(thread(".wsturn").length, before, "punctuation is not somebody speaking");
+  for (const noise of [".", " ", "?", "a", "uh", "- -"]) {
+    say("conversation.item.input_audio_transcription.completed", { transcript: noise });
+    await settle();
+  }
+  assert.equal(thread(".wsturn").length, before,
+    "a door, a cough or a half-heard word across a room is not a question");
 });
+
 
 const projects = database.prepare(
   "SELECT id, name FROM projects WHERE archived_at IS NULL LIMIT 3").all();
@@ -210,9 +215,11 @@ await toolCall("budget_analysis", {});
 await toolCall("schedule_analysis", {});
 
 await check("several tools inside one turn each put their result up as they land", () => {
-  assert.equal(space(".wscard").length, cardsAfterFirst, "one card is in focus at a time");
-  assert.ok(space(".wsstrip").length >= 2,
-    "and the earlier ones collapse behind it rather than being lost");
+  assert.equal(space(".wscard").length, cardsAfterFirst, "the newest is the one open");
+  assert.ok(space(".wsold").length >= 2,
+    "and the earlier ones collapse below it rather than being lost");
+  assert.ok(/^\s*<article class="wscard/.test(browser.byId("wsSpace").innerHTML),
+    "with the latest result at the top");
 });
 
 await check("the work in progress is reported quietly, not as a loading screen", () => {
@@ -249,13 +256,64 @@ await check("one spoken turn produced one turn in the conversation, not four", (
   assert.equal(spoken.length, 1, "four tool calls, one question, one answer");
 });
 
-await check("the answer points at the view it put on screen", () =>
-  assert.ok(thread("[data-ws-show]").length >= 1));
+await check("the answer does not link to a result already at the top of the workspace", () =>
+  assert.equal(thread(".wsalink").length, 0,
+    "the spoken answer and its result are both the newest thing on screen"));
 
 // Interruption.
 say("input_audio_buffer.speech_started"); await settle();
 await check("speaking over the assistant returns the call to listening", () =>
   assert.equal(presence(), "listening"));
+
+await check("but a short real question is", async () => {
+  const before = thread(".wsturn").length;
+  say("conversation.item.input_audio_transcription.completed", { transcript:"and Gaming?" });
+  await settle();
+  assert.equal(thread(".wsturn").length, before + 1,
+    "the guard must not swallow the way people actually narrow a question");
+});
+// Answer it, so the next case starts from a conversation with nothing left open.
+say("response.created");
+say("response.output_audio_transcript.delta", { delta:"Thirty in Gaming." });
+say("response.done"); await settle();
+
+// Two things that only show up in a real call, both of which lost an answer.
+await check("speaking over the assistant abandons what it had half said", async () => {
+  voice_reset();
+  say("response.created"); await settle();
+  say("response.output_audio_transcript.delta", { delta:"Abandoned half sentence" }); await settle();
+  say("input_audio_buffer.speech_started"); await settle();
+  say("conversation.item.input_audio_transcription.completed",
+    { transcript:"actually, show me Patina instead" });
+  await settle();
+  say("response.output_audio_transcript.delta", { delta:"Sixteen in Patina." }); await settle();
+  say("response.done"); await settle();
+  const text = browser.byId("wsThread").textContent;
+  assert.ok(!text.includes("Abandoned half"),
+    "half a cancelled sentence must not be stitched onto the next answer");
+  assert.match(text, /Sixteen in Patina\./);
+});
+
+await check("an answer still reaches the conversation when nothing was transcribed", async () => {
+  voice_reset();
+  const before = thread(".wsturn").length;
+  // No transcription event at all: the service can answer without ever
+  // telling us what the listener said.
+  await toolCall("find_projects", { unit:"Gaming" });
+  say("response.created"); await settle();
+  say("response.done"); await settle();
+  assert.equal(thread(".wsturn").length, before + 1,
+    "the answer belongs in the conversation whether or not we caught the question");
+  assert.ok(!/\(answered on screen\)/.test(browser.byId("wsThread").textContent),
+    "and it is the line that was spoken, not a placeholder admitting we missed it");
+});
+
+await check("and the conversation survives the call ending", () =>
+  assert.match(browser.byId("wsThread").textContent, /show me the projects at central city/));
+
+await check("the workspace survives it too, because it is not part of the call", () =>
+  assert.equal(space(".wscard").length, 1));
+
 
 // A clash over who starts the next response is not a reason to end a call.
 const before = presence();
@@ -272,12 +330,6 @@ await check("a real error ends the call and says why", async () => {
 });
 
 await check("ending a call releases the microphone", () => assert.equal(track.stopped, true));
-
-await check("and the conversation survives the call ending", () =>
-  assert.match(browser.byId("wsThread").textContent, /show me the projects at central city/));
-
-await check("the workspace survives it too, because it is not part of the call", () =>
-  assert.equal(space(".wscard").length, 1));
 
 console.log(`\n${n} checks passed.`);
 if (!process.exitCode) {

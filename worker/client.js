@@ -1,7 +1,7 @@
 import { ENHANCED_CLIENT } from "./enhanced.js";
 export const CLIENT = `
 var state={projects:[],summary:{},updates:[],me:null,csrf:null,preset:"progress",sortKey:"source_sort_order",sortDir:"asc",devSortKey:"source_sort_order",devSortDir:"asc",activityId:null,unitScope:"All",adminUsers:[],adminAudit:[],adminPage:1,adminLoginEvents:[],loginPage:1,kpiDragKey:null,kpiDragged:false};
-var titles={portfolio:["Portfolio","Leadership summary by business unit"],projects:["Projects","Project activity, cost and schedule"],development:["Development Pipeline","Design & Development requests, estimates and promotion workflow"],cost:["Cost Control","Budgets, forecasts and variances"],risk:["Risk Register","All projects and all recorded risk levels"],admin:["Admin","User directory, roles and audit history"],help:["Help & User Guide","Quick reference and complete PDF instructions"],ask:["Ask the Tracker","A conversation with your project portfolio"]};
+var titles={portfolio:["Portfolio","Leadership summary by business unit"],projects:["Projects","Project activity, cost and schedule"],development:["Development Pipeline","Design & Development requests, estimates and promotion workflow"],cost:["Cost Control","Budgets, forecasts and variances"],risk:["Risk Register","All projects and all recorded risk levels"],admin:["Admin","User directory, roles and audit history"],help:["Help & User Guide","Quick reference and complete PDF instructions"],ask:["DNC Tracker","Ask anything about the projects you can see"]};
 var money=new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 var colors=["#087db5","#13a6c8","#008f78","#7ac143","#f2b134","#7357a6"];
 function esc(v){return String(v==null?"":v).replace(/[&<>\"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[c]})}
@@ -748,19 +748,22 @@ load(true).catch(function(e){byId("loading").innerHTML="<strong>Unable to load t
 
 // --- The conversational project-analysis workspace ---------------------------
 // Two surfaces, one state. The conversation is how a question is asked; the
-// workspace is where the answer lives. Nothing structured is ever rendered into
-// the conversation - a list, a figure or a comparison goes to the workspace as
-// a View, and the conversation keeps the sentence a colleague would say while
-// pointing at it.
+// workspace is where the answer lives and stays. Nothing structured is ever
+// rendered into the conversation - a list, a figure or a comparison goes to the
+// workspace as a View, and the conversation keeps the sentence a colleague
+// would say while pointing at it.
+//
+// The workspace accumulates. The newest result sits at the top, expanded;
+// everything before it stays below, collapsed to a line, in the order it was
+// asked. A question that follows on is indented under the one it narrows, so
+// the column reads as an investigation rather than as a series of searches.
 //
 // Both input paths produce the same thing. A typed question goes to /ask, where
 // the model writes SQL; a spoken one has the realtime model call a data tool
-// through /tool. Either way the worker returns a View, and the workspace does
-// not know or care which arrived.
+// through /tool. Either way the worker returns a View.
 //
-// The transcript and the pins live in sessionStorage only: they survive a
-// refresh, die with the tab, and are never written to the database. Keyed by
-// the signed-in address, because this runs on shared machines.
+// Saved results and the transcript live in sessionStorage only: they survive a
+// refresh, die with the tab, and are never written to the database.
 
 var WS_OPENERS=[
   "Which projects are over budget?",
@@ -769,23 +772,45 @@ var WS_OPENERS=[
   "What is turning over this quarter?"
 ];
 
+// What is worth asking next, given what is on screen. These are real actions -
+// each one asks a question - which is why they are offered where an empty
+// workspace would otherwise sit.
+var WS_NEXT={
+  figure:["Break that down by business unit","Which of those are over budget?","What is turning over this quarter?"],
+  project_list:["Which of those are over budget?","What are their turnover dates?","Which of those are high risk?"],
+  budget_variance:["Which of those are running late?","Show the largest overrun","Which of those are high risk?"],
+  budget_summary:["Which of those are running late?","Show the largest overrun"],
+  schedule:["Which of those are over budget?","What slipped the most?"],
+  risk_summary:["Show only the high risk ones","Which of those are over budget?"],
+  risk_list:["Which of those are over budget?","What are their turnover dates?"],
+  project_detail:["Compare it with the previous period","Show others at the same venue"],
+  change_comparison:["Show the full record","What else changed this period?"],
+  project_comparison:["Which of those is furthest behind?"],
+  group:["Show the largest group","Which of those are over budget?"],
+  timeline:["Compare it with the previous period"]
+};
+
 var ws={
   turns:[],
   views:[],
-  focus:-1,
+  open:[],
   subject:null,
-  pins:[],
+  saved:[],
   thread:0,
   activity:[],
   seq:0,
   busy:false,
-  briefOpen:false
+  panel:false,
+  format:"pdf",
+  detail:"summary",
+  picked:[],
+  tab:"chat"
 };
 
 function askStorageKey(){return state.me&&state.me.email?"dn-dc-ask:"+state.me.email:null}
 
 function askLoad(){
-  ws.turns=[];ws.views=[];ws.focus=-1;ws.subject=null;ws.pins=[];ws.thread=0;ws.seq=0;
+  ws.turns=[];ws.views=[];ws.open=[];ws.subject=null;ws.saved=[];ws.thread=0;ws.seq=0;
   var key=askStorageKey();
   if(!key)return;
   try{
@@ -793,9 +818,9 @@ function askLoad(){
     if(!saved||!saved.turns)return;
     ws.turns=saved.turns||[];
     ws.views=saved.views||[];
-    ws.focus=typeof saved.focus==="number"?saved.focus:ws.views.length-1;
+    ws.open=saved.open||[];
     ws.subject=saved.subject||null;
-    ws.pins=saved.pins||[];
+    ws.saved=saved.saved||[];
     ws.thread=saved.thread||0;
     ws.seq=saved.seq||ws.views.length;
   }catch(e){}
@@ -806,8 +831,8 @@ function askSave(){
   if(!key)return;
   try{
     sessionStorage.setItem(key,JSON.stringify({
-      turns:ws.turns,views:ws.views,focus:ws.focus,
-      subject:ws.subject,pins:ws.pins,thread:ws.thread,seq:ws.seq
+      turns:ws.turns,views:ws.views,open:ws.open,
+      subject:ws.subject,saved:ws.saved,thread:ws.thread,seq:ws.seq
     }));
   }catch(e){}
 }
@@ -824,13 +849,31 @@ function askForget(){
     }
     drop.forEach(function(k){sessionStorage.removeItem(k)});
   }catch(e){}
-  ws.turns=[];ws.views=[];ws.focus=-1;ws.subject=null;ws.pins=[];ws.thread=0;ws.seq=0;
-  ws.activity=[];ws.briefOpen=false;
+  ws.turns=[];ws.views=[];ws.open=[];ws.subject=null;ws.saved=[];ws.thread=0;ws.seq=0;
+  ws.activity=[];ws.panel=false;ws.picked=[];ws.tab="chat";
   if(typeof stopVoice==="function"&&voice.state!=="off")stopVoice("");
   // The rendered conversation goes with the stored one. Clearing the store and
   // leaving the screen populated is how the previous person's answers stay
   // visible to the next, which is the thing sessionStorage was chosen to avoid.
   renderAsk();
+}
+
+// --- Icons -------------------------------------------------------------------
+// One stroke weight, one size, drawn rather than typed. An icon is used only
+// where it says the action faster than the word would.
+
+var WS_ICONS={
+  pin:'<path d="M15 4H9l1 5-3 3v2h10v-2l-3-3z"/><path d="M12 14v6"/>',
+  mic:'<path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  send:'<path d="M12 19V5M6 11l6-6 6 6"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  download:'<path d="M12 4v11M8 11l4 4 4-4M5 19h14"/>',
+  chevron:'<path d="M6 9.5 12 15.5l6-6"/>',
+  close:'<path d="M6 6l12 12M18 6 6 18"/>'
+};
+function wsIcon(name,size){
+  return '<svg class="wsi" viewBox="0 0 24 24" width="'+(size||16)+'" height="'+(size||16)+'"'
+    +' aria-hidden="true" focusable="false">'+WS_ICONS[name]+'</svg>';
 }
 
 // --- Formatting --------------------------------------------------------------
@@ -875,6 +918,7 @@ function wsText(v){
 }
 
 function wsCount(n,one,many){return n+" "+(n===1?one:many)}
+function wsGroup(n){return n.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g,",")}
 
 // The whole visual vocabulary of state: three marks, no more. Anything else is
 // a figure the reader can see for themselves.
@@ -906,8 +950,8 @@ function wsField(label,value){
 }
 
 // --- Component renderers -----------------------------------------------------
-// One per View kind. Each is handed the data and returns the inside of one card.
-// None of them renders another card, and none of them renders a markdown table.
+// One per View kind. Each is handed the data and returns the inside of one
+// card. None renders another card, and none renders a markdown table.
 
 function wsRowHtml(p,trailing){
   var place=[p.venue,p.business_unit].filter(Boolean).join(" · ");
@@ -952,27 +996,26 @@ WS_VIEWS.project_detail=function(d){
       slip===null?null:(slip===0?"on the original date":wsDays(slip)+" from original"),
       slip!==null&&slip>0?"amber":null)
     +'</div>';
-  out+='<div class="wsflds">'
-    +wsField("Business unit",wsText(p.business_unit))
-    +wsField("Venue",wsText(p.venue))
-    +wsField("Status",wsText(p.status))
-    +wsField("Phase",wsText(p.phase))
-    +wsField("Type",wsText(p.project_type))
-    +wsField(p.project_type==="Development"?"Initiative":"CAPP",
-      wsText(p.capp_number||p.initiative_number))
-    +wsField("Project manager",wsText(p.project_manager||p.development_lead))
-    +wsField("Budget risk",wsText(p.budget_risk))
-    +wsField("Schedule risk",wsText(p.schedule_risk))
-    +wsField("Original turnover",wsDate(p.original_turnover_date))
-    +wsField("Current start",wsDate(p.current_start_date))
-    +wsField("Last reported",wsDate(p.reporting_period))
-    +'</div>';
+  // Only the fields that have something in them. A grid of "—" is a database
+  // row on screen, not a product.
+  var fields=[
+    ["Status",wsText(p.status)],["Phase",wsText(p.phase)],
+    ["Type",wsText(p.project_type)],
+    [p.project_type==="Development"?"Initiative":"CAPP",wsText(p.capp_number||p.initiative_number)],
+    ["Project manager",wsText(p.project_manager||p.development_lead)],
+    ["Budget risk",wsText(p.budget_risk)],["Schedule risk",wsText(p.schedule_risk)],
+    ["Original turnover",wsDate(p.original_turnover_date)],
+    ["Current start",wsDate(p.current_start_date)],
+    ["Last reported",wsDate(p.reporting_period)]
+  ].filter(function(f){return f[1]&&f[1]!=="—"});
+  if(fields.length){
+    out+='<div class="wsflds">'+fields.map(function(f){return wsField(f[0],f[1])}).join("")+'</div>';
+  }
   if(p.scope_description){
     out+='<div class="wsprose"><span class="wsk">Scope</span><p>'+esc(p.scope_description)+'</p></div>';
   }
-  if(p.current_update||p.previous_update){
-    out+='<div class="wsprose"><span class="wsk">Latest update</span><p>'
-      +esc(p.current_update||"Nothing written this period.")+'</p></div>';
+  if(p.current_update){
+    out+='<div class="wsprose"><span class="wsk">Latest update</span><p>'+esc(p.current_update)+'</p></div>';
   }
   return out;
 };
@@ -991,7 +1034,10 @@ WS_VIEWS.budget_variance=function(d){
     +'</div>';
   out+='<ul class="wslist">'+rows.map(function(p){
     var v=wsNum(p.forecast_variance);
+    // Exactly nought is "on budget", not "$0". A column of $0 beside empty
+    // bars reads as missing data, which is the one thing it is not.
     var fig=v===null?'<span class="wsq wsq-mute">no figures</span>'
+      :v===0?'<span class="wsq wsq-mute">on budget</span>'
       :'<span class="wsq'+(v>0?" wsq-rose":"")+'">'+wsMoneySigned(v)+'</span>'
         +wsBar(v,peak,v>0?"rose":"good");
     return wsRowHtml(p,fig);
@@ -1016,8 +1062,10 @@ WS_VIEWS.schedule=function(d){
   out+='<ul class="wslist">'+rows.map(function(p){
     var s=wsNum(p.duration_change_days);
     var fig='<span class="wsq">'+wsDate(p.current_turnover_date)+'</span>'
-      +(s===null?'':'<span class="wsq '+(s>0?"wsq-amber":"wsq-mute")+'">'+wsDays(s)+'</span>'
-        +wsBar(s,peak,s>0?"amber":"good"));
+      +(s===null?''
+        :s===0?'<span class="wsq wsq-mute">on plan</span>'
+        :'<span class="wsq '+(s>0?"wsq-amber":"wsq-mute")+'">'+wsDays(s)+'</span>'
+          +wsBar(s,peak,s>0?"amber":"good"));
     return wsRowHtml(p,fig);
   }).join("")+'</ul>';
   return out;
@@ -1106,13 +1154,28 @@ WS_VIEWS.timeline=function(d){
   }).join("")+'</ol>';
 };
 
+// A figure says itself: the number, and what it is a number of. No heading
+// above it, no column name, no subtitle underneath repeating the obvious.
 WS_VIEWS.figure=function(d){
   var metrics=d.metrics||[];
-  return '<div class="wsbig">'+metrics.map(function(m){
+  var out='<div class="wsbig">'+metrics.map(function(m){
     var value=m.format==="money"?wsMoney(m.value)
-      :m.format==="number"?String(Math.round(m.value*100)/100):wsText(m.value);
-    return '<div class="wsbig-m"><span>'+esc(m.label)+'</span><strong>'+esc(value)+'</strong></div>';
+      :m.format==="number"?wsGroup(Math.round(m.value*100)/100):wsText(m.value);
+    return '<div class="wsbig-m">'
+      +(m.label?'<span class="wsbig-k">'+esc(m.label)+'</span>':'')
+      +'<strong>'+esc(value)+(m.unit?'<em>'+esc(m.unit)+'</em>':'')+'</strong></div>';
   }).join("")+'</div>';
+  // A number on its own is a worse answer than the same number with its
+  // shape. Only present when the worker could prove the breakdown covers
+  // exactly what the figure counted.
+  if(d.breakdown&&d.breakdown.length){
+    var peak=d.breakdown.reduce(function(a,r){return Math.max(a,wsNum(r.value)||0)},0);
+    out+='<div class="wsbreak">'+d.breakdown.map(function(r){
+      return '<div class="wsgroup-row"><span class="wsgroup-k">'+esc(wsText(r.label))+'</span>'
+        +wsBar(r.value,peak)+'<span class="wsgroup-v">'+esc(wsText(r.value))+'</span></div>';
+    }).join("")+'</div>';
+  }
+  return out;
 };
 
 WS_VIEWS.group=function(d){
@@ -1133,109 +1196,143 @@ WS_VIEWS.empty=function(){
     +'That is a result about the search, not about the portfolio — try removing a condition.</p>';
 };
 
-// --- The workspace shell -----------------------------------------------------
+// --- The workspace -----------------------------------------------------------
 
-function wsCurrent(){return ws.focus>=0&&ws.focus<ws.views.length?ws.views[ws.focus]:null}
+function wsNewest(){return ws.views.length?ws.views[ws.views.length-1]:null}
+function wsIsOpen(id){return ws.open.indexOf(id)>=0}
+function wsIsSaved(id){return ws.saved.some(function(x){return x.viewId===id})}
 
 function wsPush(view,question,followUp){
   if(!view)return null;
-  // A follow-up stays in the same thread, so the previous result collapses to a
-  // strip above rather than disappearing. A new subject opens a thread, and
-  // everything before it folds into one line.
   if(!followUp)ws.thread+=1;
   ws.seq+=1;
   var stored={
-    id:ws.seq,thread:ws.thread,question:question||"",
+    id:ws.seq,thread:ws.thread,question:question||"",follow:!!followUp,
     kind:view.kind,title:view.title,subtitle:view.subtitle,
     count:view.count,truncated:view.truncated,data:view.data
   };
   ws.views.push(stored);
-  ws.focus=ws.views.length-1;
+  // The newest is open; everything before it closes, so the column stays a
+  // readable stack rather than growing into one long page.
+  ws.open=[stored.id];
+  ws.tab="results";
   return stored;
 }
 
-function wsShow(id){
-  for(var i=0;i<ws.views.length;i++){
-    if(ws.views[i].id===Number(id)){ws.focus=i;askSave();renderAsk();return}
-  }
+function wsPinHtml(view){
+  var on=wsIsSaved(view.id);
+  return '<button type="button" class="wspin'+(on?" is-on":"")+'" data-ws-pin="'+view.id+'"'
+    +' aria-pressed="'+(on?"true":"false")+'"'
+    +' title="'+(on?"Saved — click to remove":"Save this result")+'"'
+    +' aria-label="'+(on?"Remove from saved":"Save this result")+'">'+wsIcon("pin")+'</button>';
 }
 
-function wsStripHtml(v){
-  return '<button type="button" class="wsstrip" data-ws-show="'+v.id+'">'
-    +'<span class="wsstrip-t">'+esc(v.title)+'</span>'
-    +(v.subtitle?'<span class="wsstrip-s">'+esc(v.subtitle)+'</span>':'')
+function wsCardHtml(view,primary){
+  var render=WS_VIEWS[view.kind]||WS_VIEWS.project_list;
+  var head="";
+  if(view.title){
+    head='<header class="wscard-head"><h3>'+esc(view.title)+'</h3>'
+      +(view.subtitle?'<p>'+esc(view.subtitle)+'</p>':'')+'</header>';
+  }
+  return '<article class="wscard'+(view.follow?" is-follow":"")+(primary?" is-primary":"")+'">'
+    +wsPinHtml(view)+head
+    +'<div class="wscard-body">'+render(view.data||{})+'</div>'
+    +(view.truncated?'<p class="wscard-note">Showing '
+      +((view.data&&view.data.rows&&view.data.rows.length)||0)+' of '+view.count+' matching records.</p>':'')
+    +'</article>';
+}
+
+function wsOldHtml(view){
+  return '<button type="button" class="wsold'+(view.follow?" is-follow":"")+'" data-ws-expand="'+view.id+'">'
+    +wsIcon("chevron",14)
+    +'<span class="wsold-t">'+esc(view.title||wsCount(view.count||0,"project","projects"))+'</span>'
+    +(view.subtitle?'<span class="wsold-s">'+esc(view.subtitle)+'</span>':'')
     +'</button>';
 }
 
+function wsNextHtml(view){
+  var options=WS_NEXT[view.kind]||WS_NEXT.project_list;
+  if(!options||!options.length)return "";
+  // Never offer to do something the card has already done.
+  if(view.data&&view.data.breakdown){
+    options=options.filter(function(q){return !/break .*down/i.test(q)});
+  }
+  return '<div class="wsnext">'+options.map(function(q){
+    return '<button type="button" data-ws-ask="'+esc(q)+'">'+esc(q)+'</button>';
+  }).join("")+'</div>';
+}
+
 function wsSpaceHtml(){
-  var focus=wsCurrent();
-  if(!focus){
-    return '<div class="wsempty">'
-      +'<p class="wsempty-t">Ask about your projects.</p>'
-      +'<p class="wsempty-s">Whatever you ask appears here — the list, the figures, the comparison. '
-      +'The conversation stays short.</p>'
-      +'<div class="wsempty-q">'+WS_OPENERS.map(function(q){
-        return '<button type="button" data-ws-ask="'+esc(q)+'">'+esc(q)+'</button>';
-      }).join("")+'</div></div>';
+  if(!ws.views.length){
+    return '<div class="wsempty"><div>'
+      +'<p class="wsempty-t">What do you want to know?</p>'
+      +'<p class="wsempty-s">Answers appear here and stay as you keep asking, '
+      +'so a question can build on the one before it.</p></div></div>';
   }
-
-  var same=[],earlier=0;
-  ws.views.forEach(function(v,i){
-    if(i===ws.focus)return;
-    if(v.thread===focus.thread)same.push(v);else earlier+=1;
-  });
-  same.reverse();
-
-  var out="";
-  if(same.length){
-    out+='<div class="wstrail">'+same.map(wsStripHtml).join("")+'</div>';
+  // Newest first, so the column reads latest question, latest result, then
+  // everything it came from.
+  var out="",newest=wsNewest();
+  for(var i=ws.views.length-1;i>=0;i--){
+    var view=ws.views[i];
+    out+=wsIsOpen(view.id)?wsCardHtml(view,view===newest):wsOldHtml(view);
+    if(view===newest&&wsIsOpen(view.id))out+=wsNextHtml(view);
   }
-  if(earlier){
-    out+='<button type="button" class="wsearlier" data-ws-earlier="1">'
-      +wsCount(earlier,"earlier result","earlier results")+'</button>';
-  }
-
-  var render=WS_VIEWS[focus.kind]||WS_VIEWS.project_list;
-  var pinned=ws.pins.some(function(x){return x.viewId===focus.id});
-  out+='<article class="wscard" id="wsCard">'
-    +'<header class="wscard-head"><div><h3>'+esc(focus.title)+'</h3>'
-    +(focus.subtitle?'<p>'+esc(focus.subtitle)+'</p>':'')+'</div>'
-    +'<div class="wscard-acts">'
-    +'<button type="button" class="wsghost'+(pinned?" is-on":"")+'" data-ws-pin="'+focus.id+'">'
-    +(pinned?"Pinned":"Pin to briefing")+'</button>'
-    +'</div></header>'
-    +'<div class="wscard-body">'+render(focus.data||{})+'</div>'
-    +(focus.truncated?'<p class="wscard-note">Capped at '+(focus.data.rows?focus.data.rows.length:0)
-      +' of '+focus.count+' matching records.</p>':'')
-    +'</article>';
   return out;
 }
 
-function wsBriefHtml(){
-  if(!ws.pins.length){
-    return '<div class="wsbrief" data-open="0"><button type="button" class="wsbrief-tab" data-ws-brief="1">'
-      +'Briefing<span>empty</span></button></div>';
+// --- Saved, and getting it out -----------------------------------------------
+// One place and one action. Pinning a result keeps it; Download asks what and
+// in which form, and nothing about the question or the query appears in it.
+
+function wsSavedHtml(){
+  var n=ws.saved.length;
+  // Nothing has been asked yet, so there is nothing that could have been
+  // saved. An empty control on an empty screen teaches nothing.
+  if(!n&&!ws.views.length)return "";
+  var out='<button type="button" class="wsghost wssaved" id="wsSavedBtn"'
+    +' aria-expanded="'+(ws.panel?"true":"false")+'" title="Results you have saved">'
+    +wsIcon("pin")+'<span>Saved</span>'+(n?'<em>'+n+'</em>':'')+'</button>';
+  if(!ws.panel)return out;
+  if(!n){
+    return out+'<div class="wspanel"><p class="wspanel-empty">'
+      +'Nothing saved yet. Use the pin on any result to keep it here.</p></div>';
   }
-  var body="";
-  if(ws.briefOpen){
-    body='<div class="wsbrief-body">'+ws.pins.map(function(pin,i){
-      return '<div class="wsbrief-row"><span><strong>'+esc(pin.title)+'</strong>'
-        +(pin.sub?'<em>'+esc(pin.sub)+'</em>':'')+'</span>'
-        +'<button type="button" class="wsx" data-ws-unpin="'+i+'" aria-label="Remove">&times;</button></div>';
-    }).join("")
-      +'<div class="wsbrief-foot"><button type="button" class="wsbtn" data-ws-export="text">Download briefing</button>'
-      +'<button type="button" class="wsghost" data-ws-export="csv">Export records</button></div></div>';
+  // Newest at the top, nothing ticked: the reader chooses what leaves the
+  // product rather than finding it chosen for them.
+  var items="";
+  for(var i=ws.saved.length-1;i>=0;i--){
+    var item=ws.saved[i],on=ws.picked.indexOf(item.viewId)>=0;
+    items+='<label class="wspick"><input type="checkbox" data-ws-pick="'+item.viewId+'"'
+      +(on?" checked":"")+'>'
+      +'<span><strong>'+esc(item.title)+'</strong>'
+      +(item.sub?'<em>'+esc(item.sub)+'</em>':'')+'</span>'
+      +'<button type="button" class="wsx" data-ws-unpin="'+item.viewId+'"'
+      +' title="Remove from saved" aria-label="Remove from saved">'+wsIcon("close",13)+'</button>'
+      +'</label>';
   }
-  return '<div class="wsbrief" data-open="'+(ws.briefOpen?1:0)+'">'
-    +'<button type="button" class="wsbrief-tab" data-ws-brief="1">Briefing<span>'
-    +wsCount(ws.pins.length,"item","items")+'</span></button>'+body+'</div>';
+  var seg=function(group,value,label,current){
+    return '<button type="button" class="'+(current===value?"is-on":"")+'"'
+      +' data-ws-'+group+'="'+value+'">'+label+'</button>';
+  };
+  return out+'<div class="wspanel">'
+    +'<div class="wspanel-list">'+items+'</div>'
+    +'<div class="wspanel-row"><span class="wspanel-k">Detail</span>'
+    +'<div class="wsseg">'+seg("detail","summary","Summary",ws.detail)
+    +seg("detail","full","Full records",ws.detail)+'</div></div>'
+    +'<div class="wspanel-row"><span class="wspanel-k">Format</span>'
+    +'<div class="wsseg">'+seg("format","pdf","PDF",ws.format)
+    +seg("format","csv","CSV",ws.format)+'</div></div>'
+    +'<div class="wspanel-foot">'
+    +'<button type="button" class="wsbtn" data-ws-go'+(ws.picked.length?"":" disabled")+'>'
+    +wsIcon("download")+'Download'+(ws.picked.length?" "+ws.picked.length:"")+'</button></div>'
+    +'</div>';
 }
 
 // --- The conversation --------------------------------------------------------
 // Light by design: no bubbles, no avatars, no cards. A question in medium
-// weight, the answer under it, and a hairline between turns.
+// weight, the answer under it, a hairline between turns.
 
-function wsTurnHtml(turn){
+function wsTurnHtml(turn,index,all){
   var out='<div class="wsturn'+(turn.spoken?" is-spoken":"")+'">'
     +'<p class="wsq-text">'+esc(turn.question)+'</p>';
   if(turn.state==="pending"){
@@ -1244,9 +1341,11 @@ function wsTurnHtml(turn){
     out+='<p class="wsa wsa-err">'+esc(turn.message||"That could not be answered.")+'</p>';
   }else{
     out+='<p class="wsa">'+esc(turn.answer||"")+'</p>';
-    if(turn.viewId){
-      out+='<button type="button" class="wsalink" data-ws-show="'+turn.viewId+'">'
-        +esc(turn.viewTitle||"Show on screen")+'</button>';
+    // Only on an older turn. The newest result is already at the top of the
+    // workspace, so a link to it under the newest answer points at itself.
+    if(turn.viewId&&index<all.length-1){
+      out+='<button type="button" class="wsalink" data-ws-expand="'+turn.viewId+'">'
+        +esc(turn.viewTitle||"Show this result")+'</button>';
     }
   }
   return out+'</div>';
@@ -1262,25 +1361,40 @@ function wsActivityHtml(){
 function renderAsk(){
   var thread=byId("wsThread");
   if(!thread)return;
-  thread.innerHTML=ws.turns.length
-    ? ws.turns.map(wsTurnHtml).join("")+wsActivityHtml()
-    : '<div class="wshello"><p>Ask anything about the projects you can see. '
-      +'Speak or type — the answer appears on the right.</p></div>'+wsActivityHtml();
+  thread.innerHTML=ws.turns.map(wsTurnHtml).join("")+wsActivityHtml();
+  // Before anything has been asked, the starting questions sit next to the
+  // box rather than out in the workspace: they are things to ask, not things
+  // that were found.
+  var start=byId("wsStart");
+  if(start){
+    start.hidden=ws.turns.length>0;
+    if(!ws.turns.length&&!start.dataset.filled){
+      start.innerHTML=WS_OPENERS.map(function(q){
+        return '<button type="button" data-ws-ask="'+esc(q)+'">'+esc(q)+'</button>';
+      }).join("");
+      start.dataset.filled="1";
+    }
+  }
   var bottom=function(){thread.scrollTop=thread.scrollHeight};
   bottom();
   if(typeof requestAnimationFrame==="function")requestAnimationFrame(bottom);
 
   var space=byId("wsSpace");
   if(space)space.innerHTML=wsSpaceHtml();
-  var brief=byId("wsBriefSlot");
-  if(brief)brief.innerHTML=wsBriefHtml();
+  var saved=byId("wsSavedSlot");
+  if(saved)saved.innerHTML=wsSavedHtml();
 
-  var subject=byId("wsSubject");
-  if(subject){
-    var focus=wsCurrent();
-    subject.textContent=ws.subject&&ws.subject.label?ws.subject.label
-      :(focus?focus.title:"Portfolio");
+  var shell=byId("wsShell");
+  if(shell)shell.setAttribute("data-tab",ws.tab);
+  var tab=byId("wsTabResults");
+  if(tab){
+    tab.setAttribute("aria-selected",ws.tab==="results"?"true":"false");
+    var count=byId("wsTabCount");
+    if(count)count.textContent=ws.views.length?String(ws.views.length):"";
   }
+  var chatTab=byId("wsTabChat");
+  if(chatTab)chatTab.setAttribute("aria-selected",ws.tab==="chat"?"true":"false");
+
   var send=byId("wsSend");
   if(send)send.disabled=ws.busy;
   renderWsUnits();
@@ -1312,9 +1426,6 @@ function wsHistory(){
   });
 }
 
-// One path for a typed question. The worker writes the SQL, checks it, runs it
-// under this reader's scope, and hands back both halves of the answer: the
-// sentence for the conversation and the View for the workspace.
 async function askEngine(text,options){
   var spoken=options&&options.spoken;
   var turn={question:text,state:"pending",spoken:!!spoken};
@@ -1339,17 +1450,18 @@ async function askEngine(text,options){
 
     if(answer.view&&answer.view.kind&&answer.view.kind!=="empty"){
       var stored=wsPush(answer.view,text,!!answer.followUp);
-      if(stored){turn.viewId=stored.id;turn.viewTitle=stored.title}
+      if(stored){turn.viewId=stored.id;turn.viewTitle=stored.title||"Show this result"}
       var ids=(answer.rows||[]).map(function(r){return r.id}).filter(function(id){
         return typeof id==="number"});
       ws.subject={
         ids:ids,total:answer.total,token:answer.token||null,
         label:answer.followUp&&ws.subject&&ws.subject.label
-          ?ws.subject.label+" · "+stored.title:stored.title
+          ?ws.subject.label+" · "+(stored.title||"refined"):(stored.title||"result")
       };
-    }else if(answer.view&&answer.view.kind==="empty"){
-      wsPush(answer.view,text,!!answer.followUp);
     }
+    // A result that found nothing is not knowledge, so it does not join the
+    // stack. The sentence in the conversation is the whole answer, and what
+    // was already on screen is usually what the next question is about.
   }catch(error){
     turn.state="error";
     turn.message=error&&error.message?error.message:"That question could not be answered.";
@@ -1373,7 +1485,7 @@ async function submitAsk(question){
 // right while the sentence is still being spoken.
 
 var voice={state:"off",pc:null,channel:null,mic:null,audio:null,muted:false,
-  responding:false,heard:"",pending:0,speech:""};
+  responding:false,heard:"",pending:0,speech:"",lastSpoken:""};
 
 function setVoiceState(next,detail){
   voice.state=next;
@@ -1382,13 +1494,15 @@ function setVoiceState(next,detail){
   var mic=byId("wsMic");
   if(mic){
     mic.setAttribute("aria-pressed",next==="off"?"false":"true");
+    mic.setAttribute("data-state",next);
     mic.classList.toggle("is-live",next!=="off");
-    mic.title=next==="off"?"Start talking":"End the call";
+    mic.title=next==="off"?"Talk to the tracker":"End the call";
+    mic.setAttribute("aria-label",mic.title);
   }
   var note=byId("wsVoiceNote");
   if(note){
     note.textContent=detail||(next==="off"?""
-      :next==="connecting"?"Connecting…"
+      :next==="connecting"?"Connecting"
       :next==="listening"?"Listening"
       :next==="thinking"?"Working"
       :next==="speaking"?"Speaking":"");
@@ -1400,6 +1514,7 @@ function stopVoice(message){
   if(voice.pc){try{voice.pc.close()}catch(e){}}
   if(voice.mic){voice.mic.getTracks().forEach(function(t){try{t.stop()}catch(e){}})}
   voice.pc=null;voice.channel=null;voice.mic=null;voice.responding=false;voice.pending=0;
+  voice.speech="";
   ws.activity=[];
   setVoiceState("off",message||"");
   renderAsk();
@@ -1410,7 +1525,15 @@ function setVoiceMuted(muted){
   if(voice.mic)voice.mic.getTracks().forEach(function(t){t.enabled=!voice.muted});
 }
 
-// A tool call from the realtime model. The result lands on screen first.
+// What counts as somebody speaking to you. A cough, a door or a half-heard
+// word across a room transcribes to a character or two, and letting that
+// through put punctuation on screen as a question nobody asked.
+function wsHeardWords(text){
+  var heard=String(text||"").trim();
+  var letters=heard.replace(/[^a-z0-9]/gi,"");
+  return letters.length>=3?heard:"";
+}
+
 async function voiceTool(name,args){
   var label=null;
   try{
@@ -1418,17 +1541,18 @@ async function voiceTool(name,args){
       body:JSON.stringify({name:name,arguments:args})});
     label=out.label||null;
     if(out.view){
-      // A tool call inside the same spoken turn refines what is already there;
-      // the first one of a turn starts a thread.
       var stored=wsPush(out.view,voice.heard||"",voice.pending>1);
       if(stored&&ws.turns.length){
         var last=ws.turns[ws.turns.length-1];
-        if(last&&last.spoken&&last.state!=="error"){last.viewId=stored.id;last.viewTitle=stored.title}
+        if(last&&last.spoken&&last.state!=="error"){
+          last.viewId=stored.id;last.viewTitle=stored.title||"Show this result";
+        }
       }
     }
     if(out.subject){
       ws.subject={ids:out.subject.ids||[],label:out.subject.label||"",total:out.view?out.view.count:0};
     }
+    if(out.speak)voice.lastSpoken=out.speak;
     askSave();
     renderAsk();
     return {
@@ -1441,6 +1565,20 @@ async function voiceTool(name,args){
   }finally{
     if(label)ws.activity=ws.activity.filter(function(x){return x!==label});
   }
+}
+
+function wsCloseSpokenTurn(said){
+  for(var i=ws.turns.length-1;i>=0;i--){
+    if(ws.turns[i].spoken&&ws.turns[i].state==="pending"){
+      ws.turns[i].state="done";
+      ws.turns[i].answer=said;
+      return;
+    }
+  }
+  // Nothing was transcribed - the service can answer without ever giving us
+  // the listener's words. The answer still belongs in the conversation, so it
+  // goes in without a question rather than being dropped.
+  if(said)ws.turns.push({question:"",state:"done",spoken:true,answer:said});
 }
 
 function wireVoiceChannel(channel,session){
@@ -1463,8 +1601,6 @@ function wireVoiceChannel(channel,session){
       channel.send(JSON.stringify({type:"conversation.item.create",item:{
         type:"function_call_output",call_id:message.call_id,output:JSON.stringify(out)
       }}));
-      // The service usually starts its own response once a tool result lands.
-      // Asking for a second one produces "already has an active response".
       if(!voice.responding)channel.send(JSON.stringify({type:"response.create"}));
       renderAsk();
       return;
@@ -1472,25 +1608,25 @@ function wireVoiceChannel(channel,session){
 
     if(type==="input_audio_buffer.speech_started"){
       voice.pending=0;
+      // Interruption. Anything half-said is abandoned rather than stitched
+      // onto whatever comes next.
+      voice.speech="";
       if(voice.state!=="off")setVoiceState("listening","Listening");
     }
     if(type==="input_audio_buffer.speech_stopped"&&voice.state==="listening"){
       setVoiceState("thinking");
     }
     if(/input_audio_transcription/.test(type)&&message.transcript){
-      var heard=String(message.transcript).trim();
-      // A cough or a door transcribes to "" or ".". Letting that through put
-      // punctuation on screen as somebody's question.
-      if(/[a-z0-9]/i.test(heard)){
+      var heard=wsHeardWords(message.transcript);
+      if(heard){
         voice.heard=heard;
         ws.turns.push({question:heard,state:"pending",spoken:true});
         askSave();renderAsk();
       }
     }
     if(type==="response.created"){voice.responding=true}
-    // The spoken answer, assembled as it arrives, so the conversation shows
-    // what was actually said rather than a paraphrase of it.
     if(/transcript\\.delta$/.test(type)&&message.delta){voice.speech+=message.delta}
+    if(/transcript\\.done$/.test(type)&&message.transcript){voice.speech=String(message.transcript)}
     if(/audio/.test(type)&&/delta|started/.test(type)&&!/input_audio/.test(type)){
       if(voice.state==="listening"||voice.state==="thinking")setVoiceState("speaking");
     }
@@ -1498,15 +1634,12 @@ function wireVoiceChannel(channel,session){
       voice.responding=false;
       voice.pending=0;
       ws.activity=[];
-      var said=voice.speech.trim();
-      voice.speech="";
-      for(var i=ws.turns.length-1;i>=0;i--){
-        if(ws.turns[i].spoken&&ws.turns[i].state==="pending"){
-          ws.turns[i].state="done";
-          ws.turns[i].answer=said||"(answered on screen)";
-          break;
-        }
-      }
+      // What was actually said. If the service gave no transcript, the line the
+      // tool wrote is the same sentence the model was asked to say, which is a
+      // better record than a placeholder admitting we did not catch it.
+      var said=voice.speech.trim()||voice.lastSpoken||"";
+      voice.speech="";voice.lastSpoken="";
+      wsCloseSpokenTurn(said);
       if(voice.state==="speaking"||voice.state==="thinking")setVoiceState("listening");
       askSave();renderAsk();
     }
@@ -1568,21 +1701,26 @@ async function startVoice(){
   }
 }
 
-// --- Pinning and export ------------------------------------------------------
+// --- Saving and downloading ---------------------------------------------------
 
 function wsPin(id){
   var view=null;
   ws.views.forEach(function(v){if(v.id===Number(id))view=v});
   if(!view)return;
   var at=-1;
-  ws.pins.forEach(function(p,i){if(p.viewId===view.id)at=i});
-  if(at>=0)ws.pins.splice(at,1);
-  else ws.pins.push({viewId:view.id,title:view.title,sub:view.subtitle||"",
-    kind:view.kind,rows:(view.data&&view.data.rows)||[]});
+  ws.saved.forEach(function(p,i){if(p.viewId===view.id)at=i});
+  if(at>=0){
+    ws.saved.splice(at,1);
+    ws.picked=ws.picked.filter(function(x){return x!==view.id});
+  }else{
+    ws.saved.push({viewId:view.id,title:view.title||wsCount(view.count||0,"project","projects"),
+      sub:view.subtitle||"",kind:view.kind,rows:(view.data&&view.data.rows)||[],
+      data:view.data,count:view.count});
+  }
   askSave();renderAsk();
 }
 
-function wsDownload(name,text,type){
+function wsDownloadFile(name,text,type){
   var blob=new Blob([text],{type:type});
   var url=URL.createObjectURL(blob);
   var a=document.createElement("a");
@@ -1591,41 +1729,77 @@ function wsDownload(name,text,type){
   setTimeout(function(){URL.revokeObjectURL(url)},1000);
 }
 
-function wsBriefText(){
-  var lines=["D&C PROJECT BRIEFING",
-    "Prepared: "+new Date().toISOString().slice(0,10),
-    "Business unit: "+(wsUnit()==="All"?"All business units":wsUnit()),""];
-  ws.pins.forEach(function(pin,i){
-    lines.push((i+1)+". "+pin.title);
-    if(pin.sub)lines.push("   "+pin.sub);
-    (pin.rows||[]).slice(0,25).forEach(function(p){
-      lines.push("   - "+(p.name||"")+"  ["+(p.venue||"")+" / "+(p.business_unit||"")+"]"
-        +"  budget "+wsMoney(p.approved_budget)
-        +"  variance "+wsMoneySigned(p.forecast_variance)
-        +"  turnover "+wsDate(p.current_turnover_date)+" ("+wsDays(p.duration_change_days)+")");
-    });
-    lines.push("");
-  });
-  lines.push("Read-only extract. Figures are as recorded in the Tracker on the date above.");
-  return lines.join("\\n");
+function wsChosen(){
+  return ws.saved.filter(function(item){return ws.picked.indexOf(item.viewId)>=0}).reverse();
 }
 
-function wsBriefCsv(){
-  var head=["Pinned under","Project","Venue","Business unit","Status","Phase",
-    "Approved budget","Anticipated final","Forecast variance","Current turnover","Days moved"];
-  var out=[head.join(",")];
+function wsRowLine(p){
+  return [p.name,p.venue,p.business_unit,wsMoney(p.approved_budget),
+    wsMoneySigned(p.forecast_variance),wsDate(p.current_turnover_date),
+    wsDays(p.duration_change_days)];
+}
+
+function wsCsv(items,full){
   var cell=function(v){
     var s=String(v==null?"":v);
     return /[",\\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
   };
-  ws.pins.forEach(function(pin){
-    (pin.rows||[]).forEach(function(p){
-      out.push([pin.title,p.name,p.venue,p.business_unit,p.status,p.phase,
-        p.approved_budget,p.anticipated_final_cost,p.forecast_variance,
-        p.current_turnover_date,p.duration_change_days].map(cell).join(","));
+  var out=[];
+  if(!full){
+    out.push(["Result","Detail","Records"].join(","));
+    items.forEach(function(item){
+      out.push([item.title,item.sub,item.count==null?"":item.count].map(cell).join(","));
+    });
+    return out.join("\\n");
+  }
+  out.push(["Result","Project","Venue","Business unit","Approved budget",
+    "Forecast variance","Turnover","Days moved"].map(cell).join(","));
+  items.forEach(function(item){
+    (item.rows||[]).forEach(function(p){
+      out.push([item.title].concat(wsRowLine(p)).map(cell).join(","));
     });
   });
   return out.join("\\n");
+}
+
+// PDF is the browser's own print-to-PDF, over a page built for it. A separate
+// renderer would be a second way for these figures to be wrong.
+function wsPrint(items,full){
+  var host=byId("wsPrint");
+  if(!host)return false;
+  var when=new Date().toISOString().slice(0,10);
+  var html='<header class="wspr-head"><h1>DNC Tracker</h1>'
+    +'<p>'+esc(wsUnit()==="All"?"All business units":wsUnit())+' · '+esc(when)+'</p></header>';
+  items.forEach(function(item){
+    html+='<section class="wspr-sec"><h2>'+esc(item.title)+'</h2>'
+      +(item.sub?'<p class="wspr-sub">'+esc(item.sub)+'</p>':'');
+    if(full&&item.rows&&item.rows.length){
+      html+='<table><thead><tr><th>Project</th><th>Venue</th><th>Budget</th>'
+        +'<th>Variance</th><th>Turnover</th><th>Days</th></tr></thead><tbody>'
+        +item.rows.map(function(p){
+          return '<tr>'+wsRowLine(p).filter(function(_,i){return i!==2})
+            .map(function(c){return '<td>'+esc(c)+'</td>'}).join("")+'</tr>';
+        }).join("")+'</tbody></table>';
+    }
+    html+='</section>';
+  });
+  html+='<footer class="wspr-foot">Read-only extract. Figures are as recorded on '+esc(when)+'.</footer>';
+  host.innerHTML=html;
+  if(typeof window.print!=="function")return false;
+  setTimeout(function(){window.print()},40);
+  return true;
+}
+
+function wsDownload(){
+  var items=wsChosen();
+  if(!items.length)return;
+  if(ws.format==="csv"){
+    wsDownloadFile("dnc-tracker.csv",wsCsv(items,ws.detail==="full"),"text/csv;charset=utf-8");
+  }else if(!wsPrint(items,ws.detail==="full")){
+    toast("This browser cannot make a PDF here. CSV still works.");
+    return;
+  }
+  ws.panel=false;ws.picked=[];renderAsk();
 }
 
 // Opening a project from any component is itself a question: it refines the
@@ -1638,7 +1812,8 @@ async function wsOpen(id){
       body:JSON.stringify({name:"project_detail",arguments:{project_id:Number(id)}})});
     if(out.view){
       var stored=wsPush(out.view,"",true);
-      if(out.subject)ws.subject={ids:out.subject.ids||[],label:out.subject.label||stored.title};
+      if(out.subject)ws.subject={ids:out.subject.ids||[],
+        label:out.subject.label||(stored&&stored.title)||""};
     }
   }catch(error){
     toast(error&&error.message?error.message:"That project could not be opened.");
@@ -1667,10 +1842,11 @@ document.addEventListener("keydown",function(event){
     event.target.style.height="";
     submitAsk(value);
   }
+  if(event.key==="Escape"&&ws.panel){ws.panel=false;renderAsk()}
 });
 
-// The composer grows with what is typed, to a point. A fixed two-line box
-// hides the end of a long question while it is being written.
+// The composer grows with what is typed, to a point. A fixed box hides the end
+// of a long question while it is being written.
 document.addEventListener("input",function(event){
   if(event.target&&event.target.id==="wsInput"){
     event.target.style.height="auto";
@@ -1682,51 +1858,56 @@ document.addEventListener("click",function(event){
   var closest=function(selector){
     return event.target.closest?event.target.closest(selector):null;
   };
+  // Anywhere outside the saved panel closes it.
+  if(ws.panel&&!closest("#wsSavedSlot")){ws.panel=false;renderAsk()}
+
   var ask=closest("[data-ws-ask]");
   if(ask){submitAsk(ask.dataset.wsAsk);return}
   var open=closest("[data-ws-open]");
   if(open){wsOpen(open.dataset.wsOpen);return}
-  var show=closest("[data-ws-show]");
-  if(show){wsShow(show.dataset.wsShow);return}
-  var pin=closest("[data-ws-pin]");
-  if(pin){wsPin(pin.dataset.wsPin);return}
-  var unpin=closest("[data-ws-unpin]");
-  if(unpin){ws.pins.splice(Number(unpin.dataset.wsUnpin),1);askSave();renderAsk();return}
-  if(closest("[data-ws-brief]")){ws.briefOpen=!ws.briefOpen;renderAsk();return}
-  var earlier=closest("[data-ws-earlier]");
-  if(earlier){
-    // Step back to the newest result of the previous thread.
-    var focus=wsCurrent();
-    for(var i=ws.views.length-1;i>=0;i--){
-      if(focus&&ws.views[i].thread<focus.thread){ws.focus=i;break}
-    }
+  var expand=closest("[data-ws-expand]");
+  if(expand){
+    var id=Number(expand.dataset.wsExpand);
+    if(wsIsOpen(id))ws.open=ws.open.filter(function(x){return x!==id});
+    else ws.open.push(id);
+    ws.tab="results";
     askSave();renderAsk();return;
   }
-  var exp=closest("[data-ws-export]");
-  if(exp){
-    if(!ws.pins.length){toast("Pin something first.");return}
-    if(exp.dataset.wsExport==="csv"){
-      wsDownload("dn-dc-briefing.csv",wsBriefCsv(),"text/csv;charset=utf-8");
-    }else{
-      wsDownload("dn-dc-briefing.txt",wsBriefText(),"text/plain;charset=utf-8");
-    }
-    return;
-  }
+  var pin=closest("[data-ws-pin]");
+  if(pin){wsPin(pin.dataset.wsPin);return}
+  if(closest("#wsSavedBtn")){ws.panel=!ws.panel;renderAsk();return}
+  var unpin=closest("[data-ws-unpin]");
+  if(unpin){wsPin(unpin.dataset.wsUnpin);return}
+  var detail=closest("[data-ws-detail]");
+  if(detail){ws.detail=detail.dataset.wsDetail;renderAsk();return}
+  var format=closest("[data-ws-format]");
+  if(format){ws.format=format.dataset.wsFormat;renderAsk();return}
+  if(closest("[data-ws-go]")){wsDownload();return}
+  var tab=closest("[data-ws-tab]");
+  if(tab){ws.tab=tab.dataset.wsTab;renderAsk();return}
   if(closest("#wsMic")){startVoice();return}
   if(closest("#wsNew")){
-    ws.turns=[];ws.views=[];ws.focus=-1;ws.subject=null;ws.thread=0;ws.activity=[];
+    ws.turns=[];ws.views=[];ws.open=[];ws.subject=null;ws.thread=0;ws.activity=[];ws.tab="chat";
     askSave();renderAsk();return;
   }
 });
 
-// Changing scope starts a fresh line of questioning: the results on screen
-// belonged to a different scope, and silently reinterpreting them under a new
-// one would answer a question nobody asked.
 document.addEventListener("change",function(event){
-  if(event.target&&event.target.id==="wsScope"){
-    ws.views=[];ws.focus=-1;ws.subject=null;ws.thread=0;
+  var target=event.target;
+  if(target&&target.id==="wsScope"){
+    // A fresh line of questioning: the results on screen belonged to a
+    // different scope, and silently reinterpreting them under a new one would
+    // answer a question nobody asked.
+    ws.views=[];ws.open=[];ws.subject=null;ws.thread=0;ws.saved=[];ws.picked=[];
     askSave();renderAsk();
     toast("Scope is now "+(wsUnit()==="All"?"all business units":wsUnit())+".");
+    return;
+  }
+  if(target&&target.dataset&&target.dataset.wsPick!==undefined){
+    var id=Number(target.dataset.wsPick);
+    if(target.checked){if(ws.picked.indexOf(id)<0)ws.picked.push(id)}
+    else ws.picked=ws.picked.filter(function(x){return x!==id});
+    renderAsk();
   }
 });
 

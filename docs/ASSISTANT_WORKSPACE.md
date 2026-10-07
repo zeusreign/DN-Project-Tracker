@@ -23,23 +23,40 @@ can do.
 
 ```
 ┌──────────────────────┬───────────────────────────────────────────────┐
-│ CONVERSATION  380px  │ WORKSPACE                            fluid    │
-│                      │                                               │
-│  voice presence      │   ┌─ FOCUS ─────────────────────────────────┐ │
-│  turn                │   │  one workspace component                │ │
-│  turn                │   │  (the current result, always primary)   │ │
-│  · checking budget   │   └─────────────────────────────────────────┘ │
-│  turn                │                                               │
-│                      │   ─ earlier in this thread ──────── 3 ▾       │
+│ CONVERSATION  372px  │ WORKSPACE                            fluid    │
+│                      │  [ All business units ]         [ 📌 Saved 2 ]│
+│  ◦ DNC Tracker    +  │                                               │
+│                      │   ┌─ newest result ─────────────────────────┐ │
+│  question            │   │  one workspace component            📌  │ │
+│  answer              │   └─────────────────────────────────────────┘ │
+│  question            │     which of those are over budget?           │
+│  answer              │   ╷ ‹ earlier result                          │
+│  · checking budget   │   ╷ ‹ earlier result                          │
+│                      │     ‹ earlier result                          │
 │  ───────────────     │                                               │
-│  composer   ◎ mic    │   ─ briefing ──────────────────── 4 pinned ▾  │
+│  ask…       ◎  ↑     │                                               │
 └──────────────────────┴───────────────────────────────────────────────┘
 ```
 
-Conversation left and narrow, workspace right and wide — the Claude Artifacts
-arrangement, because it is the one people already read correctly without being
-taught. The conversation column is visually light: no bubbles, no avatars, no
-cards. Question in medium weight, answer in regular, a hairline between turns.
+Conversation left and narrow, workspace right and wide — the arrangement people
+already read correctly without being taught. The conversation column is
+visually light: no bubbles, no avatars, no cards. Question in medium weight,
+answer under it, a hairline between turns.
+
+**The workspace accumulates.** The newest result is expanded at the top;
+everything before it stays below, collapsed to a line, in the order it was
+asked. Clicking a line expands it in place — it does not displace the newest.
+A result that narrowed the one before it is indented under it with a hairline
+connector, so the column reads as one investigation rather than a pile of
+searches.
+
+Nothing is ever destroyed by asking another question. The only things that
+clear the stack are a new conversation and a change of business-unit scope,
+because results from one scope cannot honestly be read under another.
+
+An empty result does not join the stack. The sentence in the conversation is
+the whole answer, and what is already on screen is usually what the next
+question is about.
 
 ## The View
 
@@ -202,8 +219,7 @@ answer appearing.
 
 Calm, light, and almost borderless. Structure comes from space and alignment;
 a hairline appears only where two things genuinely must be told apart. One card
-per View, never a card inside a card. Numbers are tabular and right-aligned
-wherever they form a column.
+per result, never a card inside a card. Numbers are tabular.
 
 Colour is near-monochrome — slate and navy — with exactly three semantic marks:
 
@@ -211,13 +227,62 @@ Colour is near-monochrome — slate and navy — with exactly three semantic mar
 |---|---|---|
 | amber | schedule pressure | `#b8791a` |
 | rose | over budget | `#b3485c` |
-| slate | everything else | `#5c7180` |
+| slate ring | high risk | `#4a6274` |
 
-Teal appears in one place only: the voice presence dot.
+Teal appears in one place only: the voice presence.
 
-Explicitly not present: dark data plates, grids of project cells, serif
-display type, pills as decoration, nested cards, dashboards, SQL panels, and
-any animation that exists to look intelligent.
+Explicitly not present: dark data plates, grids of project cells, serif display
+type, pills as decoration, nested cards, dashboards, SQL panels, and any
+animation that exists to look intelligent.
+
+### Rules the screen is held to
+
+- **A figure says itself.** "74 projects", not a card headed *Figure* with the
+  subtitle *A single figure* over a column named `COUNT(*)`. An aggregate
+  column name is made readable before it is shown, and a bare count carries no
+  label at all — the unit beside the number says what was counted.
+- **A figure that covers the whole portfolio carries its shape.** A count of
+  every project the reader can see is shown with the breakdown by business
+  unit beneath it. Only then: a count with any condition on it would sit above
+  a breakdown that totals something else.
+- **Icons where an icon is faster than the word.** Pin, microphone, send, new,
+  download, chevron, close. All one stroke weight, all with a tooltip and an
+  accessible name. Nothing drawn for decoration.
+- **Two states on the pin.** Outline while a result is passing through, solid
+  and accented once it is kept, with the tooltip saying which action the next
+  click performs.
+- **No empty fields.** A detail panel renders only the fields that have
+  something in them. A grid of em-dashes is a database row, not a product.
+- **No dead controls.** The saved control does not appear until there is
+  something that could have been saved.
+- **Nothing says the same thing twice.** The starting questions sit beside the
+  box they would be typed into, because they are inputs; the workspace says
+  what it is for, once.
+
+## Saved, and getting it out
+
+The word *briefing* is gone. What the reader has is **Saved**: results they
+pinned, which they can later download. One control in the workspace header
+opens one panel:
+
+1. **Include** — the saved results, newest first, all unticked.
+2. **Detail** — Summary, or Full records.
+3. **Format** — PDF, or CSV.
+4. **Download** — the only primary action, disabled until something is ticked.
+
+Nothing technical is exposed. PDF is the browser's own print-to-PDF over a page
+built for it, rather than a second renderer that could disagree with the first
+about a figure.
+
+## On a phone
+
+Not two stacked columns. The screen shows one thing at a time — **Chat** or
+**Results** — with a tab bar at the top carrying the result count, and the
+composer fixed to the bottom of the viewport on both. A question is always one
+tap away. Asking something switches to Results, because that is what was asked
+for. Within a row the proportional bar is dropped: at that width the project's
+name is what matters, and the bar is a second reading of a number already
+there.
 
 ## What does not change
 

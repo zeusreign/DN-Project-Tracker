@@ -12,11 +12,11 @@
 // fallback so this endpoint keeps answering while the SQL-generating engine is
 // built.
 
-import { availableUnits } from "./assistant-schema.js";
+import { availableUnits, scopedViews } from "./assistant-schema.js";
 import { mintVoiceSession, PlannerError, sqlGeneratorFor, answererFor } from "./assistant-model.js";
 import { voiceInstructions, messageFor } from "./assistant-prompt.js";
 import { REALTIME_TOOLS, TOOL_LABELS, runTool, ToolError } from "./assistant-tools.js";
-import { chooseView, buildView } from "./assistant-views.js";
+import { chooseView, buildView, countsWholePortfolio } from "./assistant-views.js";
 import { runSql, hydrateProjects, SqlRejected } from "./assistant-sql.js";
 import { sealTurn, openTurn } from "./assistant-context.js";
 import { legacyPlanRoutes } from "./legacy/assistant-plan-route.js";
@@ -387,6 +387,14 @@ async function askWithSql(request, env, user, role, scope, helpers) {
   const kind = chooseView(outcome.view, { result, records });
   const view = buildView(kind, { result, records });
 
+  // "How many projects are there?" is the first question anyone asks, and a
+  // number on its own is a worse answer than the same number with its shape.
+  // Only when the count provably covers the reader's whole portfolio, so the
+  // breakdown cannot describe a different set from the figure above it.
+  if (kind === "figure" && countsWholePortfolio(result)) {
+    view.data.breakdown = await unitBreakdown(env.DB, scope);
+  }
+
   // Two separate things: the sentence for the conversation, and the records for
   // the evidence panel. A list of rows does not belong in the sentence.
   return json({
@@ -424,6 +432,24 @@ async function askWithSql(request, env, user, role, scope, helpers) {
     sql: undefined,
     debug: debugFor(env, { plan: null, scope, result, outcome, question, sql: result.sql, inner: result.inner }),
   });
+}
+
+// The portfolio by business unit, through the same scoped views every other
+// read goes through, so it can only ever describe what the reader may see.
+async function unitBreakdown(db, scope) {
+  try {
+    const views = scopedViews(scope);
+    const rows = await db.prepare(`${views.sql}
+      SELECT business_unit AS label, COUNT(*) AS value
+      FROM projects GROUP BY business_unit ORDER BY value DESC, business_unit`)
+      .bind(...views.bindings).all();
+    const results = rows.results || [];
+    // One group is not a breakdown, it is the same number again.
+    return results.length > 1 ? results : null;
+  } catch {
+    // Context, not the answer. A figure without it is still correct.
+    return null;
+  }
 }
 
 // Used when the answering call cannot be made. Correct, if plainer.

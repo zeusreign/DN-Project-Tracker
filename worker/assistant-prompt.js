@@ -216,6 +216,11 @@ Writing the query:
 - A question that asks "how many", "what is the total", "the average", "the
   highest" or "the lowest" wants one number: use COUNT, SUM, AVG, MAX or MIN
   rather than returning rows for someone to count.
+- Always give an aggregate column a readable alias, because the alias is the
+  label shown on screen: SUM(approved_budget) AS total_approved_budget, not
+  AS x. For a plain COUNT(*) the alias does not matter - the screen writes
+  "74 projects" from what was counted - but never leave SUM, AVG, MAX or MIN
+  unaliased, or the reader is shown the function call.
 - A question about each or per something is a GROUP BY.
 - Use ORDER BY for "largest", "earliest", "most recent", with LIMIT 1 when the
   question asks for a single one.

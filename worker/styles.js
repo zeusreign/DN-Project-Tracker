@@ -126,11 +126,11 @@ ${ENHANCED_STYLES}
 .ask-ai-mark .ai-spark{width:13px;height:13px}
 
 
+
 /* --- The conversational project-analysis workspace ------------------------ */
-/* Two surfaces, one state. A light conversation column on the left, where a
-   question is asked and answered in a sentence; a workspace on the right, where
-   every structured thing lives. Nothing here renders a table into the
-   conversation, and nothing nests a card inside a card.
+/* Two surfaces, one state. A light conversation column where a question is
+   asked and answered in a sentence; a workspace that accumulates every result
+   it produces, newest at the top.
 
    Structure comes from space and alignment. A hairline appears only where two
    things genuinely have to be told apart. Colour is near-monochrome with three
@@ -142,43 +142,44 @@ ${ENHANCED_STYLES}
   --w-bg:#f6f8f9; --w-amber:#b8791a; --w-rose:#b3485c; --w-good:#1d7a63;
   --w-teal:#0b8a86; --w-accent:#0a5b82;
 }
-.wsp{display:grid;grid-template-columns:380px minmax(0,1fr);
+.wsp{display:grid;grid-template-columns:372px minmax(0,1fr);
   height:calc(100vh - 172px);min-height:540px;background:var(--w-bg);
   border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(16,40,56,.05)}
+.wsi{fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;
+  display:block;flex:none}
 
-/* The conversation. No bubbles, no avatars, no cards: a question in medium
-   weight, the answer under it, a hairline between turns. */
+/* Chat and Results, on a phone. Not two stacked columns: one thing at a time,
+   with the composer always in reach. */
+.wstabs{display:none}
+
 .wsp-chat{display:flex;flex-direction:column;min-width:0;background:#fff;
   border-right:1px solid var(--w-line)}
-.wsp-chat-head{display:flex;align-items:center;gap:10px;padding:16px 18px 10px;flex:none}
-.wsp-chat-title{font-size:14px;font-weight:600;color:var(--w-ink)}
-.wsp-voicenote{font-size:12px;color:var(--w-mute)}
-.wsghost{border:0;background:transparent;color:var(--w-mute);font-size:12.5px;
-  padding:5px 9px;border-radius:7px;cursor:pointer;font-family:inherit}
+.wsp-chat-head{display:flex;align-items:center;gap:10px;padding:15px 16px 10px;flex:none}
+.wsp-chat-title{font-size:14px;font-weight:600;color:var(--w-ink);letter-spacing:-.005em}
+.wsghost{display:inline-flex;align-items:center;gap:7px;border:0;background:transparent;
+  color:var(--w-mute);font-size:12.5px;padding:6px 9px;border-radius:8px;cursor:pointer;
+  font-family:inherit}
 .wsghost:hover{background:var(--w-line2);color:var(--w-ink)}
-.wsghost.is-on{color:var(--w-teal)}
-.wsp-chat-head .wsghost{margin-left:auto}
+.wsicon-btn{margin-left:auto;padding:7px}
 
 /* One dot carries all three voice states. Nothing else moves. */
 .wsp-presence{width:9px;height:9px;position:relative;flex:none;display:block}
-.wsp-presence i{position:absolute;inset:0;border-radius:50%;background:#c6d2d9;
-  transition:background .2s}
+.wsp-presence i{position:absolute;inset:0;border-radius:50%;background:#c6d2d9;transition:background .2s}
 .wsp-presence[data-state="connecting"] i,
 .wsp-presence[data-state="thinking"] i{background:var(--w-teal);animation:wspulse 1s ease-in-out infinite}
 .wsp-presence[data-state="listening"] i{background:var(--w-teal)}
-.wsp-presence[data-state="listening"]:after{content:"";position:absolute;inset:-5px;
-  border-radius:50%;border:1px solid var(--w-teal);opacity:.3;animation:wsring 2.2s ease-out infinite}
+.wsp-presence[data-state="listening"]:after{content:"";position:absolute;inset:-5px;border-radius:50%;
+  border:1px solid var(--w-teal);opacity:.3;animation:wsring 2.2s ease-out infinite}
 .wsp-presence[data-state="speaking"] i{background:var(--w-teal);animation:wsspeak 1.1s ease-in-out infinite}
 @keyframes wspulse{0%,100%{opacity:1}50%{opacity:.35}}
 @keyframes wsring{0%{transform:scale(.7);opacity:.45}100%{transform:scale(1.5);opacity:0}}
 @keyframes wsspeak{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}
 
-.wsp-thread{flex:1 1 auto;overflow:auto;padding:2px 18px 8px;min-height:0}
-.wshello{padding:14px 0;font-size:13.5px;color:var(--w-mute);line-height:1.65}
-.wshello p{margin:0}
+.wsp-thread{flex:1 1 auto;overflow:auto;padding:2px 16px 8px;min-height:0}
 .wsturn{padding:14px 0;border-top:1px solid var(--w-line2)}
 .wsturn:first-child{border-top:0}
 .wsq-text{margin:0 0 6px;font-size:14.5px;font-weight:550;color:var(--w-ink);line-height:1.45}
+.wsq-text:empty{display:none}
 .wsturn.is-spoken .wsq-text:before{content:"";display:inline-block;width:5px;height:5px;
   border-radius:50%;background:var(--w-teal);vertical-align:middle;margin-right:7px}
 .wsa{margin:0;font-size:14px;color:var(--w-ink2);line-height:1.62}
@@ -192,74 +193,102 @@ ${ENHANCED_STYLES}
 .wsdots i:nth-child(3){animation-delay:.3s}
 @keyframes wsdot{0%,65%,100%{opacity:.28}32%{opacity:1}}
 
-/* What is happening while several tools run inside one spoken turn. Subtle on
-   purpose: it reports the work, it is not a loading screen. */
+/* What is happening while several tools run inside one spoken turn. It reports
+   the work; it is not a loading screen. */
 .wsact{display:flex;flex-direction:column;gap:5px;padding:6px 0 12px}
 .wsact-i{font-size:11.5px;color:var(--w-mute);display:inline-flex;align-items:center;gap:7px}
 .wsact-i:before{content:"";width:4px;height:4px;border-radius:50%;background:var(--w-teal);
   animation:wsdot 1.1s infinite;flex:none}
 
-.wsp-composer{flex:none;border-top:1px solid var(--w-line);padding:11px 14px 13px;
-  display:flex;align-items:flex-end;gap:8px}
-.wsp-composer textarea{flex:1 1 auto;border:0;outline:0;resize:none;font:inherit;
-  font-size:14.5px;line-height:1.5;color:var(--w-ink);background:transparent;
-  min-height:26px;max-height:132px;padding:5px 4px}
+.wsp-composer{flex:none;border-top:1px solid var(--w-line);padding:10px 12px 12px;
+  display:flex;flex-direction:column;gap:6px}
+.wsp-voicenote{font-size:11.5px;color:var(--w-teal);padding:0 4px;letter-spacing:.01em}
+.wsp-composer-row{display:flex;align-items:flex-end;gap:8px}
+.wsp-composer textarea{flex:1 1 auto;border:0;outline:0;resize:none;font:inherit;font-size:14.5px;
+  line-height:1.5;color:var(--w-ink);background:transparent;min-height:26px;max-height:132px;
+  padding:5px 4px}
 .wsp-composer textarea::placeholder{color:#9fb0ba}
 .wsp-composer-acts{display:flex;gap:7px;flex:none;padding-bottom:1px}
-.wsmic,.wssend{width:34px;height:34px;border-radius:50%;border:0;display:grid;
-  place-items:center;cursor:pointer;flex:none;transition:background .15s,color .15s}
+.wsmic,.wssend{width:34px;height:34px;border-radius:50%;border:0;display:grid;place-items:center;
+  cursor:pointer;flex:none;transition:background .15s,color .15s}
 .wsmic{background:#eef3f5;color:var(--w-ink2)}
 .wsmic:hover{background:#e3ebee;color:var(--w-ink)}
 .wsmic.is-live{background:var(--w-teal);color:#fff}
+.wsmic[data-state="listening"]{box-shadow:0 0 0 0 rgba(11,138,134,.42);animation:wsmicring 2.2s ease-out infinite}
+@keyframes wsmicring{0%{box-shadow:0 0 0 0 rgba(11,138,134,.4)}100%{box-shadow:0 0 0 9px rgba(11,138,134,0)}}
 .wssend{background:var(--w-ink);color:#fff}
 .wssend:hover{background:#05121b}
 .wssend:disabled{background:#ccd8de;cursor:default}
-.wsmic svg,.wssend svg{width:16px;height:16px;fill:none;stroke:currentColor;
-  stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 
 /* The workspace. */
 .wsp-space-wrap{display:flex;flex-direction:column;min-width:0;background:var(--w-bg)}
-.wsp-space-head{display:flex;align-items:center;gap:14px;padding:15px 22px 9px;flex:none}
-.wsp-space-head h2{margin:0;font-size:11px;letter-spacing:.11em;text-transform:uppercase;
-  color:var(--w-mute);font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.wsscope{margin-left:auto;flex:none;border:1px solid var(--w-line);background:#fff;
-  border-radius:9px;padding:6px 11px;font-family:inherit;font-size:12.5px;
-  color:var(--w-ink2);cursor:pointer}
-.wsp-space{flex:1 1 auto;overflow:auto;padding:0 22px 20px;min-height:0}
+.wsp-space-head{display:flex;align-items:center;gap:10px;padding:13px 20px 9px;flex:none}
+.wsscope{border:1px solid var(--w-line);background:#fff;border-radius:9px;padding:6px 11px;
+  font-family:inherit;font-size:12.5px;color:var(--w-ink2);cursor:pointer}
+.wssaved-slot{margin-left:auto;position:relative;flex:none}
+.wssaved{background:#fff;border:1px solid var(--w-line);color:var(--w-ink2);padding:6px 11px}
+.wssaved:hover{background:#fff;border-color:#cbd8de;color:var(--w-ink)}
+.wssaved em{font-style:normal;font-size:11px;font-weight:650;color:#fff;background:var(--w-ink);
+  border-radius:999px;min-width:17px;height:17px;display:inline-grid;place-items:center;padding:0 5px}
+.wsp-space{flex:1 1 auto;overflow:auto;padding:0 20px 22px;min-height:0;
+  display:flex;flex-direction:column;gap:9px}
 
-.wsempty{padding:52px 4px;max-width:460px}
-.wsempty-t{margin:0;font-size:21px;color:var(--w-ink);font-weight:600;letter-spacing:-.01em}
-.wsempty-s{margin:9px 0 20px;font-size:14px;color:var(--w-mute);line-height:1.62}
-.wsempty-q{display:flex;flex-direction:column;align-items:flex-start;gap:1px}
-.wsempty-q button{border:0;background:transparent;color:var(--w-accent);font-size:13.5px;
-  padding:7px 10px;margin-left:-10px;border-radius:8px;cursor:pointer;
-  text-align:left;font-family:inherit}
-.wsempty-q button:hover{background:#fff}
+/* Nothing asked yet. Centred rather than pinned to a corner of a large empty
+   area, and saying only what the reader cannot work out from the screen. */
+.wsempty{flex:1 1 auto;display:flex;align-items:center;justify-content:center;padding:32px 8px}
+.wsempty>div{max-width:400px;text-align:center}
+.wsempty-t{margin:0;font-size:22px;color:var(--w-ink);font-weight:600;letter-spacing:-.015em}
+.wsempty-s{margin:10px 0 0;font-size:14px;color:var(--w-mute);line-height:1.65}
 
-/* Earlier results in the same thread, collapsed to one line each. Nothing is
-   thrown away when a question narrows the one before it. */
-.wstrail{display:flex;flex-direction:column;gap:1px;margin-bottom:10px}
-.wsstrip{display:flex;align-items:baseline;gap:10px;width:100%;text-align:left;border:0;
-  background:transparent;padding:7px 11px;border-radius:9px;cursor:pointer;font-family:inherit}
-.wsstrip:hover{background:#fff}
-.wsstrip-t{font-size:13px;color:var(--w-ink2);font-weight:550}
-.wsstrip-s{font-size:11.5px;color:var(--w-mute)}
-.wsearlier{border:0;background:transparent;color:var(--w-mute);font-size:12px;
-  padding:6px 11px;margin:0 0 9px -11px;border-radius:8px;cursor:pointer;font-family:inherit}
-.wsearlier:hover{background:#fff;color:var(--w-ink)}
+/* Questions to start with, beside the box they would be typed into. */
+.wsstart{flex:none;display:flex;flex-direction:column;align-items:stretch;gap:2px;
+  padding:0 12px 4px}
+.wsstart button{border:0;background:transparent;color:var(--w-ink2);font-size:13.5px;
+  padding:9px 11px;border-radius:9px;cursor:pointer;text-align:left;font-family:inherit;
+  transition:background .14s,color .14s}
+.wsstart button:hover{background:var(--w-line2);color:var(--w-ink)}
 
-.wscard{background:#fff;border-radius:14px;padding:19px 22px 22px;
-  box-shadow:0 1px 2px rgba(16,40,56,.05),0 10px 30px rgba(16,40,56,.055)}
-.wscard-head{display:flex;align-items:flex-start;gap:16px;margin-bottom:17px}
-.wscard-head h3{margin:0;font-size:19px;letter-spacing:-.012em;color:var(--w-ink);font-weight:620}
+/* A card per result, newest first. A follow-up is indented under the question
+   it narrowed, so the column reads as one investigation. */
+.wscard{position:relative;background:#fff;border-radius:14px;padding:19px 22px 22px;
+  box-shadow:0 1px 2px rgba(16,40,56,.05),0 10px 30px rgba(16,40,56,.05)}
+.wscard.is-follow,.wsold.is-follow{margin-left:17px}
+.wscard.is-follow:before,.wsold.is-follow:before{content:"";position:absolute;left:-17px;
+  top:0;bottom:0;width:1px;background:var(--w-line)}
+.wscard-head{margin:0 44px 16px 0}
+.wscard-head h3{margin:0;font-size:18px;letter-spacing:-.014em;color:var(--w-ink);font-weight:620}
 .wscard-head p{margin:3px 0 0;font-size:12.5px;color:var(--w-mute)}
-.wscard-acts{margin-left:auto;flex:none}
 .wscard-note{margin:15px 0 0;font-size:11.5px;color:var(--w-mute)}
 .wsnote{margin:0;font-size:13.5px;color:var(--w-mute);line-height:1.62;max-width:52ch}
 
+/* The pin. Outline when a result is passing through, solid when it is kept. */
+.wspin{position:absolute;top:15px;right:15px;width:30px;height:30px;border:0;border-radius:8px;
+  background:transparent;color:#aebcc5;display:grid;place-items:center;cursor:pointer;
+  transition:color .14s,background .14s}
+.wspin:hover{background:var(--w-line2);color:var(--w-ink2)}
+.wspin.is-on{color:var(--w-accent)}
+.wspin.is-on .wsi{fill:currentColor}
+.wspin.is-on:hover{background:#e8f1f6}
+
+/* An earlier result, collapsed to a line. Still there, still openable. */
+.wsold{position:relative;display:flex;align-items:baseline;gap:10px;width:100%;text-align:left;
+  border:0;background:transparent;padding:9px 12px;border-radius:10px;cursor:pointer;
+  font-family:inherit}
+.wsold:hover{background:#fff}
+.wsold .wsi{align-self:center;color:#a7b8c2;transform:rotate(-90deg)}
+.wsold-t{font-size:13px;color:var(--w-ink2);font-weight:550}
+.wsold-s{font-size:11.5px;color:var(--w-mute)}
+
+/* What is worth asking next. Each one asks a real question, which is why it
+   is here rather than a block of explanatory text. */
+.wsnext{display:flex;flex-wrap:wrap;gap:6px;padding:2px 2px 4px}
+.wsnext button{border:0;background:transparent;color:var(--w-accent);font-size:12.5px;
+  padding:6px 10px;border-radius:999px;cursor:pointer;font-family:inherit}
+.wsnext button:hover{background:#fff}
+
 /* Metrics. No boxes: one hairline under the row and plenty of space. */
-.wsmets{display:grid;grid-template-columns:repeat(auto-fit,minmax(134px,1fr));
-  gap:17px 26px;margin-bottom:19px;padding-bottom:18px;border-bottom:1px solid var(--w-line)}
+.wsmets{display:grid;grid-template-columns:repeat(auto-fit,minmax(134px,1fr));gap:17px 26px;
+  margin-bottom:19px;padding-bottom:18px;border-bottom:1px solid var(--w-line)}
 .wsmet-k{display:block;font-size:11px;color:var(--w-mute)}
 .wsmet-v{display:block;font-size:24px;font-weight:600;color:var(--w-ink);margin-top:4px;
   letter-spacing:-.018em;font-variant-numeric:tabular-nums}
@@ -312,8 +341,8 @@ ${ENHANCED_STYLES}
 .wsrisk{margin-bottom:18px;padding-bottom:15px;border-bottom:1px solid var(--w-line)}
 .wsrisk-head,.wsrisk-row{display:grid;grid-template-columns:108px minmax(0,1fr) minmax(0,1fr);
   gap:18px;align-items:center}
-.wsrisk-head{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
-  color:var(--w-mute);font-weight:650;padding-bottom:7px}
+.wsrisk-head{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--w-mute);
+  font-weight:650;padding-bottom:7px}
 .wsrisk-row{padding:7px 0}
 .wsrisk-k{font-size:13px;color:var(--w-ink);font-weight:550}
 .wsrisk-v{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--w-ink2);
@@ -322,8 +351,8 @@ ${ENHANCED_STYLES}
 
 /* Period on period. The relationship is drawn, never typed as an arrow. */
 .wspairs{display:flex;flex-direction:column}
-.wspair{display:grid;grid-template-columns:128px minmax(0,1fr) 26px minmax(0,1fr) auto;
-  gap:14px;align-items:center;padding:13px 0;border-bottom:1px solid var(--w-line2)}
+.wspair{display:grid;grid-template-columns:128px minmax(0,1fr) 26px minmax(0,1fr) auto;gap:14px;
+  align-items:center;padding:13px 0;border-bottom:1px solid var(--w-line2)}
 .wspair-k{font-size:13px;color:var(--w-ink);font-weight:550}
 .wspair-was,.wspair-now{font-size:15px;color:var(--w-ink);font-variant-numeric:tabular-nums}
 .wspair-was{color:var(--w-mute)}
@@ -343,105 +372,156 @@ ${ENHANCED_STYLES}
 .wscmp{display:grid;align-items:stretch}
 .wscmp-corner,.wscmp-head{border-bottom:1px solid var(--w-line)}
 .wscmp-head{text-align:left;border-top:0;border-left:0;border-right:0;background:transparent;
-  cursor:pointer;padding:0 12px 12px;font-size:14px;font-weight:600;color:var(--w-ink);
-  font-family:inherit}
+  cursor:pointer;padding:0 12px 12px;font-size:14px;font-weight:600;color:var(--w-ink);font-family:inherit}
 .wscmp-head:hover{color:var(--w-accent)}
-.wscmp-head em{display:block;font-style:normal;font-size:11px;color:var(--w-mute);
-  font-weight:400;margin-top:3px}
+.wscmp-head em{display:block;font-style:normal;font-size:11px;color:var(--w-mute);font-weight:400;margin-top:3px}
 .wscmp-k{font-size:12px;color:var(--w-mute);padding:11px 0;border-bottom:1px solid var(--w-line2);
   display:flex;align-items:center}
-.wscmp-v{font-size:13.5px;color:var(--w-ink);padding:11px 12px;
-  border-bottom:1px solid var(--w-line2);font-variant-numeric:tabular-nums;
-  display:flex;align-items:center}
+.wscmp-v{font-size:13.5px;color:var(--w-ink);padding:11px 12px;border-bottom:1px solid var(--w-line2);
+  font-variant-numeric:tabular-nums;display:flex;align-items:center}
 .wscmp-rose{color:var(--w-rose);font-weight:600}
 .wscmp-amber{color:var(--w-amber);font-weight:600}
 
 .wstl{list-style:none;margin:0;padding:0 0 0 20px;position:relative}
 .wstl:before{content:"";position:absolute;left:4px;top:14px;bottom:14px;width:1px;background:var(--w-line)}
 .wstl li{position:relative;padding:9px 0;display:flex;gap:18px;align-items:baseline}
-.wstl li:before{content:"";position:absolute;left:-20px;top:13px;width:9px;height:9px;
-  border-radius:50%;background:#fff;border:2px solid #c0ced6}
+.wstl li:before{content:"";position:absolute;left:-20px;top:13px;width:9px;height:9px;border-radius:50%;
+  background:#fff;border:2px solid #c0ced6}
 .wstl-actual:before{border-color:var(--w-accent)}
 .wstl-report:before{border-color:var(--w-teal)}
 .wstl-d{font-size:12.5px;color:var(--w-mute);min-width:98px;font-variant-numeric:tabular-nums}
 .wstl-l{font-size:13.5px;color:var(--w-ink)}
 
-.wsbig{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:26px}
-.wsbig-m span{display:block;font-size:11.5px;color:var(--w-mute)}
-.wsbig-m strong{display:block;font-size:38px;font-weight:600;color:var(--w-ink);
-  letter-spacing:-.025em;margin-top:5px;font-variant-numeric:tabular-nums}
+/* A figure says itself: the number, and what it is a number of. */
+.wsbig{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:26px}
+.wsbig-k{display:block;font-size:11.5px;color:var(--w-mute);margin-bottom:4px}
+.wsbig-m strong{display:flex;align-items:baseline;gap:9px;font-size:44px;font-weight:600;
+  color:var(--w-ink);letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.05}
+.wsbig-m strong em{font-style:normal;font-size:16px;font-weight:500;color:var(--w-mute);
+  letter-spacing:0}
+.wsbreak{margin-top:20px;padding-top:4px;border-top:1px solid var(--w-line)}
 
-.wsgroup-row{display:grid;grid-template-columns:minmax(0,1fr) 108px 92px;gap:16px;
-  align-items:center;padding:10px 0;border-bottom:1px solid var(--w-line2)}
+.wsgroup-row{display:grid;grid-template-columns:minmax(0,1fr) 108px 92px;gap:16px;align-items:center;
+  padding:10px 0;border-bottom:1px solid var(--w-line2)}
 .wsgroup-k{font-size:13.5px;color:var(--w-ink)}
 .wsgroup-row .wsbar{width:100%}
 .wsgroup-v{text-align:right;font-size:13.5px;color:var(--w-ink);font-variant-numeric:tabular-nums}
 
-/* The briefing. A real workspace object that fills as you work, not an export
-   button you have to remember to press. */
-.wsbrief{flex:none;border-top:1px solid var(--w-line);background:#fff}
-.wsbrief-tab{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;
-  padding:12px 22px;font-size:13px;font-weight:600;color:var(--w-ink);cursor:pointer;
-  text-align:left;font-family:inherit}
-.wsbrief-tab:hover{background:var(--w-line2)}
-.wsbrief-tab span{font-size:11.5px;font-weight:400;color:var(--w-mute)}
-.wsbrief-body{padding:0 22px 15px;max-height:228px;overflow:auto}
-.wsbrief-row{display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--w-line2)}
-.wsbrief-row span{flex:1 1 auto;min-width:0}
-.wsbrief-row strong{display:block;font-size:13px;color:var(--w-ink);font-weight:550}
-.wsbrief-row em{display:block;font-style:normal;font-size:11.5px;color:var(--w-mute);margin-top:1px}
-.wsx{border:0;background:transparent;color:#aebcc5;font-size:17px;line-height:1;
-  cursor:pointer;padding:0 4px;flex:none}
-.wsx:hover{color:var(--w-rose)}
-.wsbrief-foot{display:flex;gap:8px;padding-top:13px}
-.wsbtn{border:0;background:var(--w-accent);color:#fff;border-radius:9px;padding:8px 15px;
-  font-size:13px;font-weight:550;cursor:pointer;font-family:inherit}
+/* Saved, and getting it out. One control, one panel, one primary action. */
+.wspanel{position:absolute;right:0;top:calc(100% + 7px);z-index:30;width:330px;background:#fff;
+  border:1px solid var(--w-line);border-radius:13px;box-shadow:0 18px 44px rgba(16,40,56,.17);
+  overflow:hidden}
+.wspanel-empty{margin:0;padding:20px 16px;font-size:12.5px;color:var(--w-mute);line-height:1.6}
+.wspanel-list{max-height:208px;overflow:auto;padding:6px}
+.wspick{display:flex;align-items:flex-start;gap:10px;padding:8px 9px;border-radius:9px;cursor:pointer}
+.wspick:hover{background:var(--w-line2)}
+.wspick input{margin:2px 0 0;width:15px;height:15px;accent-color:var(--w-accent);flex:none;cursor:pointer}
+.wspick span{flex:1 1 auto;min-width:0}
+.wspick strong{display:block;font-size:13px;color:var(--w-ink);font-weight:550}
+.wspick em{display:block;font-style:normal;font-size:11.5px;color:var(--w-mute);margin-top:1px}
+.wsx{border:0;background:transparent;color:#b3c1c9;padding:2px;border-radius:6px;cursor:pointer;flex:none}
+.wsx:hover{color:var(--w-rose);background:#fbeef0}
+.wspanel-row{display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid var(--w-line2)}
+.wspanel-k{font-size:11.5px;color:var(--w-mute);flex:none;width:52px}
+.wsseg{display:flex;gap:2px;background:var(--w-line2);border-radius:9px;padding:2px;flex:1 1 auto}
+.wsseg button{flex:1 1 0;border:0;background:transparent;border-radius:7px;padding:6px 8px;
+  font-family:inherit;font-size:12.5px;color:var(--w-ink2);cursor:pointer}
+.wsseg button.is-on{background:#fff;color:var(--w-ink);font-weight:600;
+  box-shadow:0 1px 2px rgba(16,40,56,.1)}
+.wspanel-foot{padding:11px 14px 13px;border-top:1px solid var(--w-line2)}
+.wsbtn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;border:0;
+  background:var(--w-accent);color:#fff;border-radius:9px;padding:9px 15px;font-size:13px;
+  font-weight:600;cursor:pointer;font-family:inherit}
 .wsbtn:hover{background:#084b6c}
+.wsbtn:disabled{background:#d2dde2;color:#8da0ab;cursor:default}
+
+/* The print page, built only when a PDF is asked for. */
+.wspr{display:none}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
 /* Responsive. The rail folds into a row above the evidence panel rather than
 
-/* Responsive. The workspace goes under the conversation rather than beside it;
-   neither one is a desktop-only affordance. */
-@media (max-width:1180px){
-  .wsp{grid-template-columns:330px minmax(0,1fr)}
-}
+/* Responsive. Not two stacked columns: on a phone the screen shows one thing
+   at a time - the conversation, or the results - and the composer stays in
+   reach on both. */
+@media (max-width:1180px){ .wsp{grid-template-columns:330px minmax(0,1fr)} }
 @media (max-width:920px){
-  .wsp{grid-template-columns:minmax(0,1fr);height:auto;min-height:0}
-  .wsp-chat{border-right:0;border-bottom:1px solid var(--w-line)}
-  .wsp-thread{max-height:300px}
-  .wsp-space{max-height:none;overflow:visible}
+  .wsp{display:flex;flex-direction:column;height:calc(100vh - 140px);border-radius:14px}
+  .wstabs{order:1;display:flex;gap:2px;flex:none;padding:8px;background:#fff;
+    border-bottom:1px solid var(--w-line)}
+  .wstabs button{flex:1 1 0;display:inline-flex;align-items:center;justify-content:center;gap:7px;
+    border:0;background:transparent;border-radius:9px;padding:9px;font-family:inherit;font-size:13.5px;
+    font-weight:550;color:var(--w-mute);cursor:pointer}
+  .wstabs button[aria-selected="true"]{background:var(--w-line2);color:var(--w-ink)}
+  .wstabs em{font-style:normal;font-size:11px;font-weight:650;color:#fff;background:var(--w-ink2);
+    border-radius:999px;min-width:17px;height:17px;display:inline-grid;place-items:center;padding:0 5px}
+  .wstabs em:empty{display:none}
+  .wsp-space-wrap{order:2;flex:1 1 auto;min-height:0}
+  .wsp-chat{order:3;border-right:0;border-top:1px solid var(--w-line);min-height:0}
+  /* On Results the conversation steps back but the composer does not: a
+     question is the one thing that must always be one tap away. */
+  .wsp[data-tab="results"] .wsp-chat-head,
+  .wsp[data-tab="results"] .wsp-thread{display:none}
+  .wsp[data-tab="results"] .wsp-chat{flex:none}
+  .wsp[data-tab="chat"] .wsp-space-wrap{display:none}
+  .wsp[data-tab="chat"] .wsp-chat{flex:1 1 auto}
 }
 @media (max-width:640px){
-  .wsp-space-head{flex-wrap:wrap}
-  .wsscope{margin-left:0;width:100%}
-  .wscard{padding:16px 15px 18px}
+  /* The page scrolls as one, so the two things that must always be reachable
+     stick: the tabs that switch surface, and the box you type into. A fixed
+     column height here would depend on how tall the app chrome above happens
+     to be, which is not something this pane can know. */
+  .wsp{height:auto;min-height:0;overflow:visible}
+  .wsp-chat,.wsp-space-wrap,.wsp-space,.wsp-thread{overflow:visible;min-height:0}
+  .wstabs{position:sticky;top:0;z-index:7}
+  /* Fixed rather than sticky: on the Results tab the conversation column sits
+     below a workspace taller than the screen, so a sticky composer would be
+     stuck to a containing block nobody can see. */
+  .wsp-composer{position:fixed;left:0;right:0;bottom:0;z-index:20;background:#fff;
+    border-top:1px solid var(--w-line);box-shadow:0 -6px 18px rgba(16,40,56,.08);
+    padding-bottom:max(12px,env(safe-area-inset-bottom))}
+  .wsp{padding-bottom:64px}
   .wsp-space{padding:0 12px 16px}
+  /* At this width the name is what matters. The bar is a second reading of a
+     number that is already there. */
+  .wsrow-fig .wsbar{display:none}
+  .wsrow{gap:9px;padding:11px 7px}
+  .wsp-space-head{padding:11px 12px 8px}
+  .wscard{padding:16px 15px 18px;border-radius:12px}
+  .wscard.is-follow,.wsold.is-follow{margin-left:11px}
+  .wscard.is-follow:before,.wsold.is-follow:before{left:-11px}
+  .wspanel{width:min(330px,calc(100vw - 28px))}
+  .wsbig-m strong{font-size:36px}
   .wspair{grid-template-columns:minmax(0,1fr);gap:4px;padding:12px 0}
   .wspair-arrow{display:none}
   .wsdelta{text-align:left}
-  .wsrisk-head,.wsrisk-row{grid-template-columns:86px minmax(0,1fr) minmax(0,1fr);gap:10px}
+  .wsrisk-head,.wsrisk-row{grid-template-columns:84px minmax(0,1fr) minmax(0,1fr);gap:10px}
   .wscmp{overflow-x:auto}
+  .wsmets{grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:14px 18px}
+  .wsmet-v{font-size:21px}
 }
 @media (prefers-reduced-motion:reduce){
-  .wsp-presence i,.wsp-presence:after,.wsdots i,.wsact-i:before{animation:none!important}
+  .wsp-presence i,.wsp-presence:after,.wsdots i,.wsact-i:before,.wsmic{animation:none!important}
   .wsp-thread{scroll-behavior:auto}
 }
 
-/* Print: the focused card and the briefing are the page. Everything that is
-   furniture goes away, and the card flows onto as many sheets as it needs. */
+/* Print: only what was chosen in the download panel, laid out as a document. */
 @media print{
   body{background:#fff}
-  .sidebar,.topbar,.wsp-chat,.wsp-space-head,.wstrail,.wsearlier,.wscard-acts,
-  .toast,.pane:not([data-pane="ask"]){display:none!important}
-  .app{display:block!important;box-shadow:none!important;background:#fff!important}
-  .wsp{display:block!important;height:auto!important;border-radius:0!important;
-    box-shadow:none!important;background:#fff!important}
-  .wsp-space,.wsp-space-wrap{display:block!important;overflow:visible!important;
-    max-height:none!important;padding:0!important;background:#fff!important}
-  .wscard{box-shadow:none!important;padding:0!important;break-inside:avoid}
-  .wsbrief-body{max-height:none!important;overflow:visible!important}
-  .wsbrief-tab,.wsbrief-foot{display:none!important}
+  .sidebar,.topbar,.app,.toast{display:none!important}
+  .wspr{display:block!important;position:static;padding:0;color:#14222c;
+    font-size:11pt;line-height:1.5}
+  .wspr-head{border-bottom:2px solid #14222c;padding-bottom:8pt;margin-bottom:16pt}
+  .wspr-head h1{margin:0;font-size:20pt;letter-spacing:-.01em}
+  .wspr-head p{margin:3pt 0 0;font-size:9.5pt;color:#5a6f7c}
+  .wspr-sec{break-inside:avoid;margin-bottom:18pt}
+  .wspr-sec h2{margin:0 0 2pt;font-size:13pt}
+  .wspr-sub{margin:0 0 7pt;font-size:9.5pt;color:#5a6f7c}
+  .wspr table{width:100%;border-collapse:collapse;font-size:9.5pt}
+  .wspr th{text-align:left;border-bottom:1px solid #14222c;padding:4pt 6pt 4pt 0;font-size:8.5pt;
+    text-transform:uppercase;letter-spacing:.06em;color:#5a6f7c}
+  .wspr td{padding:4pt 6pt 4pt 0;border-bottom:1px solid #e6ecef}
+  .wspr-foot{margin-top:18pt;padding-top:7pt;border-top:1px solid #e6ecef;font-size:8.5pt;color:#5a6f7c}
 }
 `;

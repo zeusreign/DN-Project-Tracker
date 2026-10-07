@@ -202,23 +202,29 @@ const clean = (value) => {
 function titleFor(kind, rows, result) {
   const one = rows.length === 1 ? rows[0] : null;
   switch (kind) {
+    // A figure says itself. "74 projects" set large needs no heading above it
+    // saying "Figure", and a heading plus a generic subtitle is two lines
+    // spent on what one line already carries.
+    case "figure": return null;
     case "project_detail": return clean(one && one.name) || "Project";
-    case "budget_summary": return "Budget summary";
-    case "budget_variance": return "Forecast variance";
-    case "risk_summary": return "Risk summary";
-    case "risk_list": return "Projects by risk";
-    case "schedule": return "Turnover and schedule";
-    case "change_comparison": return one ? `${clean(one.name) || "Project"} — period on period` : "Period on period";
+    case "budget_summary":
+    case "budget_variance": return "Budgets and variance";
+    case "risk_summary": return "Risk";
+    case "risk_list": return "Risk ratings";
+    case "schedule": return "Turnover";
+    case "change_comparison": return one ? `${clean(one.name) || "Project"} · period on period` : "Period on period";
     case "project_comparison": return "Side by side";
-    case "timeline": return one ? `${clean(one.name) || "Project"} — timeline` : "Timeline";
-    case "figure": return "Figure";
-    case "group": return "By group";
-    case "empty": return "No matching records";
+    case "timeline": return one ? `${clean(one.name) || "Project"} · timeline` : "Timeline";
+    case "group": return "Breakdown";
+    case "empty": return "Nothing matched";
     default: return result.total === 1 ? "1 project" : `${result.total} projects`;
   }
 }
 
+// Only what the title does not already say. A count under a title that is the
+// same count is a line of interface that tells the reader nothing.
 function subtitleFor(kind, rows, result) {
+  if (kind === "empty" || kind === "figure") return null;
   const parts = [];
   if (kind === "project_detail" && rows.length === 1) {
     const row = rows[0];
@@ -228,12 +234,9 @@ function subtitleFor(kind, rows, result) {
     });
     return parts.join(" · ") || null;
   }
-  if (kind === "empty") return null;
-  if (result.aggregate) return "A single figure";
-  if (result.truncated) {
-    parts.push(`${result.total} matched · showing ${result.returned}`);
-  } else if (typeof result.total === "number" && kind !== "figure") {
-    parts.push(`${result.total} ${result.total === 1 ? "record" : "records"}`);
+  if (result.truncated) parts.push(`${result.total} matched · showing ${result.returned}`);
+  else if (typeof result.total === "number" && kind !== "project_list") {
+    parts.push(`${result.total} ${result.total === 1 ? "project" : "projects"}`);
   }
   if (result.fannedOut && result.projects && result.projects.matched !== null) {
     parts.push(`across ${result.projects.matched} projects`);
@@ -257,6 +260,21 @@ export function marksFor(row) {
 
 // The View itself. `data` is whatever that component is built from; the client
 // has one renderer per kind and reads nothing else.
+// A bare count of every project this reader can see. Only then is a breakdown
+// of the whole portfolio provably about the same set as the figure: a count
+// with any condition on it would be shown beside a breakdown that totals
+// something else, which is the kind of confident wrong answer this product
+// exists to avoid.
+export function countsWholePortfolio(result) {
+  if (!result || !result.aggregate || !Array.isArray(result.rows)) return false;
+  if (result.rows.length !== 1) return false;
+  const values = Object.values(result.rows[0]);
+  if (values.length !== 1) return false;
+  const total = number(values[0]);
+  return total !== null && total > 1
+    && typeof result.projectsInScope === "number" && total === result.projectsInScope;
+}
+
 export function buildView(kind, { result, records, label }) {
   const rows = (records && records.length ? records : result.rows) || [];
   const view = {
@@ -310,7 +328,7 @@ export function buildView(kind, { result, records, label }) {
       view.data = { events: timelineFor(rows[0]) };
       break;
     case "figure":
-      view.data = { metrics: metricsFrom(rows[0] || {}) };
+      view.data = { metrics: metricsFrom(rows[0] || {}, countUnit(result)) };
       break;
     case "group":
       view.data = { rows, columns: columnsOf(rows) };
@@ -327,12 +345,55 @@ export function buildView(kind, { result, records, label }) {
 // A single aggregate row, read as labelled numbers rather than as a table of
 // one. The column name is the label: the query wrote it, so it says what the
 // figure is.
-function metricsFrom(row) {
+// A single aggregate row, read as labelled numbers. The column name is the
+// label, so it has to be made readable first: the model writes SQL, and
+// COUNT(*) on screen is the database showing through the product.
+const AGGREGATES = [
+  [/^count\s*\(\s*\*\s*\)$/i, null],
+  [/^sum[_(]/i, "Total "], [/^total[_(]/i, "Total "],
+  [/^avg[_(]/i, "Average "], [/^average[_(]/i, "Average "],
+  [/^max[_(]/i, "Highest "], [/^min[_(]/i, "Lowest "],
+  [/^count[_(]/i, null],
+];
+
+export function humanMetric(key) {
+  const name = String(key || "").trim();
+  for (const [pattern, prefix] of AGGREGATES) {
+    if (!pattern.test(name)) continue;
+    // A bare count has no label at all: the unit beside the number says what
+    // was counted, and "Count" above "74" says nothing.
+    const inner = name.replace(/^[a-z]+\s*[_(]\s*/i, "").replace(/[)\s]+$/, "").replace(/\*/, "");
+    const rest = inner.replace(/_/g, " ").trim();
+    if (prefix === null) return null;
+    return (prefix + (rest || "value")).replace(/\s+/g, " ").trim();
+  }
+  // A terse alias is a count by another name: "AS n", "AS c", "AS cnt". Shown
+  // as a label it reads as a column, which is the database showing through.
+  if (/^(n|c|cnt|num|qty|count|total|projects|records)$/i.test(name)) return null;
+  return name.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+// What a bare COUNT(*) counted. entityLabel says "a single figure" for an
+// aggregate, which reads correctly in a sentence and wrongly as a unit beside
+// a number. The tables the query touched say what the rows actually were.
+export function countUnit(result) {
+  const tables = (result && result.tables) || [];
+  if (tables.includes("project_updates")) return "activity updates";
+  if (tables.includes("project_photos")) return "photographs";
+  if (tables.includes("development_details")) return "development records";
+  if (tables.includes("projects")) return "projects";
+  return "records";
+}
+
+function metricsFrom(row, unit) {
   return Object.entries(row).map(([key, value]) => ({
     key,
-    label: key.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()),
+    label: humanMetric(key),
+    // What the number is a number OF. Shown beside it, so a figure reads as a
+    // sentence rather than as a value with a column name over it.
+    unit: humanMetric(key) === null ? (unit || "records") : null,
     value: number(value) === null ? clean(value) : number(value),
-    format: /budget|cost|variance|capp|estimate|total|sum|avg/i.test(key) && number(value) !== null
+    format: /budget|cost|variance|capp|estimate/i.test(key) && number(value) !== null
       ? "money"
       : (number(value) === null ? "text" : "number"),
   }));
