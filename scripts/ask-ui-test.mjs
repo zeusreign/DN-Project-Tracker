@@ -72,6 +72,7 @@ const answerer = { async answer(question, result) {
 } };
 
 const page = await (await worker.fetch(new Request("https://t/",{headers:{cookie:""}}), base, {})).text();
+const clientSource = (page.match(/<script>([\s\S]*)<\/script>/) || [])[1] || "";
 const browser = await createBrowser({ page, handler:(r) =>
   worker.fetch(r, { ...base, ASSISTANT_SQL:generator, ASSISTANT_ANSWERER:answerer }, {}) }).start();
 browser.type("loginUsername","ui@example.invalid"); browser.type("loginPassword",pw);
@@ -335,6 +336,43 @@ step(46, "a phone gets one thing at a time, not two squeezed columns", () => {
     "conversation and results are switchable");
   assert.ok(browser.byId("wsShell").getAttribute("data-tab"),
     "and the shell says which is showing");
+});
+
+// The composer must never be the thing that scrolls off. A tall result once
+// pushed the pane past its own height, the whole page scrolled instead of the
+// column, and the box you type into left the screen exactly when a long answer
+// arrived. Three things hold that shut, and all three are easy to delete by
+// accident.
+step(47, "the two columns are constrained, so the panel scrolls and the page does not", () => {
+  const css = (page.match(/<style>([\s\S]*?)<\/style>/) || [])[1] || "";
+  // Every declaration that lands on the class, not just the first rule that
+  // names it: the same class appears in more than one selector list.
+  const rule = (name) => {
+    const all = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)];
+    return all.filter(([, selectors]) => selectors.split(",")
+      .some((one) => one.trim() === name)).map(([, , body]) => body).join(";");
+  };
+  assert.match(rule(".wsp-chat"), /min-height:0/,
+    "a grid child defaults to min-height:auto and will overflow its track");
+  assert.match(rule(".wsp-space-wrap"), /min-height:0/,
+    "and so will the flex column inside it");
+  assert.match(rule(".wsp-space"), /overflow:auto/, "the workspace is the scroller");
+  assert.match(rule(".wsp-thread"), /overflow:auto/, "and so is the conversation");
+});
+
+step(48, "and the scroller can be seen, not just used", () => {
+  const css = (page.match(/<style>([\s\S]*?)<\/style>/) || [])[1] || "";
+  assert.match(css, /scrollbar-width:thin/, "Firefox is told to draw one");
+  assert.match(css, /::-webkit-scrollbar-thumb/, "and so is everything else");
+});
+
+step(49, "the pane measures the room it has rather than guessing at it", () => {
+  assert.match(clientSource, /function wsFit\(/,
+    "a fixed 100vh minus a number is wrong by however tall the header is today");
+  assert.match(clientSource, /window\.innerHeight/, "it reads the viewport");
+  assert.match(clientSource, /getBoundingClientRect/, "and where the pane actually starts");
+  assert.ok(/renderAsk\(\)\{[\s\S]*?wsFit\(\);/.test(clientSource),
+    "and it runs on every render, not only at startup");
 });
 
 console.log(`\n${ok.length} steps passed.`);

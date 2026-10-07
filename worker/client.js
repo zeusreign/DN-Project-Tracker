@@ -1358,6 +1358,30 @@ function wsActivityHtml(){
   }).join("")+'</div>';
 }
 
+// The pane is as tall as whatever is left under the page chrome, measured
+// rather than guessed. A fixed 100vh-minus-a-number was wrong by however tall
+// the header happened to be on the day: the pane overflowed, the whole page
+// scrolled instead of the columns, and the composer went off screen exactly
+// when a long answer arrived - which is when it is most needed.
+function wsFit(){
+  var shell=byId("wsShell");
+  if(!shell||typeof shell.getBoundingClientRect!=="function")return;
+  // The phone layout scrolls as one page and fixes the composer to the
+  // viewport instead, so it must not be given a height here.
+  if(!window.innerHeight||!window.innerWidth||window.innerWidth<=640){
+    shell.style.height="";
+    return;
+  }
+  var pane=shell.closest?shell.closest("[data-pane]"):null;
+  if(pane&&pane.hidden)return;
+  var top=shell.getBoundingClientRect().top;
+  if(typeof top!=="number")return;
+  shell.style.height=Math.max(420,Math.round(window.innerHeight-top-16))+"px";
+}
+if(typeof window.addEventListener==="function"){
+  window.addEventListener("resize",function(){wsFit()});
+}
+
 function renderAsk(){
   var thread=byId("wsThread");
   if(!thread)return;
@@ -1398,6 +1422,7 @@ function renderAsk(){
   var send=byId("wsSend");
   if(send)send.disabled=ws.busy;
   renderWsUnits();
+  wsFit();
 }
 
 function renderWsUnits(){

@@ -147,13 +147,20 @@ ${ENHANCED_STYLES}
   border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(16,40,56,.05)}
 .wsi{fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;
   display:block;flex:none}
+.wsp-space,.wsp-thread{scrollbar-width:thin;scrollbar-color:#c3d0d7 transparent}
+.wsp-space::-webkit-scrollbar,.wsp-thread::-webkit-scrollbar{width:11px}
+.wsp-space::-webkit-scrollbar-track,.wsp-thread::-webkit-scrollbar-track{background:transparent}
+.wsp-space::-webkit-scrollbar-thumb,.wsp-thread::-webkit-scrollbar-thumb{
+  background:#c3d0d7;border-radius:999px;border:3.5px solid transparent;background-clip:content-box}
+.wsp-space::-webkit-scrollbar-thumb:hover,.wsp-thread::-webkit-scrollbar-thumb:hover{background:#a6b8c2;
+  background-clip:content-box}
 
 /* Chat and Results, on a phone. Not two stacked columns: one thing at a time,
    with the composer always in reach. */
 .wstabs{display:none}
 
-.wsp-chat{display:flex;flex-direction:column;min-width:0;background:#fff;
-  border-right:1px solid var(--w-line)}
+.wsp-chat{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;
+  background:#fff;border-right:1px solid var(--w-line)}
 .wsp-chat-head{display:flex;align-items:center;gap:10px;padding:15px 16px 10px;flex:none}
 .wsp-chat-title{font-size:14px;font-weight:600;color:var(--w-ink);letter-spacing:-.005em}
 .wsghost{display:inline-flex;align-items:center;gap:7px;border:0;background:transparent;
@@ -221,7 +228,8 @@ ${ENHANCED_STYLES}
 .wssend:disabled{background:#ccd8de;cursor:default}
 
 /* The workspace. */
-.wsp-space-wrap{display:flex;flex-direction:column;min-width:0;background:var(--w-bg)}
+.wsp-space-wrap{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;
+  background:var(--w-bg)}
 .wsp-space-head{display:flex;align-items:center;gap:10px;padding:13px 20px 9px;flex:none}
 .wsscope{border:1px solid var(--w-line);background:#fff;border-radius:9px;padding:6px 11px;
   font-family:inherit;font-size:12.5px;color:var(--w-ink2);cursor:pointer}
