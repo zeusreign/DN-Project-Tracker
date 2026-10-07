@@ -332,7 +332,22 @@ opens one panel:
 
 Nothing technical is exposed. PDF is the browser's own print-to-PDF over a page
 built for it, rather than a second renderer that could disagree with the first
-about a figure.
+about a figure. That page lives outside `.app`, because the print stylesheet
+hides `.app` and a `display: none` ancestor hides every descendant whatever
+the descendant's own rule says.
+
+**Every view kind has to answer "what are you, as a table?"** — not only the
+ones that happen to hold a list. `wsExportTable()` is the single place that
+decides, and both the CSV and the PDF read from it, so the two can never
+disagree. A figure exports its value and its breakdown; a period comparison
+exports its pairs and both updates; a timeline exports its dates; a breakdown
+exports its groups. Without that, saving a figure and pressing Download gave
+a file with nothing in it.
+
+**Matched and included are different numbers.** A result capped at twenty rows
+matched more than twenty, and the totals only ever cover what was included.
+The summary reports both and names the columns for it, because one figure
+standing for both would be a sum across a set it was not computed over.
 
 ## On a phone
 
@@ -354,6 +369,7 @@ running app:
 | Command | What it holds shut |
 |---|---|
 | `npm run check:layout` | the panel scrolls, not the page; the composer is always on screen; no wasted window; no sideways scroll — at eight window sizes |
+| `npm run check:export` | every saved result leaves the product with its data in it, in both CSV and PDF, for four different view shapes |
 | `npm run check:voice` | the stage comes up and the conversation recedes; each state looks unlike the others; the presence moves to real microphone and real model audio; muted is silent; the whole arc from text to connecting to speaking to thinking and back is continuous; ending costs nothing |
 
 ## What does not change

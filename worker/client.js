@@ -2019,6 +2019,22 @@ async function startVoice(){
 
 // --- Saving and downloading ---------------------------------------------------
 
+// What a saved result is called once it leaves the screen. A figure carries
+// no title of its own - the number is the title - and falling back to a count
+// it does not have named it "0 projects".
+function wsSavedTitle(view){
+  if(view.title)return view.title;
+  var d=view.data||{};
+  if(view.kind==="figure"&&d.metrics&&d.metrics.length){
+    var m=d.metrics[0];
+    var value=m.format==="money"?wsMoney(m.value)
+      :m.format==="number"?wsGroup(Math.round(m.value*100)/100):wsText(m.value);
+    return (m.label?m.label+": ":"")+value+(m.unit?" "+m.unit:"");
+  }
+  if(typeof view.count==="number")return wsCount(view.count,"project","projects");
+  return "Result";
+}
+
 function wsPin(id){
   var view=null;
   ws.views.forEach(function(v){if(v.id===Number(id))view=v});
@@ -2029,9 +2045,9 @@ function wsPin(id){
     ws.saved.splice(at,1);
     ws.picked=ws.picked.filter(function(x){return x!==view.id});
   }else{
-    ws.saved.push({viewId:view.id,title:view.title||wsCount(view.count||0,"project","projects"),
+    ws.saved.push({viewId:view.id,title:wsSavedTitle(view),
       sub:view.subtitle||"",kind:view.kind,rows:(view.data&&view.data.rows)||[],
-      data:view.data,count:view.count});
+      data:view.data,count:view.count,truncated:!!view.truncated});
   }
   askSave();renderAsk();
 }
@@ -2049,33 +2065,144 @@ function wsChosen(){
   return ws.saved.filter(function(item){return ws.picked.indexOf(item.viewId)>=0}).reverse();
 }
 
-function wsRowLine(p){
-  return [p.name,p.venue,p.business_unit,wsMoney(p.approved_budget),
+// What a saved result is, as a table.
+//
+// Every view kind has to answer this, not only the ones that happen to hold a
+// list: a figure, a period comparison, a timeline and a breakdown are all
+// things someone saved on purpose, and an export that silently drops them is
+// worse than no export. This is the single place that decides, and both the
+// CSV and the PDF read from it, so the two can never disagree.
+var WS_PROJECT_COLUMNS = ["Project","Venue","Business unit","Status","Phase",
+  "Approved budget","Anticipated final","Forecast variance","Turnover","Days moved",
+  "Budget risk","Schedule risk"];
+
+function wsProjectLine(p){
+  return [p.name,p.venue,p.business_unit,p.status,p.phase,
+    wsMoney(p.approved_budget),wsMoney(p.anticipated_final_cost),
     wsMoneySigned(p.forecast_variance),wsDate(p.current_turnover_date),
-    wsDays(p.duration_change_days)];
+    wsDays(p.duration_change_days),p.budget_risk,p.schedule_risk];
+}
+
+function wsExportTable(item){
+  var d=item.data||{},kind=item.kind;
+  if(kind==="change_comparison"){
+    var pairs=(d.pairs||[]).map(function(pair){
+      var show=function(v){
+        if(v===null||v===undefined)return "";
+        return pair.format==="money"?wsMoney(v):pair.format==="date"?wsDate(v):String(v);
+      };
+      var delta=pair.delta===null||pair.delta===undefined?""
+        :(pair.deltaFormat==="money_signed"?wsMoneySigned(pair.delta):wsDays(pair.delta));
+      return [pair.label,show(pair.previous),show(pair.current),delta];
+    });
+    var note=d.narrative||{};
+    if(note.previous)pairs.push(["Previous update",note.previous,"",""]);
+    if(note.current)pairs.push(["This period","",note.current,""]);
+    return {columns:["Field","Previous","Current","Change"],rows:pairs};
+  }
+  if(kind==="timeline"){
+    return {columns:["Date","Event"],
+      rows:(d.events||[]).map(function(e){return [wsDate(e.date),e.label]})};
+  }
+  if(kind==="figure"){
+    var out=(d.metrics||[]).map(function(m){
+      var value=m.format==="money"?wsMoney(m.value)
+        :m.format==="number"?wsGroup(Math.round(m.value*100)/100):wsText(m.value);
+      var label=m.label||(m.unit
+        ? m.unit.replace(/^./,function(c){return c.toUpperCase()}) : item.title);
+      return [label,value+(m.unit?" "+m.unit:"")];
+    });
+    // A count that came with its shape takes the shape with it.
+    (d.breakdown||[]).forEach(function(r){out.push([wsText(r.label),wsText(r.value)])});
+    return {columns:["Figure","Value"],rows:out};
+  }
+  if(kind==="group"){
+    var cols=d.columns||[];
+    return {columns:cols.map(function(c){
+        return String(c).replace(/_/g," ").replace(/^./,function(x){return x.toUpperCase()})}),
+      rows:(d.rows||[]).map(function(r){
+        return cols.map(function(c){return wsText(r[c])})})};
+  }
+  if(kind==="risk_summary"&&(!d.rows||!d.rows.length)){
+    return {columns:["Rating","Budget risk","Schedule risk"],
+      rows:(d.buckets||[]).map(function(b){return [b.label,b.budget,b.schedule]})};
+  }
+  // Everything project-shaped: a list, a risk list, budgets, schedule, a
+  // comparison of a few, or one project opened on its own.
+  var rows=d.rows||[];
+  if(kind==="project_detail"&&d.project)rows=[d.project];
+  if(kind==="project_comparison")rows=d.projects||[];
+  return {columns:WS_PROJECT_COLUMNS,rows:rows.map(wsProjectLine)};
+}
+
+// The headline figures of a saved result, for when somebody wants the shape
+// of what they found rather than every row of it.
+function wsExportRows(item){
+  var d=item.data||{},rows=d.rows||[];
+  if((item.kind==="project_detail"||item.kind==="change_comparison"
+    ||item.kind==="timeline")&&d.project)rows=[d.project];
+  if(item.kind==="project_comparison")rows=d.projects||[];
+  return rows;
+}
+
+function wsExportSummary(item){
+  var rows=wsExportRows(item);
+  var t={approved:0,forecast:0,variance:0,over:0,late:0,priced:0};
+  rows.forEach(function(p){
+    var a=wsNum(p.approved_budget),f=wsNum(p.anticipated_final_cost),
+        v=wsNum(p.forecast_variance),s=wsNum(p.duration_change_days);
+    if(a!==null)t.approved+=a;
+    if(f!==null)t.forecast+=f;
+    if(v!==null){t.variance+=v;t.priced+=1;if(v>0)t.over+=1}
+    if(s!==null&&s>0)t.late+=1;
+  });
+  // Matched and included are different numbers whenever a result was capped,
+  // and the totals only ever cover what was included. Reporting one figure
+  // for both would be a sum across a set it was not computed over.
+  // A figure or a breakdown matches no project rows at all. Blank says that;
+  // a nought reads as "nothing found", which is a different claim.
+  var matched=item.count===null||item.count===undefined
+    ?(rows.length||"") : item.count;
+  return [item.title,item.sub||"",matched,rows.length||"",
+    rows.length?wsMoney(t.approved):"",
+    rows.length?wsMoney(t.forecast):"",
+    t.priced?wsMoneySigned(t.variance):"",
+    rows.length?t.over:"",
+    rows.length?t.late:""];
+}
+
+var WS_SUMMARY_COLUMNS = ["Result","Detail","Matched","Rows included",
+  "Approved budget (of rows included)","Anticipated final (of rows included)",
+  "Forecast variance (of rows included)","Over budget","Running late"];
+
+function wsCsvCell(v){
+  var s=String(v==null?"":v);
+  return /[",\\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
 }
 
 function wsCsv(items,full){
-  var cell=function(v){
-    var s=String(v==null?"":v);
-    return /[",\\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
-  };
   var out=[];
   if(!full){
-    out.push(["Result","Detail","Records"].join(","));
-    items.forEach(function(item){
-      out.push([item.title,item.sub,item.count==null?"":item.count].map(cell).join(","));
-    });
-    return out.join("\\n");
+    out.push(WS_SUMMARY_COLUMNS.map(wsCsvCell).join(","));
+    items.forEach(function(item){out.push(wsExportSummary(item).map(wsCsvCell).join(","))});
+    return out.join("\\r\\n");
   }
-  out.push(["Result","Project","Venue","Business unit","Approved budget",
-    "Forecast variance","Turnover","Days moved"].map(cell).join(","));
-  items.forEach(function(item){
-    (item.rows||[]).forEach(function(p){
-      out.push([item.title].concat(wsRowLine(p)).map(cell).join(","));
-    });
+  // Every result in full. Each keeps its own columns, because a period
+  // comparison and a project list are not the same table and flattening them
+  // into one would lose both.
+  items.forEach(function(item,index){
+    var table=wsExportTable(item);
+    if(index)out.push("");
+    out.push(wsCsvCell(item.title+(item.sub?" — "+item.sub:"")));
+    if(item.truncated&&item.count){
+      out.push(wsCsvCell(table.rows.length+" of "+item.count
+        +" matching records; the rest were not on screen to save"));
+    }
+    out.push(table.columns.map(wsCsvCell).join(","));
+    if(!table.rows.length)out.push(wsCsvCell("No rows recorded for this result"));
+    table.rows.forEach(function(row){out.push(row.map(wsCsvCell).join(","))});
   });
-  return out.join("\\n");
+  return out.join("\\r\\n");
 }
 
 // PDF is the browser's own print-to-PDF, over a page built for it. A separate
@@ -2084,25 +2211,35 @@ function wsPrint(items,full){
   var host=byId("wsPrint");
   if(!host)return false;
   var when=new Date().toISOString().slice(0,10);
+  var table=function(columns,rows){
+    if(!rows.length)return '<p class="wspr-sub">No rows recorded for this result.</p>';
+    return '<table><thead><tr>'
+      +columns.map(function(c){return '<th>'+esc(c)+'</th>'}).join("")
+      +'</tr></thead><tbody>'
+      +rows.map(function(r){
+        return '<tr>'+r.map(function(c){return '<td>'+esc(wsText(c))+'</td>'}).join("")+'</tr>';
+      }).join("")+'</tbody></table>';
+  };
   var html='<header class="wspr-head"><h1>DNC Tracker</h1>'
-    +'<p>'+esc(wsUnit()==="All"?"All business units":wsUnit())+' · '+esc(when)+'</p></header>';
-  items.forEach(function(item){
-    html+='<section class="wspr-sec"><h2>'+esc(item.title)+'</h2>'
-      +(item.sub?'<p class="wspr-sub">'+esc(item.sub)+'</p>':'');
-    if(full&&item.rows&&item.rows.length){
-      html+='<table><thead><tr><th>Project</th><th>Venue</th><th>Budget</th>'
-        +'<th>Variance</th><th>Turnover</th><th>Days</th></tr></thead><tbody>'
-        +item.rows.map(function(p){
-          return '<tr>'+wsRowLine(p).filter(function(_,i){return i!==2})
-            .map(function(c){return '<td>'+esc(c)+'</td>'}).join("")+'</tr>';
-        }).join("")+'</tbody></table>';
-    }
-    html+='</section>';
-  });
-  html+='<footer class="wspr-foot">Read-only extract. Figures are as recorded on '+esc(when)+'.</footer>';
+    +'<p>'+esc(wsUnit()==="All"?"All business units":wsUnit())+' · '+esc(when)
+    +' · '+esc(wsCount(items.length,"saved result","saved results"))+'</p></header>';
+  if(full){
+    items.forEach(function(item){
+      var t=wsExportTable(item);
+      html+='<section class="wspr-sec"><h2>'+esc(item.title)+'</h2>'
+        +(item.sub?'<p class="wspr-sub">'+esc(item.sub)+'</p>':'')
+        +table(t.columns,t.rows)+'</section>';
+    });
+  }else{
+    html+='<section class="wspr-sec">'
+      +table(WS_SUMMARY_COLUMNS,items.map(wsExportSummary))+'</section>';
+  }
+  html+='<footer class="wspr-foot">Read-only extract. Figures are as recorded on '
+    +esc(when)+'.</footer>';
   host.innerHTML=html;
   if(typeof window.print!=="function")return false;
-  setTimeout(function(){window.print()},40);
+  // After a paint, so the print dialog never opens over an empty container.
+  setTimeout(function(){window.print()},60);
   return true;
 }
 
@@ -2110,7 +2247,8 @@ function wsDownload(){
   var items=wsChosen();
   if(!items.length)return;
   if(ws.format==="csv"){
-    wsDownloadFile("dnc-tracker.csv",wsCsv(items,ws.detail==="full"),"text/csv;charset=utf-8");
+    wsDownloadFile("dnc-tracker.csv","\ufeff"+wsCsv(items,ws.detail==="full"),
+      "text/csv;charset=utf-8");
   }else if(!wsPrint(items,ws.detail==="full")){
     toast("This browser cannot make a PDF here. CSV still works.");
     return;

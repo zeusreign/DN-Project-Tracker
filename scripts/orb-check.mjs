@@ -93,7 +93,9 @@ for (const state of ["connecting", "listening", "thinking", "speaking"]) {
 
 // Real level, from a real stream, through the real analyser.
 const mic = JSON.parse(await run(`(async () => {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { return JSON.stringify({ denied: e.name || String(e) }); }
   orbListen(stream, "in");
   await new Promise((r) => setTimeout(r, 900));
   setVoiceState("listening");
@@ -104,6 +106,13 @@ const mic = JSON.parse(await run(`(async () => {
   return JSON.stringify({ analyser: !!orb.inNode, reads,
     energyFollowed: +orb.val.energy.toFixed(3) });
 })()`));
+if (mic.denied){
+  // Not a product failure: this Chrome was started without a microphone.
+  console.error("note no microphone here (" + mic.denied + "). Start Chrome with "
+    + "--use-fake-device-for-media-stream --use-fake-ui-for-media-stream to check "
+    + "audio reactivity.");
+  process.exit(2);
+}
 if (!mic.analyser) fail("no analyser was attached to the microphone stream");
 else if (!mic.reads.some((r) => r > 0)) fail("the microphone stream produced no level");
 else ok("it moves to the real microphone: " + JSON.stringify(mic.reads));

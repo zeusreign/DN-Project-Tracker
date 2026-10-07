@@ -28,7 +28,8 @@
     "assistant:e2e": "node scripts/assistant-e2e.mjs",
     "assistant:sql-e2e": "npm run build && node scripts/assistant-sql-e2e.mjs",
     "check:layout": "node scripts/layout-check.mjs",
-    "check:voice": "node scripts/orb-check.mjs"
+    "check:voice": "node scripts/orb-check.mjs",
+    "check:export": "node scripts/export-check.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.4",
