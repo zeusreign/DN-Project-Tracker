@@ -143,7 +143,10 @@ ${ENHANCED_STYLES}
   --w-teal:#0b8a86; --w-accent:#0a5b82;
 }
 .wsp{display:grid;grid-template-columns:372px minmax(0,1fr);
-  height:calc(100vh - 172px);min-height:540px;background:var(--w-bg);
+  /* A fallback for before wsFit() measures the real room. The floor is low on
+     purpose: a min-height above what the viewport can give wins against the
+     measured height and puts the page back into scrolling. */
+  height:calc(100vh - 172px);min-height:320px;background:var(--w-bg);
   border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(16,40,56,.05)}
 .wsi{fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;
   display:block;flex:none}

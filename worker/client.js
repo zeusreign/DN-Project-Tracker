@@ -1374,9 +1374,20 @@ function wsFit(){
   }
   var pane=shell.closest?shell.closest("[data-pane]"):null;
   if(pane&&pane.hidden)return;
-  var top=shell.getBoundingClientRect().top;
-  if(typeof top!=="number")return;
-  shell.style.height=Math.max(420,Math.round(window.innerHeight-top-16))+"px";
+  var rect=shell.getBoundingClientRect();
+  if(!rect||typeof rect.top!=="number")return;
+  var doc=document.documentElement;
+  // Document coordinates, not viewport ones. getBoundingClientRect().top
+  // shrinks as the page scrolls, so measuring from it made the pane grow by
+  // however far down the page already was - which made the page taller, which
+  // allowed more scroll, which grew the pane again. The composer was pushed
+  // off the bottom a little further on every render.
+  var top=rect.top+(window.scrollY||doc.scrollTop||0);
+  // Whatever sits under the pane inside the app: its padding, any margin.
+  // Measured rather than assumed, because the number is not this pane's to
+  // know and a guess here is the same mistake one level down.
+  var below=Math.max(0,(doc.scrollHeight||0)-(top+(rect.height||0)));
+  shell.style.height=Math.max(320,Math.round(window.innerHeight-top-below))+"px";
 }
 if(typeof window.addEventListener==="function"){
   window.addEventListener("resize",function(){wsFit()});

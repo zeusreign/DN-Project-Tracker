@@ -26,7 +26,8 @@
     "test:assistant": "node scripts/assistant-api-test.mjs && node scripts/assistant-sql-test.mjs && node scripts/assistant-context-test.mjs && node scripts/ask-ui-test.mjs && node scripts/ask-integration-test.mjs && node scripts/voice-flow-test.mjs && node scripts/legacy/assistant-plan-test.mjs",
     "assistant": "node scripts/assistant-demo.mjs",
     "assistant:e2e": "node scripts/assistant-e2e.mjs",
-    "assistant:sql-e2e": "npm run build && node scripts/assistant-sql-e2e.mjs"
+    "assistant:sql-e2e": "npm run build && node scripts/assistant-sql-e2e.mjs",
+    "check:layout": "node scripts/layout-check.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.4",

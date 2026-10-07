@@ -375,6 +375,26 @@ step(49, "the pane measures the room it has rather than guessing at it", () => {
     "and it runs on every render, not only at startup");
 });
 
+// The two ways this measurement has already been got wrong. Both are one
+// character away from coming back, and neither can be seen in a DOM harness,
+// which has no viewport and no scroll position - scripts/layout-check.mjs
+// measures the real thing in real Chrome.
+step(50, "it measures in document coordinates, not from the current scroll", () => {
+  assert.match(clientSource, /scrollY/,
+    "getBoundingClientRect().top shrinks as the page scrolls: measuring from it "
+    + "grew the pane on every render until the composer was pushed off the bottom");
+});
+
+step(51, "and no floor is set higher than a short window can give", () => {
+  const css = (page.match(/<style>([\s\S]*?)<\/style>/) || [])[1] || "";
+  const wsp = (css.match(/\.wsp\{([^}]*)\}/) || [])[1] || "";
+  const floor = Number((wsp.match(/min-height:(\d+)px/) || [])[1] || 0);
+  assert.ok(floor > 0 && floor <= 360,
+    `min-height:${floor}px beats the measured height on a short screen and puts `
+    + "the page back into scrolling");
+});
+
 console.log(`\n${ok.length} steps passed.`);
+if (!process.exitCode) console.log("Layout contract: scripts/layout-check.mjs measures it for real.");
 if (process.exitCode) { console.log("Workspace UI walk FAILED."); }
 else console.log("Workspace UI walk passed: two surfaces, accumulation, components, pin, download, scope and failure.");
