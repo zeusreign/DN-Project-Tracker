@@ -117,26 +117,43 @@ const probe = `(() => {
   const composer = document.querySelector('.wsp-composer');
   const space = document.getElementById('wsSpace');
   const thread = document.getElementById('wsThread');
+  const shell = document.getElementById('wsShell');
   const c = composer.getBoundingClientRect();
+  const s = shell.getBoundingClientRect();
+  const phone = window.innerWidth <= 640;
   return {
     pageOverflow: doc.scrollHeight - window.innerHeight,
+    sideways: doc.scrollWidth - doc.clientWidth,
     composerVisible: c.bottom <= window.innerHeight + 1 && c.top >= 0,
+    // The panel should reach the bottom of the window, not stop half way.
+    unusedBelow: phone ? 0 : Math.round(window.innerHeight - s.bottom),
     spaceScrolls: space.scrollHeight > space.clientHeight + 1,
-    threadScrolls: thread.scrollHeight > thread.clientHeight + 1,
+    threadScrolls: phone ? true : thread.scrollHeight > thread.clientHeight + 1,
+    spaceSideways: space.scrollWidth - space.clientWidth,
+    threadSideways: thread.scrollWidth - thread.clientWidth,
   };
 })()`;
 
-for (const [w, h] of [[1440, 760], [1440, 600], [1920, 1080], [1100, 700], [960, 640]]) {
+const sizes = [[1440, 760], [1440, 600], [1920, 1080], [1100, 700], [960, 640],
+  [430, 932], [390, 844], [360, 740]];
+for (const [w, h] of sizes) {
   await send("Emulation.setDeviceMetricsOverride",
-    { width: w, height: h, deviceScaleFactor: 1, mobile: false });
+    { width: w, height: h, deviceScaleFactor: 1, mobile: w <= 640 });
+  // Scroll first: measuring from a scrolled page is how this broke before.
   await run("window.scrollTo(0, 500); typeof wsFit === 'function' && wsFit(); 1");
   await sleep(250);
   await run("typeof wsFit === 'function' && wsFit(); 1");
   await sleep(150);
   const out = await run(probe);
-  const bad = out.pageOverflow > 1 || !out.composerVisible;
-  if (bad) process.exitCode = 1;
-  console.log(`${bad ? "FAIL" : "ok  "} ${w}x${h}  ` + JSON.stringify(out));
+  const faults = [];
+  if (out.pageOverflow > 1 && w > 640) faults.push("the page scrolls, not the panel");
+  if (!out.composerVisible) faults.push("the composer is off screen");
+  if (out.unusedBelow > 48) faults.push(`${out.unusedBelow}px of window left unused`);
+  if (out.sideways > 1) faults.push("the page scrolls sideways");
+  if (out.spaceSideways > 1 || out.threadSideways > 1) faults.push("a column scrolls sideways");
+  if (faults.length) process.exitCode = 1;
+  console.log(`${faults.length ? "FAIL" : "ok  "} ${String(w + "x" + h).padEnd(9)} `
+    + (faults.length ? faults.join("; ") + "  " : "") + JSON.stringify(out));
 }
 console.log(process.exitCode ? "\nLayout check FAILED." : "\nLayout check passed.");
 ws.close();

@@ -185,7 +185,7 @@ ${ENHANCED_STYLES}
 @keyframes wsring{0%{transform:scale(.7);opacity:.45}100%{transform:scale(1.5);opacity:0}}
 @keyframes wsspeak{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}
 
-.wsp-thread{flex:1 1 auto;overflow:auto;padding:2px 16px 8px;min-height:0}
+.wsp-thread{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:2px 16px 8px;min-height:0}
 .wsturn{padding:14px 0;border-top:1px solid var(--w-line2)}
 .wsturn:first-child{border-top:0}
 .wsq-text{margin:0 0 6px;font-size:14.5px;font-weight:550;color:var(--w-ink);line-height:1.45}
@@ -241,7 +241,7 @@ ${ENHANCED_STYLES}
 .wssaved:hover{background:#fff;border-color:#cbd8de;color:var(--w-ink)}
 .wssaved em{font-style:normal;font-size:11px;font-weight:650;color:#fff;background:var(--w-ink);
   border-radius:999px;min-width:17px;height:17px;display:inline-grid;place-items:center;padding:0 5px}
-.wsp-space{flex:1 1 auto;overflow:auto;padding:0 20px 22px;min-height:0;
+.wsp-space{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:0 20px 22px;min-height:0;
   display:flex;flex-direction:column;gap:9px}
 
 /* Nothing asked yet. Centred rather than pinned to a corner of a large empty
@@ -266,13 +266,18 @@ ${ENHANCED_STYLES}
 .wscard.is-follow,.wsold.is-follow{margin-left:17px}
 .wscard.is-follow:before,.wsold.is-follow:before{content:"";position:absolute;left:-17px;
   top:0;bottom:0;width:1px;background:var(--w-line)}
-.wscard-head{margin:0 44px 16px 0}
+.wscard-head{margin:0 78px 16px 0}
 .wscard-head h3{margin:0;font-size:18px;letter-spacing:-.014em;color:var(--w-ink);font-weight:620}
 .wscard-head p{margin:3px 0 0;font-size:12.5px;color:var(--w-mute)}
 .wscard-note{margin:15px 0 0;font-size:11.5px;color:var(--w-mute)}
 .wsnote{margin:0;font-size:13.5px;color:var(--w-mute);line-height:1.62;max-width:52ch}
 
 /* The pin. Outline when a result is passing through, solid when it is kept. */
+.wsfold{position:absolute;top:15px;right:48px;width:30px;height:30px;border:0;border-radius:8px;
+  background:transparent;color:#aebcc5;display:grid;place-items:center;cursor:pointer;
+  transition:color .14s,background .14s}
+.wsfold:hover{background:var(--w-line2);color:var(--w-ink2)}
+.wsfold .wsi{transform:rotate(180deg)}
 .wspin{position:absolute;top:15px;right:15px;width:30px;height:30px;border:0;border-radius:8px;
   background:transparent;color:#aebcc5;display:grid;place-items:center;cursor:pointer;
   transition:color .14s,background .14s}

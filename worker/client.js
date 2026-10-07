@@ -1235,6 +1235,8 @@ function wsCardHtml(view,primary){
       +(view.subtitle?'<p>'+esc(view.subtitle)+'</p>':'')+'</header>';
   }
   return '<article class="wscard'+(view.follow?" is-follow":"")+(primary?" is-primary":"")+'">'
+    +'<button type="button" class="wsfold" data-ws-expand="'+view.id+'" aria-expanded="true"'
+    +' title="Collapse this result" aria-label="Collapse this result">'+wsIcon("chevron",15)+'</button>'
     +wsPinHtml(view)+head
     +'<div class="wscard-body">'+render(view.data||{})+'</div>'
     +(view.truncated?'<p class="wscard-note">Showing '
@@ -1374,21 +1376,30 @@ function wsFit(){
   }
   var pane=shell.closest?shell.closest("[data-pane]"):null;
   if(pane&&pane.hidden)return;
-  var rect=shell.getBoundingClientRect();
-  if(!rect||typeof rect.top!=="number")return;
+  if(typeof shell.getBoundingClientRect!=="function")return;
   var doc=document.documentElement;
+  var at=window.scrollY||doc.scrollTop||0;
+
   // Document coordinates, not viewport ones. getBoundingClientRect().top
-  // shrinks as the page scrolls, so measuring from it made the pane grow by
-  // however far down the page already was - which made the page taller, which
-  // allowed more scroll, which grew the pane again. The composer was pushed
-  // off the bottom a little further on every render.
-  var top=rect.top+(window.scrollY||doc.scrollTop||0);
-  // Whatever sits under the pane inside the app: its padding, any margin.
-  // Measured rather than assumed, because the number is not this pane's to
-  // know and a guess here is the same mistake one level down.
-  var below=Math.max(0,(doc.scrollHeight||0)-(top+(rect.height||0)));
-  shell.style.height=Math.max(320,Math.round(window.innerHeight-top-below))+"px";
+  // shrinks as the page scrolls, so measuring from it grew the pane by however
+  // far down the page already was, which made the page taller, which allowed
+  // more scroll. The composer walked off the bottom a little further on every
+  // render.
+  var top=shell.getBoundingClientRect().top+at;
+  var target=Math.max(320,Math.round(window.innerHeight-top-8));
+  shell.style.height=target+"px";
+
+  // Then one correction for whatever sits under the pane - the app's own
+  // bottom padding, a margin. It is measured by what it does to the document
+  // rather than read off any element, because the sidebar beside the pane is
+  // often the taller of the two and reading "what is below" off the body gave
+  // the sidebar's overhang instead. Capped, so a long sidebar can never shrink
+  // the pane away: a little page scroll is a far smaller fault than a panel
+  // stuck at half the window.
+  var over=(doc.scrollHeight||0)-window.innerHeight;
+  if(over>0)shell.style.height=Math.max(320,target-Math.min(over,80))+"px";
 }
+
 if(typeof window.addEventListener==="function"){
   window.addEventListener("resize",function(){wsFit()});
 }

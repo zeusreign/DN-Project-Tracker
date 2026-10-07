@@ -200,8 +200,26 @@ step(21, "a variance is shown as a figure and a bar, never as typed punctuation"
     "no ASCII arrows anywhere in the workspace");
 });
 
+// Expanding has to be reversible, or the stack only ever grows and the whole
+// set of results stops being visible at once.
+const fold = browser.byId("wsSpace").querySelector(".wsfold");
+step(21.5, "an open result carries its own collapse control", () => {
+  assert.ok(fold, "every open card has one");
+  assert.match(fold.getAttribute("title") || "", /collapse/i, "and says so on hover");
+});
+await browser.fire(fold, "click").results; await browser.settle();
+step(21.6, "and collapsing it leaves a line, not a gap", () => {
+  assert.equal(inSpace(".wscard").length, 0, "nothing is left open");
+  assert.equal(inSpace(".wsold").length, 2, "and both results are still there as lines");
+});
+
 const older = browser.byId("wsSpace").querySelector(".wsold");
 await browser.fire(older, "click").results; await browser.settle();
+step(21.7, "a collapsed result opens again", () =>
+  assert.equal(inSpace(".wscard").length, 1));
+
+const older2 = browser.byId("wsSpace").querySelector(".wsold");
+await browser.fire(older2, "click").results; await browser.settle();
 step(22, "an earlier result expands in place rather than replacing the newest", () => {
   assert.equal(inSpace(".wscard").length, 2, "both are open");
   assert.ok(/^\s*<article class="wscard/.test(browser.byId("wsSpace").innerHTML),
@@ -356,8 +374,11 @@ step(47, "the two columns are constrained, so the panel scrolls and the page doe
     "a grid child defaults to min-height:auto and will overflow its track");
   assert.match(rule(".wsp-space-wrap"), /min-height:0/,
     "and so will the flex column inside it");
-  assert.match(rule(".wsp-space"), /overflow:auto/, "the workspace is the scroller");
-  assert.match(rule(".wsp-thread"), /overflow:auto/, "and so is the conversation");
+  assert.match(rule(".wsp-space"), /overflow-y:auto/, "the workspace is the scroller");
+  assert.match(rule(".wsp-thread"), /overflow-y:auto/, "and so is the conversation");
+  assert.match(rule(".wsp-space"), /overflow-x:hidden/,
+    "vertically only: a sideways bar under a column of text is a scroller nobody asked for");
+  assert.match(rule(".wsp-thread"), /overflow-x:hidden/, "and the same for the conversation");
 });
 
 step(48, "and the scroller can be seen, not just used", () => {
