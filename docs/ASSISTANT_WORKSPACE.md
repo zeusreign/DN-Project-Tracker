@@ -210,10 +210,54 @@ interruption was off so a figure being read aloud could not be cut in half.
 
 ### Voice presence
 
-One dot. Radius and opacity carry the three states — listening, processing,
-speaking — and nothing else moves. No orb, no bars, no waveform. The animation
-is CSS only, never blocks a render, and is never on the critical path of an
-answer appearing.
+A call has one visual: an orb in the conversation column, drawn by a fragment
+shader, alive only while the call is.
+
+It is built on the approach the open-source ElevenLabs orb uses — a shader
+whose uniforms are *targets* that each state sets, eased toward rather than
+snapped to, with the measured audio level feeding some of them. Nothing of
+theirs is loaded or called. The shader, the easing and the state mapping are
+this product's own, written locally so the thing stays free of any dependency,
+which matters in a codebase with none.
+
+**It has no state of its own.** `voice.state` is the state machine and
+`setVoiceState()` is its only writer; the orb reads it there. There is no
+second machine to drift out of step with the first.
+
+| `voice.state` | How it reads | Follows |
+|---|---|---|
+| `connecting` | dim, emerging, slow | — |
+| `listening` | calm, breathing | the microphone |
+| `thinking` | a slow lobe orbiting inside it, no audio reaction at all | — |
+| `speaking` | brightest, rim lit, rippling | the model's audio |
+| `off` | fades out, band closes, loop stops | — |
+
+The levels are real. The microphone stream from `getUserMedia` and the model's
+stream from `pc.ontrack` each get an `AnalyserNode`; the orb reads their RMS.
+Muted reads zero, because it is actually silent. Nothing is on a timer
+pretending to be a voice.
+
+Thinking is the one state that ignores audio entirely — there is none to react
+to, and a presence that goes still during the wait reads as a dropped call.
+That is why it has a motion of its own.
+
+**No words.** "Listening", "Thinking" and "Speaking" are gone from the screen:
+the orb says them. They survive in an `sr-only` live region for anyone who
+cannot see it. A *failure* is still written down, because a failure is not a
+status.
+
+**One identity, not six colours.** The tracker's navy through its teal to its
+cyan, lit from inside with limb darkening and a rim light — three stops of one
+ramp.
+
+**It is never the slow part.** The audio graph is built after the connection,
+never on it. The loop runs only during a call and stops when the orb has faded.
+The canvas is 172 px with the device ratio capped at 2. A measured frame costs
+0 ms median, 0.1 ms worst — on software rendering. If WebGL is missing or the
+context is lost, a CSS orb takes over and still moves to the same measured
+level.
+
+The right-hand workspace is untouched by any of this.
 
 ## Visual direction
 
@@ -283,6 +327,18 @@ tap away. Asking something switches to Results, because that is what was asked
 for. Within a row the proportional bar is dropped: at that width the project's
 name is what matters, and the bar is a second reading of a number already
 there.
+
+## Checks that need a real browser
+
+Two things cannot be tested in the DOM harness, because it has no viewport, no
+scroll position, no WebGL and no audio. Both have broken in ways the unit
+suites could not see, so both are measured in real Chrome against the real
+running app:
+
+| Command | What it holds shut |
+|---|---|
+| `npm run check:layout` | the panel scrolls, not the page; the composer is always on screen; no wasted window; no sideways scroll — at eight window sizes |
+| `npm run check:voice` | the shader compiles; each state looks unlike the others; the orb moves to real microphone and real model audio; muted is silent; ending a call costs nothing |
 
 ## What does not change
 

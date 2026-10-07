@@ -163,6 +163,27 @@ await browser.fire("wsMic","click").results; await settle();
 channel.emit("open", {});
 await settle();
 
+// The orb. There is no WebGL in the harness and the client runs in a closed
+// scope, so what is tested here is what the DOM can show: that the presence
+// follows the one state machine, and that it says nothing in words. That it
+// reacts to real audio, and how it looks doing it, is measured in a real
+// browser by scripts/orb-check.mjs.
+const orbLive = () => browser.byId("wsOrb").classList.contains("is-live");
+const dotHidden = () => browser.byId("wsPresence").classList.contains("is-hidden");
+
+await check("a call brings the presence up in the conversation column", () => {
+  assert.ok(browser.byId("wsOrb"), "the orb lives in the left column");
+  assert.equal(orbLive(), true, "and it is up while the call is");
+  assert.equal(dotHidden(), true, "one presence at a time: the small dot steps aside");
+});
+
+await check("the presence is the status, so nothing is written beside it", () => {
+  assert.equal(browser.byId("wsVoiceNote").hidden, true,
+    "no Listening, no Working, no Speaking");
+  assert.match(browser.byId("wsVoiceLive").textContent, /listening/i,
+    "but it is still announced to anyone who cannot see it");
+});
+
 await check("a call opens on the same screen, with no second view to switch to", () => {
   assert.equal(presence(), "listening");
   assert.equal(browser.byId("wsForm").hidden, false, "the composer never steps aside");
@@ -239,6 +260,12 @@ await check("the listener is never shown a handoff between agents", () => {
 say("response.created"); await settle();
 say("response.output_audio.delta", { delta:"x" }); await settle();
 await check("the dot says the assistant is speaking", () => assert.equal(presence(), "speaking"));
+
+await check("and the presence is still the only thing saying so", () => {
+  assert.equal(orbLive(), true);
+  assert.equal(browser.byId("wsVoiceNote").hidden, true, "still no label beside it");
+  assert.match(browser.byId("wsVoiceLive").textContent, /speaking/i);
+});
 
 say("response.output_audio_transcript.delta", { delta:"Twelve projects, four over budget." });
 await settle();
@@ -326,10 +353,19 @@ await check("a real error ends the call and says why", async () => {
   say("error", { error:{ message:"the credential expired" } });
   await settle();
   assert.equal(presence(), "off");
+  // A failure is not a status label: this one has to be readable.
+  assert.equal(browser.byId("wsVoiceNote").hidden, false);
   assert.match(browser.text("wsVoiceNote"), /credential expired/);
 });
 
 await check("ending a call releases the microphone", () => assert.equal(track.stopped, true));
+
+await check("and takes the presence down with it", () => {
+  assert.equal(orbLive(), false, "the band closes");
+  assert.equal(dotHidden(), false, "the small dot comes back");
+  assert.equal(browser.byId("wsVoiceLive").textContent, "",
+    "and it stops announcing a state there is no longer any of");
+});
 
 console.log(`\n${n} checks passed.`);
 if (!process.exitCode) {

@@ -185,6 +185,20 @@ ${ENHANCED_STYLES}
 @keyframes wsring{0%{transform:scale(.7);opacity:.45}100%{transform:scale(1.5);opacity:0}}
 @keyframes wsspeak{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}
 
+/* The voice presence. A band that opens when a call does and closes when it
+   ends, so going into and out of voice is one movement rather than a screen
+   change. The conversation stays underneath it throughout: nothing that was
+   said is taken away to make room for the picture of it. */
+.wsorb{flex:none;height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;
+  opacity:0;transition:height .52s cubic-bezier(.22,.61,.36,1),opacity .4s ease}
+.wsorb.is-live{height:188px;opacity:1}
+.wsorb canvas{width:172px;height:172px;display:block}
+/* Without WebGL the same measured level still moves something. */
+.wsorb-css{width:150px;height:150px;border-radius:50%;display:block;
+  background:radial-gradient(circle at 38% 33%,#22b2cf 0%,#0b8a86 42%,#042539 100%);
+  box-shadow:0 0 44px rgba(11,138,134,.38);will-change:transform,opacity}
+.wsp-presence.is-hidden{opacity:0;transition:opacity .3s ease}
+
 .wsp-thread{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:2px 16px 8px;min-height:0}
 .wsturn{padding:14px 0;border-top:1px solid var(--w-line2)}
 .wsturn:first-child{border-top:0}
@@ -520,6 +534,8 @@ ${ENHANCED_STYLES}
 @media (prefers-reduced-motion:reduce){
   .wsp-presence i,.wsp-presence:after,.wsdots i,.wsact-i:before,.wsmic{animation:none!important}
   .wsp-thread{scroll-behavior:auto}
+  .wsorb{transition:none}
+  .wsorb-css{transition:none}
 }
 
 /* Print: only what was chosen in the download panel, laid out as a document. */
