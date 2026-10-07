@@ -125,332 +125,323 @@ ${ENHANCED_STYLES}
   display:inline-flex;align-items:center;justify-content:center;flex:none}
 .ask-ai-mark .ai-spark{width:13px;height:13px}
 
-/* --- Ask the Tracker ------------------------------------------------------ */
-/* Follows the Ask the Tracker pilot: a conversation on the left, an evidence
-   panel on the right, and a rail for moving between result sets. Every figure
-   in an answer can be traced to the record it came from rather than being taken
-   on trust, which is the whole reason the evidence panel exists. */
-.pane[data-pane="ask"]{--ask-navy:#07364b;--ask-teal:#007f86;--ask-ink:#163548;
-  --ask-muted:#586c7a;--ask-line:#dce5ea}
 
-/* Top row: the way back, where you are, and what you are looking at. */
-.ask-top{display:flex;align-items:center;justify-content:space-between;gap:16px;
-  flex-wrap:wrap;padding:0 0 12px}
-.ask-trail{display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:0}
-.ask-back{display:inline-flex;align-items:center;gap:6px;background:#fff;color:#284e63;
-  border:1px solid #cbd9e1;border-radius:6px;padding:7px 12px 7px 9px;font-size:13px;
-  font-weight:600;cursor:pointer;white-space:nowrap}
-.ask-back:hover{background:#eaf4f6;border-color:#9ac8ca}
-.ask-back svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;
-  stroke-linecap:round;stroke-linejoin:round}
-.ask-breadcrumb{display:flex;align-items:center;gap:0;font-size:13px;color:#486475;
-  flex-wrap:wrap;min-width:0}
-.ask-breadcrumb span{padding:0 8px;color:#9aaab5}
-.ask-crumb{background:none;border:0;padding:0;font:inherit;color:#2a6b7c;cursor:pointer}
-.ask-crumb:hover{text-decoration:underline}
-.ask-crumb-now{color:#1d4a5e;font-weight:600;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;max-width:28ch}
-.ask-top-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.ask-context{font-size:12px;color:#486475;padding:6px 10px;border:1px solid #cedce5;
-  border-radius:4px;background:#f9fbfc;max-width:34ch;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
+/* --- The conversational project-analysis workspace ------------------------ */
+/* Two surfaces, one state. A light conversation column on the left, where a
+   question is asked and answered in a sentence; a workspace on the right, where
+   every structured thing lives. Nothing here renders a table into the
+   conversation, and nothing nests a card inside a card.
 
-/* Heading row. */
-.ask-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;
-  flex-wrap:wrap;padding:4px 0 18px}
-.ask-head h2{margin:0;font-size:26px;letter-spacing:-.6px;line-height:1.2;color:#07394e}
-.ask-head p{margin:6px 0 0;color:var(--ask-muted);font-size:14px}
-.ask-scope-pick{display:flex;align-items:center;gap:8px;font-size:12px;color:#54707f}
-.ask-scope-pick select{border:1px solid #cbd9e1;border-radius:6px;padding:7px 9px;
-  font-size:13px;color:#24495c;background:#fff;max-width:17rem}
+   Structure comes from space and alignment. A hairline appears only where two
+   things genuinely have to be told apart. Colour is near-monochrome with three
+   semantic marks - amber for schedule pressure, rose for over budget, a quiet
+   ring for high risk - and teal in exactly one place, the voice presence. */
+.pane[data-pane="ask"]{
+  --w-ink:#14222c; --w-ink2:#3d5466; --w-mute:#7b8f9c;
+  --w-line:#e6ecef; --w-line2:#f0f4f6;
+  --w-bg:#f6f8f9; --w-amber:#b8791a; --w-rose:#b3485c; --w-good:#1d7a63;
+  --w-teal:#0b8a86; --w-accent:#0a5b82;
+}
+.wsp{display:grid;grid-template-columns:380px minmax(0,1fr);
+  height:calc(100vh - 172px);min-height:540px;background:var(--w-bg);
+  border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(16,40,56,.05)}
 
-/* Three columns: talk, evidence, and the rail that moves between result sets. */
-.ask-workspace{display:grid;grid-template-columns:minmax(360px,1.2fr) minmax(330px,1fr);
-  gap:18px;min-height:520px;height:calc(100vh - 330px);max-height:950px}
-.ask-conversation{background:#fff;border:1px solid var(--ask-line);border-radius:10px;
-  display:flex;flex-direction:column;min-width:0;overflow:hidden;box-shadow:0 2px 4px #17334505}
-.ask-chat-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:14px 16px;border-bottom:1px solid #eef3f5;flex-wrap:wrap}
-.ask-modes{display:flex;background:#edf2f5;padding:3px;border-radius:6px;flex:none}
-.ask-modes button{border:0;background:transparent;color:#536d7c;padding:6px 14px;
-  border-radius:4px;font-size:13px;cursor:pointer}
-.ask-modes button[aria-pressed=true]{background:#fff;color:#006e78;font-weight:700;
-  box-shadow:0 1px 4px #16354818}
-.ask-scope{font-size:11px;color:#728894;text-align:right;min-width:0}
+/* The conversation. No bubbles, no avatars, no cards: a question in medium
+   weight, the answer under it, a hairline between turns. */
+.wsp-chat{display:flex;flex-direction:column;min-width:0;background:#fff;
+  border-right:1px solid var(--w-line)}
+.wsp-chat-head{display:flex;align-items:center;gap:10px;padding:16px 18px 10px;flex:none}
+.wsp-chat-title{font-size:14px;font-weight:600;color:var(--w-ink)}
+.wsp-voicenote{font-size:12px;color:var(--w-mute)}
+.wsghost{border:0;background:transparent;color:var(--w-mute);font-size:12.5px;
+  padding:5px 9px;border-radius:7px;cursor:pointer;font-family:inherit}
+.wsghost:hover{background:var(--w-line2);color:var(--w-ink)}
+.wsghost.is-on{color:var(--w-teal)}
+.wsp-chat-head .wsghost{margin-left:auto}
 
-/* Voice.
-   A bar under the conversation, not a screen in front of it. The transcript is
-   what the user is reading; this says what the call is doing and offers the
-   three controls it needs. The orb is a state indicator, not the subject. */
-.ask-voice-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;
-  flex-wrap:wrap;margin:0 16px 16px;padding:12px 14px;background:#f3f8fa;
-  border:1px solid #cfe2e6;border-radius:9px}
-.ask-voice-live{display:flex;align-items:center;gap:12px;min-width:0}
-.ask-voice-state{display:flex;flex-direction:column;min-width:0}
-.ask-voice-state strong{font-size:13px;color:#10495c;line-height:1.3}
-.ask-voice-state span{font-size:12px;color:#55707e;line-height:1.4;overflow-wrap:anywhere}
+/* One dot carries all three voice states. Nothing else moves. */
+.wsp-presence{width:9px;height:9px;position:relative;flex:none;display:block}
+.wsp-presence i{position:absolute;inset:0;border-radius:50%;background:#c6d2d9;
+  transition:background .2s}
+.wsp-presence[data-state="connecting"] i,
+.wsp-presence[data-state="thinking"] i{background:var(--w-teal);animation:wspulse 1s ease-in-out infinite}
+.wsp-presence[data-state="listening"] i{background:var(--w-teal)}
+.wsp-presence[data-state="listening"]:after{content:"";position:absolute;inset:-5px;
+  border-radius:50%;border:1px solid var(--w-teal);opacity:.3;animation:wsring 2.2s ease-out infinite}
+.wsp-presence[data-state="speaking"] i{background:var(--w-teal);animation:wsspeak 1.1s ease-in-out infinite}
+@keyframes wspulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes wsring{0%{transform:scale(.7);opacity:.45}100%{transform:scale(1.5);opacity:0}}
+@keyframes wsspeak{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}
 
-/* Five bars that say which of the four states the call is in without being
-   read: still when idle, a slow breath while listening, a quick one while the
-   assistant speaks, flat and grey when muted. */
-.ask-voice-orb{display:inline-flex;align-items:center;justify-content:center;gap:3px;
-  width:42px;height:42px;border-radius:50%;background:#dceef0;flex:none}
-.ask-voice-orb i{width:3px;height:9px;border-radius:2px;background:#238b92;display:block}
-.ask-voice-orb i:nth-child(2),.ask-voice-orb i:nth-child(4){height:15px}
-.ask-voice-orb i:nth-child(3){height:21px}
-.ask-voice-orb[data-state=connecting] i{animation:askBar 1.1s ease-in-out infinite}
-.ask-voice-orb[data-state=listening] i{animation:askBar 1.8s ease-in-out infinite}
-.ask-voice-orb[data-state=thinking]{background:#e8eef0}
-.ask-voice-orb[data-state=thinking] i{animation:askBar .9s ease-in-out infinite;background:#55707e}
-.ask-voice-orb[data-state=speaking] i{animation:askBar .62s ease-in-out infinite}
-.ask-voice-orb[data-state=muted]{background:#e8ecee}
-.ask-voice-orb[data-state=muted] i{background:#9aabb3;animation:none}
-.ask-voice-orb[data-state=error]{background:#f7dcd6}
-.ask-voice-orb[data-state=error] i{background:#9a3e2b;animation:none}
-.ask-voice-orb i:nth-child(2){animation-delay:.12s}
-.ask-voice-orb i:nth-child(3){animation-delay:.24s}
-.ask-voice-orb i:nth-child(4){animation-delay:.36s}
-.ask-voice-orb i:nth-child(5){animation-delay:.48s}
-@keyframes askBar{0%,100%{transform:scaleY(.55)}50%{transform:scaleY(1)}}
+.wsp-thread{flex:1 1 auto;overflow:auto;padding:2px 18px 8px;min-height:0}
+.wshello{padding:14px 0;font-size:13.5px;color:var(--w-mute);line-height:1.65}
+.wshello p{margin:0}
+.wsturn{padding:14px 0;border-top:1px solid var(--w-line2)}
+.wsturn:first-child{border-top:0}
+.wsq-text{margin:0 0 6px;font-size:14.5px;font-weight:550;color:var(--w-ink);line-height:1.45}
+.wsturn.is-spoken .wsq-text:before{content:"";display:inline-block;width:5px;height:5px;
+  border-radius:50%;background:var(--w-teal);vertical-align:middle;margin-right:7px}
+.wsa{margin:0;font-size:14px;color:var(--w-ink2);line-height:1.62}
+.wsa-err{color:var(--w-rose)}
+.wsalink{margin-top:7px;border:0;background:transparent;padding:0;color:var(--w-accent);
+  font-size:12.5px;cursor:pointer;text-align:left;font-family:inherit}
+.wsalink:hover{text-decoration:underline}
+.wsdots{display:inline-flex;gap:4px;align-items:center}
+.wsdots i{width:5px;height:5px;border-radius:50%;background:#bdcad2;animation:wsdot 1.2s infinite}
+.wsdots i:nth-child(2){animation-delay:.15s}
+.wsdots i:nth-child(3){animation-delay:.3s}
+@keyframes wsdot{0%,65%,100%{opacity:.28}32%{opacity:1}}
 
-.ask-voice-controls{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-.ask-voice-btn{display:inline-flex;align-items:center;gap:6px;background:#fff;color:#284e63;
-  border:1px solid #cbd9e1;border-radius:7px;padding:8px 12px;font-size:13px;font-weight:600;
-  cursor:pointer;white-space:nowrap}
-.ask-voice-btn:hover{background:#eaf4f6;border-color:#9ac8ca}
-.ask-voice-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;
-  stroke-linecap:round;stroke-linejoin:round}
-.ask-voice-btn[aria-pressed=true]{background:#e7edf0;border-color:#9aabb3;color:#44606e}
-.ask-voice-start{background:var(--ask-teal);border-color:var(--ask-teal);color:#fff}
-.ask-voice-start:hover{background:#00676d;border-color:#00676d}
-.ask-voice-start svg{fill:currentColor;stroke:none}
-.ask-voice-start[data-live=true]{background:#9a3e2b;border-color:#9a3e2b}
-.ask-voice-start[data-live=true]:hover{background:#86341f;border-color:#86341f}
+/* What is happening while several tools run inside one spoken turn. Subtle on
+   purpose: it reports the work, it is not a loading screen. */
+.wsact{display:flex;flex-direction:column;gap:5px;padding:6px 0 12px}
+.wsact-i{font-size:11.5px;color:var(--w-mute);display:inline-flex;align-items:center;gap:7px}
+.wsact-i:before{content:"";width:4px;height:4px;border-radius:50%;background:var(--w-teal);
+  animation:wsdot 1.1s infinite;flex:none}
 
-/* The conversation. */
-.ask-messages{flex:1;min-height:150px;overflow:auto;padding:22px 20px 6px;
-  scroll-behavior:smooth}
-.ask-turn{margin-bottom:22px}
-.ask-turn-user{display:flex;flex-direction:column;align-items:flex-end}
-.ask-label{display:flex;align-items:center;gap:8px;color:#265569;font-size:12px;
-  font-weight:700;margin-bottom:9px}
-.ask-bubble{font-size:15px;line-height:1.62;color:#264554;overflow-wrap:anywhere}
-.ask-turn-user .ask-bubble{background:#edf3f7;border:1px solid #e0e9ef;
-  border-radius:11px 11px 3px 11px;padding:11px 14px;max-width:93%}
-.ask-bubble p{margin:8px 0 12px}
-.ask-bubble h3{font-size:21px;font-weight:600;margin:8px 0;color:#123f54;
-  line-height:1.3;letter-spacing:-.3px}
-.ask-bubble strong{color:#103c50}
-.ask-bubble ul{margin:8px 0 12px;padding-left:20px}
-.ask-bubble li{margin:4px 0;line-height:1.55}
-.ask-chips{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}
-.ask-chip{padding:4px 8px;border-radius:4px;background:#eef4f6;color:#486577;
-  font-size:11px;line-height:1.5}
-.ask-results{padding:0;list-style:none;margin:10px 0}
-.ask-result{padding:9px 0;border-bottom:1px solid #e9eef1;line-height:1.4}
-.ask-result-name{color:#087780;background:transparent;border:0;padding:0;text-align:left;
-  font-size:14px;font-weight:600;cursor:pointer}
-.ask-result-name:hover{text-decoration:underline}
-.ask-result-meta{display:block;color:#667d89;font-size:12px;margin-top:4px}
-.ask-note{color:#6a6d62;background:#f7f5ed;padding:10px 12px;border-left:3px solid #cebc77;
-  font-size:12px;line-height:1.55;border-radius:0 4px 4px 0;margin:12px 0}
-.ask-sources{color:#72848f;font-size:11px;margin-top:11px}
-.ask-pending{color:#6d838f;font-size:13px;display:flex;align-items:center;gap:8px}
-.ask-dots{width:34px;height:8px;display:inline-flex;gap:4px}
-.ask-dots i{width:8px;height:8px;border-radius:50%;background:#9cc3c7;
-  animation:askBlink 1.2s ease-in-out infinite}
-.ask-dots i:nth-child(2){animation-delay:.18s}
-.ask-dots i:nth-child(3){animation-delay:.36s}
-@keyframes askBlink{0%,100%{opacity:.3}50%{opacity:1}}
-.ask-error{background:#fdf1ee;border-left:3px solid #c9705c;color:#8e3c29;padding:10px 12px;
-  font-size:13px;line-height:1.55;border-radius:0 4px 4px 0}
-.ask-buttons{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}
+.wsp-composer{flex:none;border-top:1px solid var(--w-line);padding:11px 14px 13px;
+  display:flex;align-items:flex-end;gap:8px}
+.wsp-composer textarea{flex:1 1 auto;border:0;outline:0;resize:none;font:inherit;
+  font-size:14.5px;line-height:1.5;color:var(--w-ink);background:transparent;
+  min-height:26px;max-height:132px;padding:5px 4px}
+.wsp-composer textarea::placeholder{color:#9fb0ba}
+.wsp-composer-acts{display:flex;gap:7px;flex:none;padding-bottom:1px}
+.wsmic,.wssend{width:34px;height:34px;border-radius:50%;border:0;display:grid;
+  place-items:center;cursor:pointer;flex:none;transition:background .15s,color .15s}
+.wsmic{background:#eef3f5;color:var(--w-ink2)}
+.wsmic:hover{background:#e3ebee;color:var(--w-ink)}
+.wsmic.is-live{background:var(--w-teal);color:#fff}
+.wssend{background:var(--w-ink);color:#fff}
+.wssend:hover{background:#05121b}
+.wssend:disabled{background:#ccd8de;cursor:default}
+.wsmic svg,.wssend svg{width:16px;height:16px;fill:none;stroke:currentColor;
+  stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 
-/* Suggestions and composer. */
-.ask-suggestions{display:flex;gap:7px;flex-wrap:wrap;padding:10px 18px 12px;
-  border-top:1px solid #f0f3f5}
-.ask-suggestion{border:1px solid #d9e4e9;background:#fff;color:#246174;border-radius:6px;
-  padding:7px 10px;font-size:12px;text-align:left;cursor:pointer}
-.ask-suggestion:hover{background:#edf8f8;border-color:#9ac8ca}
-.ask-composer{margin:0 16px 16px;border:1px solid #b6d0d8;border-radius:9px;
-  box-shadow:0 1px 4px #0a53600a;padding:10px 12px 8px}
-.ask-composer:focus-within{border-color:#168f95;box-shadow:0 0 0 2px #007f8610}
-.ask-composer textarea{resize:none;border:0;background:transparent;width:100%;outline:none;
-  color:#1d4053;min-height:46px;font-size:15px;line-height:1.5;font-family:inherit}
-.ask-composer textarea::placeholder{color:#83939d}
-.ask-compose-footer{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.ask-compose-hint{font-size:11px;color:#728894}
-.ask-send{border:0;border-radius:5px;background:#007c83;color:#fff;font-size:13px;
-  font-weight:600;padding:8px 19px;cursor:pointer}
-.ask-send:hover{background:#006970}
-.ask-send:disabled{opacity:.5;cursor:default}
-.ask-btn{background:#fff;color:#284e63;border:1px solid #cbd9e1;padding:8px 13px;
-  border-radius:6px;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
-.ask-btn:hover{background:#eaf4f6}
-.ask-btn:disabled{opacity:.5;cursor:default}
-.ask-btn-primary{background:var(--ask-teal);border-color:var(--ask-teal);color:#fff}
-.ask-btn-primary:hover{background:#00676d}
+/* The workspace. */
+.wsp-space-wrap{display:flex;flex-direction:column;min-width:0;background:var(--w-bg)}
+.wsp-space-head{display:flex;align-items:center;gap:14px;padding:15px 22px 9px;flex:none}
+.wsp-space-head h2{margin:0;font-size:11px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--w-mute);font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wsscope{margin-left:auto;flex:none;border:1px solid var(--w-line);background:#fff;
+  border-radius:9px;padding:6px 11px;font-family:inherit;font-size:12.5px;
+  color:var(--w-ink2);cursor:pointer}
+.wsp-space{flex:1 1 auto;overflow:auto;padding:0 22px 20px;min-height:0}
 
-/* The evidence panel: overview, record list, one record, or a briefing. */
-.ask-evidence{display:flex;flex-direction:column;background:#fafcfd;
-  border:1px solid var(--ask-line);border-radius:10px;min-width:0;overflow:hidden}
-.ask-evidence-header{padding:18px 18px 15px;display:flex;justify-content:space-between;
-  align-items:center;border-bottom:1px solid var(--ask-line);gap:10px}
-.ask-kicker{font-size:11px;letter-spacing:1.5px;font-weight:700;color:#627786;
-  text-transform:uppercase;display:block}
-.ask-evidence-title{font-size:17px;line-height:1.3;margin:6px 0 0;color:#183f53;display:block}
-.ask-count{padding:4px 9px;background:#e5edf2;color:#36596d;border-radius:5px;
-  font-size:13px;font-weight:600;flex:none}
-.ask-evidence-toolbar{display:flex;gap:7px;flex-wrap:wrap;padding:0 16px}
-.ask-evidence-toolbar:not(:empty){padding-top:11px;padding-bottom:11px;
-  border-bottom:1px solid var(--ask-line)}
-.ask-evidence-toolbar .ask-btn{font-size:12px;padding:6px 10px}
-.ask-evidence-body{overflow:auto;flex:1;padding:16px 18px 22px}
-.ask-source-meta{color:#6c818e;font-size:12px;margin:0 0 16px}
-.ask-metric-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-bottom:18px;
-  border-bottom:1px solid var(--ask-line)}
-.ask-metric span{font-size:12px;color:#637b8a;display:block}
-.ask-metric strong{font-size:26px;letter-spacing:-1px;font-weight:600;color:#103f54;
-  display:block;margin:4px 0 1px}
-.ask-metric strong.over{color:#9a3e2b}
-.ask-metric strong.late{color:#83601b}
-.ask-metric small{font-size:11px;color:#70828e}
-.ask-section-label{font-size:11px;letter-spacing:1.2px;font-weight:700;color:#627786;
-  text-transform:uppercase;margin:18px 0 4px}
-.ask-unit-row{display:grid;grid-template-columns:minmax(80px,110px) 1fr 28px;gap:10px;
-  align-items:center;margin:12px 0;font-size:12px;color:#36596a}
-.ask-unit-row button{padding:0;background:none;border:0;text-align:left;color:inherit;
-  font-size:12px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ask-unit-row button:hover{color:#087780;text-decoration:underline}
-.ask-unit-track{height:6px;background:#e5edf1;border-radius:3px;overflow:hidden}
-.ask-unit-fill{height:100%;background:#208793;border-radius:3px}
-.ask-unit-row b{text-align:right;font-size:12px;font-weight:500}
+.wsempty{padding:52px 4px;max-width:460px}
+.wsempty-t{margin:0;font-size:21px;color:var(--w-ink);font-weight:600;letter-spacing:-.01em}
+.wsempty-s{margin:9px 0 20px;font-size:14px;color:var(--w-mute);line-height:1.62}
+.wsempty-q{display:flex;flex-direction:column;align-items:flex-start;gap:1px}
+.wsempty-q button{border:0;background:transparent;color:var(--w-accent);font-size:13.5px;
+  padding:7px 10px;margin-left:-10px;border-radius:8px;cursor:pointer;
+  text-align:left;font-family:inherit}
+.wsempty-q button:hover{background:#fff}
 
-/* A record card in the list. */
-.ask-record{background:#fff;border:1px solid #dce6eb;border-radius:7px;padding:14px;
-  margin-bottom:12px}
-.ask-record:hover{border-color:#b7d3db}
-.ask-record[data-selected=true]{border-color:#1a9aa2;box-shadow:0 0 0 2px #007f8618}
-.ask-record-top{display:flex;gap:8px;justify-content:space-between;font-size:10px;
-  letter-spacing:.7px;color:#6e8290;text-transform:uppercase}
-.ask-record-name{font-size:16px;margin:7px 0;color:#153f55;line-height:1.35;
-  background:none;border:0;padding:0;text-align:left;font-weight:600;cursor:pointer;display:block}
-.ask-record-name:hover{color:#087780;text-decoration:underline}
-.ask-record p{font-size:13px;line-height:1.6;margin:7px 0;color:#43606f;
-  white-space:pre-wrap;overflow-wrap:anywhere}
-.ask-record-footer{display:flex;justify-content:space-between;gap:10px;margin-top:12px;
-  align-items:center}
-.ask-text-link{background:none;border:0;padding:0;color:#087780;font-size:13px;
-  font-weight:600;cursor:pointer}
-.ask-text-link:hover{text-decoration:underline}
-.ask-risk{border-radius:4px;padding:3px 6px;font-size:11px;white-space:nowrap}
-.ask-risk-high{background:#fce9e5;color:#9a3e2b}
-.ask-risk-medium{background:#fff0d4;color:#83601b}
-.ask-risk-low{background:#e5f2ed;color:#27664f}
-.ask-risk-other{background:#edf1f4;color:#637783}
-.ask-source-line{color:#72848f;font-size:11px;margin-top:11px}
-.ask-small{display:block;font-size:11px;color:#6d838f;margin-top:8px}
-.ask-empty{padding:24px 0;color:#667d8b;font-size:14px;line-height:1.7}
-.ask-empty strong{display:block;color:#1d4a5e;font-size:15px;margin-bottom:6px}
+/* Earlier results in the same thread, collapsed to one line each. Nothing is
+   thrown away when a question narrows the one before it. */
+.wstrail{display:flex;flex-direction:column;gap:1px;margin-bottom:10px}
+.wsstrip{display:flex;align-items:baseline;gap:10px;width:100%;text-align:left;border:0;
+  background:transparent;padding:7px 11px;border-radius:9px;cursor:pointer;font-family:inherit}
+.wsstrip:hover{background:#fff}
+.wsstrip-t{font-size:13px;color:var(--w-ink2);font-weight:550}
+.wsstrip-s{font-size:11.5px;color:var(--w-mute)}
+.wsearlier{border:0;background:transparent;color:var(--w-mute);font-size:12px;
+  padding:6px 11px;margin:0 0 9px -11px;border-radius:8px;cursor:pointer;font-family:inherit}
+.wsearlier:hover{background:#fff;color:var(--w-ink)}
 
-/* A calculated figure, shown as a figure rather than as a record with no name
-   in it. One or two of these per answer, so they get room. */
-.ask-figures{display:grid;gap:12px;margin:4px 0 16px}
-.ask-figure{background:#fff;border:1px solid #dce6eb;border-radius:8px;padding:16px 18px}
-.ask-figure span{display:block;font-size:11px;letter-spacing:.7px;text-transform:uppercase;
-  color:#6b818e}
-.ask-figure strong{display:block;font-size:30px;letter-spacing:-1px;font-weight:600;
-  color:#103f54;margin-top:6px;line-height:1.15;overflow-wrap:anywhere}
+.wscard{background:#fff;border-radius:14px;padding:19px 22px 22px;
+  box-shadow:0 1px 2px rgba(16,40,56,.05),0 10px 30px rgba(16,40,56,.055)}
+.wscard-head{display:flex;align-items:flex-start;gap:16px;margin-bottom:17px}
+.wscard-head h3{margin:0;font-size:19px;letter-spacing:-.012em;color:var(--w-ink);font-weight:620}
+.wscard-head p{margin:3px 0 0;font-size:12.5px;color:var(--w-mute)}
+.wscard-acts{margin-left:auto;flex:none}
+.wscard-note{margin:15px 0 0;font-size:11.5px;color:var(--w-mute)}
+.wsnote{margin:0;font-size:13.5px;color:var(--w-mute);line-height:1.62;max-width:52ch}
 
-/* One record, and a briefing. */
-.ask-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:15px 0;
-  padding:0}
-.ask-field-grid dt{font-size:11px;color:#6b818e;text-transform:uppercase;letter-spacing:.6px}
-.ask-field-grid dd{margin:3px 0 0;font-size:14px;color:#234657;overflow-wrap:anywhere}
-.ask-field-grid dd.over{color:#9a3e2b;font-weight:600}
-.ask-field-grid dd.late{color:#83601b;font-weight:600}
-.ask-report-title{font-size:21px;line-height:1.3;letter-spacing:-.3px;margin:4px 0 9px;
-  color:#123f54}
-.ask-report-summary{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
-.ask-report-summary span{font-size:12px;padding:7px 9px;background:#e9f2f5;border-radius:5px}
-.ask-report-section{margin:18px 0;border-top:1px solid #dce5ea;padding-top:14px}
-.ask-report-section h4{font-size:15px;margin:0 0 6px;color:#163548}
-.ask-report-section p{font-size:13px;line-height:1.6;white-space:pre-wrap;color:#456171;margin:7px 0}
-.ask-history-entry{border-left:2px solid #a9cbd0;margin:16px 0;padding:1px 0 1px 13px}
-.ask-history-entry time{font-size:12px;font-weight:700;color:#26717b}
-.ask-history-entry p{white-space:pre-wrap;font-size:13px;color:#365363;line-height:1.6;margin:7px 0}
+/* Metrics. No boxes: one hairline under the row and plenty of space. */
+.wsmets{display:grid;grid-template-columns:repeat(auto-fit,minmax(134px,1fr));
+  gap:17px 26px;margin-bottom:19px;padding-bottom:18px;border-bottom:1px solid var(--w-line)}
+.wsmet-k{display:block;font-size:11px;color:var(--w-mute)}
+.wsmet-v{display:block;font-size:24px;font-weight:600;color:var(--w-ink);margin-top:4px;
+  letter-spacing:-.018em;font-variant-numeric:tabular-nums}
+.wsmet-rose{color:var(--w-rose)}
+.wsmet-amber{color:var(--w-amber)}
+.wsmet-good{color:var(--w-good)}
+.wsmet-n{display:block;font-size:11.5px;color:var(--w-mute);margin-top:3px}
 
-/* Photographs. Styled now so adding them later is a render call, not a redesign. */
-.ask-photo{margin:0 0 18px}
-.ask-photo img{display:block;width:100%;height:220px;object-fit:cover;border-radius:6px;
-  background:#e7eef2}
-.ask-photo figcaption{font-size:12px;color:#4c6777;padding:9px 0;line-height:1.5}
-.ask-photo figcaption strong{display:block;color:#214c61;margin-bottom:4px}
-.ask-photo button{padding:0;border:0;background:none;width:100%;text-align:left;cursor:pointer}
+.wslist{list-style:none;margin:0;padding:0}
+.wslist li+li{border-top:1px solid var(--w-line2)}
+.wsrow{display:flex;align-items:center;gap:13px;width:100%;text-align:left;border:0;
+  background:transparent;padding:10px 9px;border-radius:9px;cursor:pointer;font-family:inherit}
+.wsrow:hover{background:#f8fafb}
+.wsrow-main{flex:1 1 auto;min-width:0}
+.wsrow-name{display:block;font-size:14px;color:var(--w-ink);font-weight:550;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wsrow-meta{display:block;font-size:11.5px;color:var(--w-mute);margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wsrow-marks{display:flex;gap:4px;flex:none}
+.wsrow-fig{display:flex;align-items:center;gap:9px;flex:none;justify-content:flex-end}
 
-/* Moving between result sets. A horizontal pair in the card's own header,
-   beside the count they change, rather than a rail off to one side: the thing
-   they act on is the panel, so that is where they belong. */
-.ask-evidence-nav{display:flex;align-items:center;gap:6px;flex:none}
-.ask-step-label{font-size:11px;color:#7b8f9a;white-space:nowrap;margin-right:2px}
-.ask-step{width:26px;height:26px;border-radius:6px;border:1px solid #cbd9e1;background:#fff;
-  color:#2a6b7c;display:grid;place-items:center;cursor:pointer;flex:none;padding:0}
-.ask-step:hover:not(:disabled){background:#eaf4f6;border-color:#9ac8ca}
-.ask-step:disabled{opacity:.35;cursor:default}
-.ask-step svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;
-  stroke-linecap:round;stroke-linejoin:round}
+/* The three state marks, and no others. */
+.wsm{font-style:normal;font-size:9.5px;letter-spacing:.055em;text-transform:uppercase;
+  font-weight:700;padding:2px 6px;border-radius:5px}
+.wsm-rose{background:#fbeef0;color:var(--w-rose)}
+.wsm-amber{background:#fdf4e6;color:var(--w-amber)}
+.wsm-ring{background:#eef2f5;color:#4a6274}
 
-/* The assistant's record dialog. Deliberately not the edit form: this pane only
-   reads, and handing someone a form with a Save button contradicts that. */
-.ask-record-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px 20px}
-.ask-record-field span{display:block;font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:#6e8290}
-.ask-record-field strong{display:block;font-size:14px;color:#163548;margin-top:3px;font-weight:600}
-.ask-record-field strong.over{color:#9a3e2b}
-.ask-record-field strong.late{color:#83601b}
-.ask-record-update{margin-top:18px;padding-top:14px;border-top:1px solid #dce5ea}
-.ask-record-update h4{margin:0 0 6px;font-size:12px;letter-spacing:.6px;color:#586f7e;text-transform:uppercase}
-.ask-record-update p{margin:0;font-size:14px;line-height:1.6;color:#243b49;white-space:pre-wrap}
-.ask-record-note{font-size:12px;color:#6e8290;margin-right:auto}
+.wsq{font-size:13px;color:var(--w-ink2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.wsq-rose{color:var(--w-rose);font-weight:600}
+.wsq-amber{color:var(--w-amber);font-weight:600}
+.wsq-mute{color:var(--w-mute)}
+.wsbar{display:inline-block;width:54px;height:4px;border-radius:3px;background:var(--w-line);
+  overflow:hidden;vertical-align:middle;flex:none}
+.wsbar-f{display:block;height:100%;background:#9fb3bf;border-radius:3px}
+.wsbar-rose{background:var(--w-rose)}
+.wsbar-amber{background:var(--w-amber)}
+.wsbar-good{background:var(--w-good)}
 
+.wsflds{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px 24px;
+  padding:17px 0;border-top:1px solid var(--w-line)}
+.wsfld span{display:block;font-size:11px;color:var(--w-mute)}
+.wsfld strong{display:block;font-size:13.5px;color:var(--w-ink);font-weight:550;margin-top:2px}
+.wsprose{padding-top:16px;border-top:1px solid var(--w-line)}
+.wsprose+.wsprose{margin-top:14px}
+.wsk{display:block;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--w-mute);font-weight:650;margin-bottom:6px}
+.wsprose p{margin:0;font-size:13.5px;line-height:1.66;color:var(--w-ink2);max-width:76ch}
+
+.wsrisk{margin-bottom:18px;padding-bottom:15px;border-bottom:1px solid var(--w-line)}
+.wsrisk-head,.wsrisk-row{display:grid;grid-template-columns:108px minmax(0,1fr) minmax(0,1fr);
+  gap:18px;align-items:center}
+.wsrisk-head{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--w-mute);font-weight:650;padding-bottom:7px}
+.wsrisk-row{padding:7px 0}
+.wsrisk-k{font-size:13px;color:var(--w-ink);font-weight:550}
+.wsrisk-v{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--w-ink2);
+  font-variant-numeric:tabular-nums}
+.wsrisk-v .wsbar{flex:1 1 auto;width:auto}
+
+/* Period on period. The relationship is drawn, never typed as an arrow. */
+.wspairs{display:flex;flex-direction:column}
+.wspair{display:grid;grid-template-columns:128px minmax(0,1fr) 26px minmax(0,1fr) auto;
+  gap:14px;align-items:center;padding:13px 0;border-bottom:1px solid var(--w-line2)}
+.wspair-k{font-size:13px;color:var(--w-ink);font-weight:550}
+.wspair-was,.wspair-now{font-size:15px;color:var(--w-ink);font-variant-numeric:tabular-nums}
+.wspair-was{color:var(--w-mute)}
+.wspair-was em,.wspair-now em{display:block;font-style:normal;font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--w-mute);margin-bottom:3px;font-weight:650}
+.wspair-arrow{height:1px;background:#d4dee3;position:relative}
+.wspair-arrow:after{content:"";position:absolute;right:0;top:-3px;width:6px;height:6px;
+  border-top:1px solid #b9c7d0;border-right:1px solid #b9c7d0;transform:rotate(45deg)}
+.wsdelta{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+.wsdelta-rose{color:var(--w-rose)}
+.wsdelta-amber{color:var(--w-amber)}
+.wsdelta-good{color:var(--w-good)}
+.wsnarr{display:grid;grid-template-columns:repeat(auto-fit,minmax(248px,1fr));gap:22px;
+  padding-top:17px;margin-top:3px;border-top:1px solid var(--w-line)}
+.wsnarr p{margin:0;font-size:13.5px;line-height:1.66;color:var(--w-ink2)}
+
+.wscmp{display:grid;align-items:stretch}
+.wscmp-corner,.wscmp-head{border-bottom:1px solid var(--w-line)}
+.wscmp-head{text-align:left;border-top:0;border-left:0;border-right:0;background:transparent;
+  cursor:pointer;padding:0 12px 12px;font-size:14px;font-weight:600;color:var(--w-ink);
+  font-family:inherit}
+.wscmp-head:hover{color:var(--w-accent)}
+.wscmp-head em{display:block;font-style:normal;font-size:11px;color:var(--w-mute);
+  font-weight:400;margin-top:3px}
+.wscmp-k{font-size:12px;color:var(--w-mute);padding:11px 0;border-bottom:1px solid var(--w-line2);
+  display:flex;align-items:center}
+.wscmp-v{font-size:13.5px;color:var(--w-ink);padding:11px 12px;
+  border-bottom:1px solid var(--w-line2);font-variant-numeric:tabular-nums;
+  display:flex;align-items:center}
+.wscmp-rose{color:var(--w-rose);font-weight:600}
+.wscmp-amber{color:var(--w-amber);font-weight:600}
+
+.wstl{list-style:none;margin:0;padding:0 0 0 20px;position:relative}
+.wstl:before{content:"";position:absolute;left:4px;top:14px;bottom:14px;width:1px;background:var(--w-line)}
+.wstl li{position:relative;padding:9px 0;display:flex;gap:18px;align-items:baseline}
+.wstl li:before{content:"";position:absolute;left:-20px;top:13px;width:9px;height:9px;
+  border-radius:50%;background:#fff;border:2px solid #c0ced6}
+.wstl-actual:before{border-color:var(--w-accent)}
+.wstl-report:before{border-color:var(--w-teal)}
+.wstl-d{font-size:12.5px;color:var(--w-mute);min-width:98px;font-variant-numeric:tabular-nums}
+.wstl-l{font-size:13.5px;color:var(--w-ink)}
+
+.wsbig{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:26px}
+.wsbig-m span{display:block;font-size:11.5px;color:var(--w-mute)}
+.wsbig-m strong{display:block;font-size:38px;font-weight:600;color:var(--w-ink);
+  letter-spacing:-.025em;margin-top:5px;font-variant-numeric:tabular-nums}
+
+.wsgroup-row{display:grid;grid-template-columns:minmax(0,1fr) 108px 92px;gap:16px;
+  align-items:center;padding:10px 0;border-bottom:1px solid var(--w-line2)}
+.wsgroup-k{font-size:13.5px;color:var(--w-ink)}
+.wsgroup-row .wsbar{width:100%}
+.wsgroup-v{text-align:right;font-size:13.5px;color:var(--w-ink);font-variant-numeric:tabular-nums}
+
+/* The briefing. A real workspace object that fills as you work, not an export
+   button you have to remember to press. */
+.wsbrief{flex:none;border-top:1px solid var(--w-line);background:#fff}
+.wsbrief-tab{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;
+  padding:12px 22px;font-size:13px;font-weight:600;color:var(--w-ink);cursor:pointer;
+  text-align:left;font-family:inherit}
+.wsbrief-tab:hover{background:var(--w-line2)}
+.wsbrief-tab span{font-size:11.5px;font-weight:400;color:var(--w-mute)}
+.wsbrief-body{padding:0 22px 15px;max-height:228px;overflow:auto}
+.wsbrief-row{display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--w-line2)}
+.wsbrief-row span{flex:1 1 auto;min-width:0}
+.wsbrief-row strong{display:block;font-size:13px;color:var(--w-ink);font-weight:550}
+.wsbrief-row em{display:block;font-style:normal;font-size:11.5px;color:var(--w-mute);margin-top:1px}
+.wsx{border:0;background:transparent;color:#aebcc5;font-size:17px;line-height:1;
+  cursor:pointer;padding:0 4px;flex:none}
+.wsx:hover{color:var(--w-rose)}
+.wsbrief-foot{display:flex;gap:8px;padding-top:13px}
+.wsbtn{border:0;background:var(--w-accent);color:#fff;border-radius:9px;padding:8px 15px;
+  font-size:13px;font-weight:550;cursor:pointer;font-family:inherit}
+.wsbtn:hover{background:#084b6c}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
 /* Responsive. The rail folds into a row above the evidence panel rather than
-   disappearing: moving between result sets is not a desktop-only affordance. */
-@media (max-width:1280px){
-  .ask-workspace{grid-template-columns:minmax(320px,1.1fr) minmax(300px,1fr);gap:14px}
+
+/* Responsive. The workspace goes under the conversation rather than beside it;
+   neither one is a desktop-only affordance. */
+@media (max-width:1180px){
+  .wsp{grid-template-columns:330px minmax(0,1fr)}
 }
-@media (max-width:1024px){
-  .ask-workspace{grid-template-columns:1fr;height:auto;max-height:none;min-height:0}
-  .ask-conversation{min-height:520px}
-  .ask-evidence{max-height:560px}
+@media (max-width:920px){
+  .wsp{grid-template-columns:minmax(0,1fr);height:auto;min-height:0}
+  .wsp-chat{border-right:0;border-bottom:1px solid var(--w-line)}
+  .wsp-thread{max-height:300px}
+  .wsp-space{max-height:none;overflow:visible}
 }
 @media (max-width:640px){
-  .ask-top,.ask-head{flex-direction:column;align-items:flex-start}
-  .ask-crumb-now{max-width:18ch}
-  .ask-context{max-width:100%}
-  .ask-field-grid,.ask-metric-pair{grid-template-columns:1fr}
-  .ask-scope-pick select{max-width:100%}
-  .ask-messages{padding:16px 14px 4px}
-  .ask-composer{margin:0 12px 12px}
+  .wsp-space-head{flex-wrap:wrap}
+  .wsscope{margin-left:0;width:100%}
+  .wscard{padding:16px 15px 18px}
+  .wsp-space{padding:0 12px 16px}
+  .wspair{grid-template-columns:minmax(0,1fr);gap:4px;padding:12px 0}
+  .wspair-arrow{display:none}
+  .wsdelta{text-align:left}
+  .wsrisk-head,.wsrisk-row{grid-template-columns:86px minmax(0,1fr) minmax(0,1fr);gap:10px}
+  .wscmp{overflow-x:auto}
 }
 @media (prefers-reduced-motion:reduce){
-  .ask-voice-orb i,.ask-dots i{animation:none!important}
-  .ask-messages{scroll-behavior:auto}
+  .wsp-presence i,.wsp-presence:after,.wsdots i,.wsact-i:before{animation:none!important}
+  .wsp-thread{scroll-behavior:auto}
 }
 
-/* Print: the briefing is the page. Everything that is furniture goes away, and
-   the evidence body is allowed to flow onto as many sheets as it needs. */
+/* Print: the focused card and the briefing are the page. Everything that is
+   furniture goes away, and the card flows onto as many sheets as it needs. */
 @media print{
   body{background:#fff}
-  .sidebar,.topbar,.ask-top,.ask-head,.ask-conversation,.ask-voice-bar,
-  .ask-evidence-toolbar,.ask-evidence-header,.toast,
-  .pane:not([data-pane="ask"]){display:none!important}
+  .sidebar,.topbar,.wsp-chat,.wsp-space-head,.wstrail,.wsearlier,.wscard-acts,
+  .toast,.pane:not([data-pane="ask"]){display:none!important}
   .app{display:block!important;box-shadow:none!important;background:#fff!important}
-  .ask-workspace,.ask-evidence,.ask-evidence-body{display:block!important;height:auto!important;
-    max-height:none!important;overflow:visible!important;border:0!important;
-    padding:0!important;margin:0!important;background:#fff!important}
-  .ask-report-section,.ask-record,.ask-history-entry{break-inside:avoid}
-  .ask-report-title{font-size:25px}
+  .wsp{display:block!important;height:auto!important;border-radius:0!important;
+    box-shadow:none!important;background:#fff!important}
+  .wsp-space,.wsp-space-wrap{display:block!important;overflow:visible!important;
+    max-height:none!important;padding:0!important;background:#fff!important}
+  .wscard{box-shadow:none!important;padding:0!important;break-inside:avoid}
+  .wsbrief-body{max-height:none!important;overflow:visible!important}
+  .wsbrief-tab,.wsbrief-foot{display:none!important}
 }
 `;

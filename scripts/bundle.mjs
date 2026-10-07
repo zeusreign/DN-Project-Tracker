@@ -38,9 +38,11 @@ const enhancedApi = await readFile(resolve(workerRoot, "enhanced-api.js"), "utf8
 // not the bundle, is what keeps it out of production.
 const assistantFiles = [
   "assistant-schema.js",
+  "assistant-views.js",
   "assistant-prompt.js",
   "assistant-context.js",
   "assistant-sql.js",
+  "assistant-tools.js",
   "assistant-model.js",
   "legacy/assistant-plan.js",
   "legacy/assistant-plan-prompt.js",

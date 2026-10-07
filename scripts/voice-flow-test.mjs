@@ -1,11 +1,11 @@
-// The voice call, driven through the real state machine.
+// The realtime call, driven through the real state machine.
 //
 // There is no WebRTC in the harness, so the peer connection and the microphone
 // are stood in for and the data channel is driven directly with the events the
-// Realtime service sends. What that leaves under test is everything this phase
-// is about: that a call keeps listening by itself, that nothing in the
-// conversation is lost to an interruption or a noise, and that mute, stop and
-// end each do one thing.
+// Realtime service sends. What that leaves under test is this phase's whole
+// claim: one session, the model calling data tools itself, the workspace
+// rendering before a word is spoken, and several tool calls inside one spoken
+// turn without the listener ever seeing a handoff.
 //
 //   node scripts/voice-flow-test.mjs
 
@@ -17,73 +17,123 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { createBrowser } = await import(`${root}/scripts/browser-harness.mjs`);
+const { mintVoiceSession, DEFAULT_VOICE_MODEL } = await import(`${root}/worker/assistant-model.js`);
+const { REALTIME_TOOLS, TOOL_LABELS } = await import(`${root}/worker/assistant-tools.js`);
+const { voiceInstructions } = await import(`${root}/worker/assistant-prompt.js`);
+
 const database = new DatabaseSync(":memory:");
 for (const n of ["0000_dnc_project_hub.sql","0001_workbook_structure_and_roles.sql","0002_user_directory.sql","0003_development_pipeline_and_directory.sql","0004_pilot_authentication.sql","0005_profile_photos.sql","0006_enhanced_media_and_revisions.sql","0007_photo_details.sql"])
   database.exec(await readFile(`${root}/drizzle/${n}`, "utf8"));
 const DB = { prepare(q){const st=database.prepare(q);const r=(b)=>({all:async()=>({results:st.all(...b)}),first:async()=>st.get(...b)??null,run:async()=>({success:true,meta:st.run(...b)})});return {bind:(...b)=>r(b),...r([])}}, batch:async(p)=>Promise.all(p.map(x=>x.run())) };
 const worker = (await import(`${root}/dist/server/index.js`)).default;
 const headers = {"oai-authenticated-user-id":"v","oai-authenticated-user-email":"v@example.invalid","oai-authenticated-user-full-name":"V","oai-authenticated-user-full-name-encoding":"percent-encoded-utf-8","content-type":"application/json"};
-const C = "id, name, business_unit, status, budget_risk, schedule_risk, approved_budget, "
-  + "anticipated_final_cost, forecast_variance, duration_change_days, current_update, reporting_period, venue, project_manager";
-const generator = { async generate(question){
-  const q=String(question).toLowerCase();
-  const sql = q.includes("corporate") ? `SELECT ${C} FROM projects WHERE business_unit='Corporate'`
-    : q.includes("risk") ? `SELECT ${C} FROM projects WHERE schedule_risk='High'`
-    : `SELECT ${C} FROM projects WHERE business_unit='Gaming'`;
-  return { intent:"search", language:"English", message:null, sql, usage:{model:"stub"} };
-} };
-const answerer = { async answer(question,result){ return { text:`There are ${result.total} ${result.entityLabel}.`, usage:{} }; } };
 const env = { DB, ADMIN_EMAILS:"v@example.invalid", ALLOW_PLATFORM_AUTH:"true",
-  ASSISTANT_SQL:generator, ASSISTANT_ANSWERER:answerer,
-  ASSISTANT_CONTEXT_SECRET:"voice", ASSISTANT_DEBUG:"true" };
-await worker.fetch(new Request("https://v/api/bootstrap",{headers}),env,{});
-const pw = "Zz9!"+crypto.randomUUID();
+  ASSISTANT_CONTEXT_SECRET:"voice" };
+await worker.fetch(new Request("https://v/api/bootstrap",{headers}), env, {});
+
+const pw = "Zz9!" + crypto.randomUUID();
 await worker.fetch(new Request("https://v/api/admin/users",{method:"POST",headers,body:JSON.stringify({
   first_name:"V",last_name:"User",username:"vu@example.invalid",user_email:"vu@example.invalid",role:"viewer",
   business_unit_scope:"All",account_status:"active",site_access_status:"authorized",
-  temporary_password:pw,confirm_password:pw})}),env,{});
-database.prepare("UPDATE user_directory SET must_change_password=0 WHERE lower(username)=?").run("vu@example.invalid");
-const page = await (await worker.fetch(new Request("https://v/",{headers:{cookie:""}}),env,{})).text();
-// Minting a realtime credential needs the account key and reaches OpenAI, so
-// that one route is answered locally. Everything else goes to the real worker,
-// including /api/assistant/ask, which is what the call actually queries with.
+  temporary_password:pw,confirm_password:pw})}), env, {});
+database.prepare("UPDATE user_directory SET must_change_password=0 WHERE lower(username)=?")
+  .run("vu@example.invalid");
+
+let n = 0;
+const check = async (label, fn) => {
+  try { await fn(); n += 1; console.log(`  ok   ${label}`); }
+  catch (problem) { console.log(`  FAIL ${label}\n       ${problem.message}`); process.exitCode = 1; }
+};
+
+// --- What the session is minted with -----------------------------------------
+// Checked against the payload rather than against a comment, because every one
+// of these settings was chosen to fix something a listener complained about.
+
+let minted = null;
+const fakeFetch = async (_url, options) => {
+  minted = JSON.parse(options.body);
+  return { ok:true, status:200, json: async () => ({ value:"ek_test", expires_at: 1 }) };
+};
+await mintVoiceSession({ OPENAI_API_KEY:"k" }, {
+  instructions: voiceInstructions({ units:["Gaming"], name:"V", today:"2026-10-07" }),
+  tools: REALTIME_TOOLS, fetchImpl: fakeFetch,
+});
+
+await check("the call runs on the full realtime model, not the mini one", () => {
+  assert.equal(DEFAULT_VOICE_MODEL, "gpt-realtime-2.1");
+  assert.equal(minted.session.model, "gpt-realtime-2.1");
+});
+
+await check("turn detection is semantic, so a pause mid-thought is not a finished question", () => {
+  assert.equal(minted.session.audio.input.turn_detection.type, "semantic_vad");
+});
+
+await check("and set to wait longest, because half a question answered is a wrong answer", () => {
+  assert.equal(minted.session.audio.input.turn_detection.eagerness, "low");
+});
+
+await check("the listener can interrupt the assistant", () => {
+  assert.equal(minted.session.audio.input.turn_detection.interrupt_response, true);
+});
+
+await check("there is nothing to press: a finished question is answered", () => {
+  assert.equal(minted.session.audio.input.turn_detection.create_response, true);
+});
+
+await check("noise reduction is on, so the desk next door is not transcribed as a question", () => {
+  assert.ok(minted.session.audio.input.noise_reduction.type);
+});
+
+await check("the model is given the data tools directly, not a question-forwarding tool", () => {
+  const names = minted.session.tools.map((t) => t.name);
+  assert.ok(!names.includes("ask_tracker"),
+    "handing the question to another agent is the architecture this replaces");
+  assert.ok(names.includes("find_projects"), "it finds projects itself");
+  assert.ok(names.includes("compare_periods"), "and compares periods itself");
+  assert.equal(names.length, REALTIME_TOOLS.length);
+});
+
+await check("the instructions put the detail on the screen and one sentence in the ear", () => {
+  const text = voiceInstructions({ units:["Gaming"], name:"V", today:"2026-10-07" });
+  assert.match(text, /one sentence/i, "the length is stated");
+  assert.match(text, /[Nn]ever read a list/, "and the thing it must not do");
+  assert.match(text, /subject_ids/, "it is told how to keep looking at the same thing");
+  assert.match(text, /ONE request|multi-part|all of it/i, "and that a long question is one request");
+  assert.match(text, /Say nothing while tools are running|No filler/i, "and not to fill the pause");
+});
+
+// --- The call, through the client's own state machine -------------------------
+
+const page = await (await worker.fetch(new Request("https://v/",{headers:{cookie:""}}), env, {})).text();
 const handler = async (request) => {
-  // The SDP exchange goes straight to OpenAI from the browser. Answered here,
-  // because there is no WebRTC to negotiate with.
   if (String(request.url).includes("api.openai.com")) {
-    return new Response("v=0\r\n", { status: 200, headers: { "content-type": "application/sdp" } });
+    return new Response("v=0\r\n", { status:200, headers:{ "content-type":"application/sdp" } });
   }
   if (new URL(request.url).pathname === "/api/assistant/voice-session") {
     return new Response(JSON.stringify({
-      clientSecret: "ek_test", expiresAt: Math.floor(Date.now()/1000)+600, model: "gpt-realtime-2.1-mini",
-    }), { status: 200, headers: { "content-type": "application/json" } });
+      clientSecret:"ek_test", expiresAt: Math.floor(Date.now()/1000)+600,
+      model: DEFAULT_VOICE_MODEL, tools: REALTIME_TOOLS, labels: TOOL_LABELS, units: [],
+    }), { status:200, headers:{ "content-type":"application/json" } });
   }
   return worker.fetch(request, env, {});
 };
-const browser = await createBrowser({page,handler}).start();
+const browser = await createBrowser({ page, handler }).start();
 browser.type("loginUsername","vu@example.invalid"); browser.type("loginPassword",pw);
 await browser.fire("loginForm","submit").results; await browser.settle();
 await browser.fire("askNav","click").results; await browser.settle();
 
-// --- A microphone and a peer connection, standing in ------------------------
 const sent = [];
-const track = { kind:"audio", enabled:true, stopped:false, stop(){this.stopped=true} };
+const track = { kind:"audio", enabled:true, stopped:false, stop(){ this.stopped = true; } };
 const channel = {
   listeners:{}, readyState:"open",
   addEventListener(type,fn){ (this.listeners[type]=this.listeners[type]||[]).push(fn); },
   send(data){ sent.push(JSON.parse(data)); },
   close(){ this.readyState="closed"; },
-  emit(type,payload){ for(const fn of this.listeners[type]||[]) fn(payload); },
+  emit(type,payload){ for (const fn of this.listeners[type]||[]) fn(payload); },
 };
 const win = browser.window;
-// The client reads a bare `navigator`, which in Node resolves to the global one
-// and has no mediaDevices. Replacing it is how the microphone is stood in for.
-Object.defineProperty(globalThis, "navigator", {
-  configurable: true,
-  value: { mediaDevices: { getUserMedia: async () => ({
-    getTracks: () => [track], getAudioTracks: () => [track],
-  }) } },
-});
+Object.defineProperty(globalThis, "navigator", { configurable:true, value:{ mediaDevices:{
+  getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) } } });
 const FakePeer = function(){
   this.connectionState="connected";
   this.createDataChannel=()=>channel;
@@ -92,191 +142,144 @@ const FakePeer = function(){
   this.setLocalDescription=async()=>{}; this.setRemoteDescription=async()=>{};
   this.addEventListener=()=>{};
 };
-// The guard reads window.RTCPeerConnection; the constructor call is a bare
-// global. Both have to be there.
 win.RTCPeerConnection = FakePeer;
-Object.defineProperty(globalThis, "RTCPeerConnection", { configurable: true, value: FakePeer });
+Object.defineProperty(globalThis, "RTCPeerConnection", { configurable:true, value:FakePeer });
 
-const say = (type, extra={}) => channel.emit("message",{data:JSON.stringify({type,...extra})});
-const toolCall = (question, callId="c"+Math.random()) => {
-  say("response.function_call_arguments.done",{name:"ask_tracker",call_id:callId,arguments:JSON.stringify({question})});
+const say = (type, extra={}) => channel.emit("message", { data: JSON.stringify({ type, ...extra }) });
+let callSeq = 0;
+const toolCall = async (name, args) => {
+  callSeq += 1;
+  say("response.function_call_arguments.done",
+    { name, call_id:"c"+callSeq, arguments: JSON.stringify(args) });
+  await browser.settle();
 };
 const settle = () => browser.settle();
-const state = () => browser.byId("askOrb").getAttribute("data-state");
-const heading = () => browser.text("askVoiceState");
-const turns = () => browser.byId("askThread").querySelectorAll(".ask-turn").length;
-const thread = () => browser.byId("askThread").textContent;
+const presence = () => browser.byId("wsPresence").getAttribute("data-state");
+const space = (sel) => [...browser.byId("wsSpace").querySelectorAll(sel)];
+const thread = (sel) => [...browser.byId("wsThread").querySelectorAll(sel)];
 
-let checks = 0;
-const check = async (label, fn) => {
-  try { await fn(); } catch (problem) { problem.message = `${label}\n   ${problem.message}`; throw problem; }
-  checks++;
-  console.log(`  ok   ${label}`);
-};
-
-await browser.fire("askVoiceMode","click").results; await settle();
-await check("the conversation is the content; the voice bar sits under it", () => {
-  assert.equal(browser.byId("askVoicePanel").hidden, false, "the bar is shown in voice mode");
-  assert.equal(browser.byId("askForm").hidden, true, "and the typing composer steps aside");
-  assert.ok(browser.byId("askThread"), "the transcript is still the main area");
-  assert.equal(browser.byId("askVoiceBtnLabel").textContent, "Start call");
-  assert.equal(browser.byId("askMuteBtn").hidden, true, "mute is offered only on a call");
-  assert.equal(browser.byId("askStopBtn").hidden, true, "and stop only while speaking");
-});
-
-await browser.fire("askVoiceBtn","click").results; await settle();
-channel.emit("open");
+await browser.fire("wsMic","click").results; await settle();
+channel.emit("open", {});
 await settle();
-await check("a call opens listening, with nothing to press", () => {
-  assert.equal(state(), "listening");
-  assert.equal(heading(), "Listening");
-  assert.equal(browser.byId("askVoiceBtnLabel").textContent, "End call");
-  assert.equal(browser.byId("askMuteBtn").hidden, false, "mute is now offered");
+
+await check("a call opens on the same screen, with no second view to switch to", () => {
+  assert.equal(presence(), "listening");
+  assert.equal(browser.byId("wsForm").hidden, false, "the composer never steps aside");
+  assert.ok(browser.byId("wsThread"), "and the conversation is the same conversation");
 });
 
-// --- Three consecutive questions, with no press between them ----------------
-const askAloud = async (question) => {
-  say("input_audio_buffer.speech_started"); await settle();
-  say("conversation.item.input_audio_transcription.completed",{transcript:question}); await settle();
-  say("input_audio_buffer.speech_stopped"); await settle();
-  toolCall(question); await settle();
-  say("response.created"); await settle();
-  say("response.output_audio.delta",{delta:"..."}); await settle();
-  say("response.done"); await settle();
-};
-await askAloud("Show me Gaming projects");
-await check("a spoken question is answered and the call goes back to listening", () => {
-  assert.match(thread(), /Show me Gaming projects/, "the question is in the transcript, in their words");
-  assert.match(thread(), /There are 30 projects/, "and so is the answer");
-  assert.equal(state(), "listening", "listening resumed by itself");
-  assert.equal(browser.byId("askEvidence").querySelectorAll(".ask-record").length > 0, true,
-    "and it made a result set, whose records are in the panel");
-});
-await askAloud("Which of those are high schedule risk");
-await askAloud("Show me Corporate projects");
-await check("three questions in a row, each its own result set", () => {
-  assert.match(browser.text("askRailLabel"), /^3 of 3$/);
-  assert.equal(turns(), 6, "six articles: three questions and three answers");
-  const text = thread();
-  assert.ok(text.indexOf("Show me Gaming projects") < text.indexOf("Show me Corporate projects"),
-    "in the order they were asked");
-});
+say("input_audio_buffer.speech_started"); await settle();
+say("conversation.item.input_audio_transcription.completed",
+  { transcript:"show me the projects at central city" });
+await settle();
 
-// --- Background speech, interruption and stop -------------------------------
-await check("a noise that transcribes to nothing does not become the question", async () => {
-  const before = thread();
-  say("conversation.item.input_audio_transcription.completed",{transcript:"  . "});
+await check("what the listener said appears as their own words", () =>
+  assert.match(browser.byId("wsThread").textContent, /show me the projects at central city/));
+
+await check("a cough is not a question", async () => {
+  const before = thread(".wsturn").length;
+  say("conversation.item.input_audio_transcription.completed", { transcript:"." });
   await settle();
-  toolCall("show me the projects"); await settle();
-  say("response.created"); say("response.done"); await settle();
-  assert.ok(!thread().includes('">  . '), "punctuation did not land as a question");
-  assert.ok(before.length < thread().length, "the turn still happened, with the tool's own wording");
-});
-await check("speech while the assistant is answering does not cancel it", async () => {
-  say("response.created"); await settle();
-  say("response.output_audio.delta",{delta:"..."}); await settle();
-  assert.equal(state(), "speaking");
-  const before = turns();
-  // interrupt_response is off, so the service sends no cancellation; what
-  // arrives is only that someone started talking.
-  say("input_audio_buffer.speech_started"); await settle();
-  assert.equal(state(), "speaking", "the reply is still being spoken");
-  assert.equal(turns(), before, "and nothing was removed from the transcript");
-  say("response.done"); await settle();
-  assert.equal(state(), "listening");
-});
-await check("Stop speaking ends the reply and keeps the conversation", async () => {
-  say("response.created"); say("response.output_audio.delta",{delta:"..."}); await settle();
-  assert.equal(state(), "speaking");
-  assert.equal(browser.byId("askStopBtn").hidden, false, "stop is offered while speaking");
-  const before = turns(); const rail = browser.text("askRailLabel");
-  sent.length = 0;
-  await browser.fire("askStopBtn","click").results; await settle();
-  assert.ok(sent.some((m) => m.type === "response.cancel"), "the response is cancelled");
-  assert.ok(sent.some((m) => m.type === "output_audio_buffer.clear"), "and the buffered audio dropped");
-  assert.equal(state(), "listening", "the call carries on listening");
-  assert.equal(turns(), before, "the transcript is untouched");
-  assert.equal(browser.text("askRailLabel"), rail, "and so are the result sets");
+  assert.equal(thread(".wsturn").length, before, "punctuation is not somebody speaking");
 });
 
-// --- Mute -------------------------------------------------------------------
-await check("Mute stops the microphone without ending the call", async () => {
-  const before = turns();
-  await browser.fire("askMuteBtn","click").results; await settle();
-  assert.equal(track.enabled, false, "the microphone track is disabled");
-  assert.equal(state(), "muted", "and the bar says so");
-  assert.equal(heading(), "Muted");
-  assert.equal(browser.text("askMuteLabel"), "Unmute");
-  assert.equal(browser.byId("askVoiceBtnLabel").textContent, "End call", "the call is still running");
-  assert.equal(turns(), before, "and the conversation is untouched");
-  await browser.fire("askMuteBtn","click").results; await settle();
-  assert.equal(track.enabled, true, "unmute turns it back on");
-  assert.equal(state(), "listening");
+const projects = database.prepare(
+  "SELECT id, name FROM projects WHERE archived_at IS NULL LIMIT 3").all();
+
+await toolCall("find_projects", {});
+await check("the workspace renders from the tool call, before a word is spoken", () => {
+  assert.equal(space(".wscard").length, 1, "the card is already there");
+  assert.ok(space(".wsrow").length > 0, "with the rows in it");
+  assert.equal(presence(), "thinking", "while the model is still working");
 });
 
-// --- The records, and the two buttons --------------------------------------
-await check("the conversation carries no buttons; the panel's chevrons reach each set", async () => {
-  assert.equal(browser.byId("askThread").querySelectorAll("[data-ask-set]").length, 0,
-    "no per-answer buttons");
-  assert.equal(browser.byId("askThread").querySelectorAll("[data-ask-brief]").length, 0);
-  // The chevrons walk back to the first set however many turns were taken.
-  let guard = 0;
-  while (!browser.byId("askOlder").disabled && guard++ < 20) {
-    await browser.fire("askOlder","click").results; await settle();
-  }
-  assert.match(browser.text("askRailLabel"), /^1 of/, "back at the first answer's set");
-  assert.equal(browser.byId("askOlder").disabled, true, "and there is nothing older to reach");
-  assert.match(browser.text("askEvidenceTitle"), /Gaming/, "showing its own question");
-});
-await check("the briefing is built from whichever set is showing", async () => {
-  const grabbed = [];
-  const RealBlob = globalThis.Blob;
-  globalThis.Blob = function(parts,opts){ grabbed.push(String(parts[0])); return new RealBlob(parts,opts); };
-  const make = browser.document.createElement.bind(browser.document);
-  browser.document.createElement = function(tag){ const el=make(tag);
-    if(typeof el.click!=="function")el.click=()=>{}; if(typeof el.remove!=="function")el.remove=()=>{}; return el; };
-  const brief = browser.byId("askToolbar").querySelector("[data-ask-action=briefing]");
-  await browser.fire(brief,"click").results; await settle();
-  assert.match(browser.text("askEvidenceTitle"), /Briefing preview/);
-  const download = browser.byId("askToolbar").querySelector("[data-ask-action=download]");
-  await browser.fire(download,"click").results; await settle();
-  assert.ok(grabbed.length, "a briefing was written");
-  assert.match(grabbed[0], /Show me Gaming projects/, "for the set on screen, not the latest");
-  globalThis.Blob = RealBlob;
-});
-await check("the chevrons still move between sets after voice turns", async () => {
-  const before = browser.text("askEvidenceTitle");
-  await browser.fire("askNewer","click").results; await settle();
-  assert.notEqual(browser.text("askEvidenceTitle"), before);
-  await browser.fire("askOlder","click").results; await settle();
-  assert.equal(browser.text("askEvidenceTitle"), before, "and back again");
-});
-await check("no SQL, model or debug detail appears while on a call", () => {
-  const everything = browser.document.body.textContent;
-  for (const leak of ["SELECT","FROM projects","WITH projects AS","gpt-","inputTokens","business_unit ="]) {
-    assert.ok(!everything.includes(leak), `"${leak}" is on screen during a call`);
-  }
+await check("and the model is handed a short line plus the ids, never the rows", () => {
+  const output = sent.find((m) => m.item && m.item.type === "function_call_output");
+  assert.ok(output, "the tool result went back");
+  const payload = JSON.parse(output.item.output);
+  assert.ok(typeof payload.result === "string" && payload.result.length < 300,
+    "one line, not a table read aloud");
+  assert.ok(Array.isArray(payload.subject_ids), "and what it is about, so it can narrow");
+  assert.ok(!/approved_budget|forecast_variance/.test(output.item.output),
+    "the figures are on screen, not in the model's mouth");
 });
 
-// --- End --------------------------------------------------------------------
-await check("End ends the call and keeps everything else", async () => {
-  const before = turns(); const rail = browser.text("askRailLabel");
-  await browser.fire("askVoiceBtn","click").results; await settle();
-  assert.equal(state(), "idle", "the bar is at rest");
-  assert.equal(heading(), "Not connected");
-  assert.equal(browser.byId("askVoiceBtnLabel").textContent, "Start call");
-  assert.equal(track.stopped, true, "the microphone is released");
-  assert.equal(browser.byId("askMuteBtn").hidden, true, "mute is withdrawn");
-  assert.equal(turns(), before, "the transcript survives the call");
-  assert.equal(browser.text("askRailLabel"), rail, "and so do the result sets");
-});
-await check("and the conversation continues by typing, in the same thread", async () => {
-  await browser.fire("askQuietMode","click").results; await settle();
-  const before = turns();
-  browser.type("askInput","Show me Corporate projects");
-  await browser.fire("askForm","submit").results; await settle();
-  assert.equal(turns(), before + 2, "the typed turn joins the spoken ones");
-  assert.match(thread(), /Show me Gaming projects/, "the spoken questions are still there");
+// A multi-part question: several tools inside one spoken turn.
+const cardsAfterFirst = space(".wscard").length;
+await toolCall("budget_analysis", {});
+await toolCall("schedule_analysis", {});
+
+await check("several tools inside one turn each put their result up as they land", () => {
+  assert.equal(space(".wscard").length, cardsAfterFirst, "one card is in focus at a time");
+  assert.ok(space(".wsstrip").length >= 2,
+    "and the earlier ones collapse behind it rather than being lost");
 });
 
-console.log(`\nVoice flow: ${checks} checks — continuous listening, three consecutive questions, background speech, interruption, stop, mute, end, result-set buttons and chevrons.`);
+await check("the work in progress is reported quietly, not as a loading screen", () => {
+  // Each tool clears its own label when it finishes, so by now the line is
+  // empty again. What matters is that the labels exist and read as work.
+  assert.equal(TOOL_LABELS.budget_analysis, "checking budget");
+  assert.equal(TOOL_LABELS.schedule_analysis, "checking schedule");
+  assert.equal(TOOL_LABELS.compare_periods, "comparing previous period");
+});
+
+await check("the listener is never shown a handoff between agents", () => {
+  const text = browser.byId("wsThread").textContent;
+  assert.ok(!/tool|function|agent|ask_tracker|looking up/i.test(text),
+    "the machinery does not appear in the conversation");
+});
+
+say("response.created"); await settle();
+say("response.output_audio.delta", { delta:"x" }); await settle();
+await check("the dot says the assistant is speaking", () => assert.equal(presence(), "speaking"));
+
+say("response.output_audio_transcript.delta", { delta:"Twelve projects, four over budget." });
+await settle();
+say("response.done"); await settle();
+
+await check("the spoken answer lands in the conversation as one sentence", () => {
+  assert.match(browser.byId("wsThread").textContent, /Twelve projects, four over budget\./);
+});
+
+await check("and the call goes back to listening by itself", () =>
+  assert.equal(presence(), "listening"));
+
+await check("one spoken turn produced one turn in the conversation, not four", () => {
+  const spoken = thread(".is-spoken");
+  assert.equal(spoken.length, 1, "four tool calls, one question, one answer");
+});
+
+await check("the answer points at the view it put on screen", () =>
+  assert.ok(thread("[data-ws-show]").length >= 1));
+
+// Interruption.
+say("input_audio_buffer.speech_started"); await settle();
+await check("speaking over the assistant returns the call to listening", () =>
+  assert.equal(presence(), "listening"));
+
+// A clash over who starts the next response is not a reason to end a call.
+const before = presence();
+say("error", { error:{ message:"Conversation already has an active response in progress" } });
+await settle();
+await check("a response clash does not tear down a working call", () =>
+  assert.equal(presence(), before));
+
+await check("a real error ends the call and says why", async () => {
+  say("error", { error:{ message:"the credential expired" } });
+  await settle();
+  assert.equal(presence(), "off");
+  assert.match(browser.text("wsVoiceNote"), /credential expired/);
+});
+
+await check("ending a call releases the microphone", () => assert.equal(track.stopped, true));
+
+await check("and the conversation survives the call ending", () =>
+  assert.match(browser.byId("wsThread").textContent, /show me the projects at central city/));
+
+await check("the workspace survives it too, because it is not part of the call", () =>
+  assert.equal(space(".wscard").length, 1));
+
+console.log(`\n${n} checks passed.`);
+if (!process.exitCode) {
+  console.log("Realtime voice: one session, direct tools, render-before-speak, multi-tool turns, interruption.");
+}

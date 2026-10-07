@@ -1,341 +1,284 @@
-// The Ask the Tracker pane, walked end to end: the 30-step acceptance flow, driven through the real worker and the
-// real page, with a deterministic stub planner so the UI is what is under test.
+// The conversational project-analysis workspace, walked end to end.
+//
+// Driven through the real worker and the real page with a deterministic stub
+// generator, so what is under test is the workspace rather than the model.
+//
+// The invariant this suite exists to protect: the conversation never becomes a
+// database-record list. Everything structured belongs to the workspace, and a
+// question that follows on refines what is already there rather than replacing
+// it.
+//
+//   node scripts/ask-ui-test.mjs
+
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-const root=resolve(dirname(fileURLToPath(import.meta.url)),"..");
-const { createBrowser } = await import(`${root}/scripts/browser-harness.mjs`);
-const database=new DatabaseSync(":memory:");
-for(const n of ["0000_dnc_project_hub.sql","0001_workbook_structure_and_roles.sql","0002_user_directory.sql","0003_development_pipeline_and_directory.sql","0004_pilot_authentication.sql","0005_profile_photos.sql","0006_enhanced_media_and_revisions.sql","0007_photo_details.sql"])
-  database.exec(await readFile(`${root}/drizzle/${n}`,"utf8"));
-const DB={prepare(q){const st=database.prepare(q);const r=(b)=>({all:async()=>({results:st.all(...b)}),first:async()=>st.get(...b)??null,run:async()=>({success:true,meta:st.run(...b)})});return {bind:(...b)=>r(b),...r([])}},batch:async(p)=>Promise.all(p.map(x=>x.run()))};
-const worker=(await import(`${root}/dist/server/index.js`)).default;
-const headers={"oai-authenticated-user-id":"a","oai-authenticated-user-email":"a@example.invalid","oai-authenticated-user-full-name":"Acc","oai-authenticated-user-full-name-encoding":"percent-encoded-utf-8","content-type":"application/json"};
-const base={DB,ADMIN_EMAILS:"a@example.invalid",ALLOW_PLATFORM_AUTH:"true",ASSISTANT_LEGACY_PLANNER:"true"};
-await worker.fetch(new Request("https://t/api/bootstrap",{headers}),base,{});
 
-// A Gaming-scoped viewer, so step 24 tests permissions for real.
-const pw="Zz9!"+crypto.randomUUID();
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const { createBrowser } = await import(`${root}/scripts/browser-harness.mjs`);
+const database = new DatabaseSync(":memory:");
+for (const n of ["0000_dnc_project_hub.sql","0001_workbook_structure_and_roles.sql","0002_user_directory.sql","0003_development_pipeline_and_directory.sql","0004_pilot_authentication.sql","0005_profile_photos.sql","0006_enhanced_media_and_revisions.sql","0007_photo_details.sql"])
+  database.exec(await readFile(`${root}/drizzle/${n}`, "utf8"));
+const DB = { prepare(q){const st=database.prepare(q);const r=(b)=>({all:async()=>({results:st.all(...b)}),first:async()=>st.get(...b)??null,run:async()=>({success:true,meta:st.run(...b)})});return {bind:(...b)=>r(b),...r([])}}, batch:async(p)=>Promise.all(p.map(x=>x.run())) };
+const worker = (await import(`${root}/dist/server/index.js`)).default;
+const headers = {"oai-authenticated-user-id":"a","oai-authenticated-user-email":"a@example.invalid","oai-authenticated-user-full-name":"Acc","oai-authenticated-user-full-name-encoding":"percent-encoded-utf-8","content-type":"application/json"};
+const base = { DB, ADMIN_EMAILS:"a@example.invalid", ALLOW_PLATFORM_AUTH:"true" };
+await worker.fetch(new Request("https://t/api/bootstrap", { headers }), base, {});
+
+// A Gaming-scoped viewer, so the permission steps test something real.
+const pw = "Zz9!" + crypto.randomUUID();
 await worker.fetch(new Request("https://t/api/admin/users",{method:"POST",headers,body:JSON.stringify({
   first_name:"Ui",last_name:"Viewer",username:"ui@example.invalid",user_email:"ui@example.invalid",
   role:"viewer",business_unit_scope:"Gaming",account_status:"active",site_access_status:"authorized",
-  temporary_password:pw,confirm_password:pw})}),base,{});
-database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE lower(username)=?").run("ui@example.invalid");
+  temporary_password:pw,confirm_password:pw})}), base, {});
+database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE lower(username)=?")
+  .run("ui@example.invalid");
 
-// Plans are chosen by what the question says, so each question yields its own set.
-// Deterministic SQL per question, so each one yields its own result set and the
-// pane is what is under test rather than the model.
-const COLUMNS="id, name, business_unit, venue, section_name, status, phase, project_manager, "
-  +"development_lead, budget_risk, schedule_risk, approved_budget, anticipated_final_cost, "
-  +"forecast_variance, original_turnover_date, current_turnover_date, duration_change_days, "
-  +"scope_description, current_update, previous_update, reporting_period, project_type, capp_number";
-let failNext=false;
-const sqlFor=(q)=>{
-  if(q.includes("nothing"))return `SELECT ${COLUMNS} FROM projects WHERE name LIKE '%zzzz-no-such-project%'`;
-  if(q.includes("high schedule risk"))return `SELECT ${COLUMNS} FROM projects WHERE schedule_risk = 'High'`;
-  if(q.includes("over budget"))return `SELECT ${COLUMNS} FROM projects WHERE forecast_variance > 0`;
-  return `SELECT ${COLUMNS} FROM projects WHERE business_unit = 'Gaming'`;
+const COLUMNS = "id, name, business_unit, venue, section_name, status, phase, project_manager, "
+  + "development_lead, budget_risk, schedule_risk, approved_budget, anticipated_final_cost, "
+  + "forecast_variance, original_start_date, current_start_date, original_turnover_date, "
+  + "current_turnover_date, duration_change_days, scope_description, current_update, "
+  + "previous_update, reporting_period, project_type, capp_number, initiative_number";
+
+// Each question yields its own query and its own view hint, so every component
+// renderer is driven by something the worker actually produced.
+let failNext = false;
+const plan = (q) => {
+  if (q.includes("nothing")) return { view: "project_list",
+    sql: `SELECT ${COLUMNS} FROM projects WHERE name LIKE '%zzzz-no-such-project%'` };
+  if (q.includes("budget")) return { view: "budget_variance", followUp: q.includes("those"),
+    sql: `SELECT ${COLUMNS} FROM projects WHERE approved_budget IS NOT NULL` };
+  if (q.includes("risk")) return { view: "risk_summary",
+    sql: `SELECT ${COLUMNS} FROM projects WHERE budget_risk IS NOT NULL` };
+  if (q.includes("turnover") || q.includes("slip")) return { view: "schedule",
+    sql: `SELECT ${COLUMNS} FROM projects WHERE current_turnover_date IS NOT NULL` };
+  if (q.includes("how many")) return { view: null,
+    sql: "SELECT COUNT(*) AS projects FROM projects" };
+  if (q.includes("by phase")) return { view: null,
+    sql: "SELECT phase, COUNT(*) AS n FROM projects GROUP BY phase" };
+  return { view: "project_list", sql: `SELECT ${COLUMNS} FROM projects` };
 };
-const planner={async generate(question){
-  if(failNext)throw new Error("boom");
-  return {intent:"search",language:"English",message:null,sql:sqlFor(String(question).toLowerCase()),usage:{model:"stub"}};
-}};
-const answerer={async answer(question,result){
-  return {text:result.total?`I found ${result.total} project${result.total===1?"":"s"}.`
-    :"No records matched that question.",usage:{model:"stub"}};
-}};
-const page=await (await worker.fetch(new Request("https://t/",{headers:{cookie:""}}),base,{})).text();
-const browser=await createBrowser({page,handler:(r)=>worker.fetch(r,{...base,ASSISTANT_SQL:planner,ASSISTANT_ANSWERER:answerer},{})}).start();
-browser.type("loginUsername","ui@example.invalid");browser.type("loginPassword",pw);
+const generator = { async generate(question) {
+  if (failNext) throw new Error("boom");
+  const chosen = plan(String(question).toLowerCase());
+  return { intent:"search", language:"English", message:null, followUp:!!chosen.followUp,
+    view:chosen.view, sql:chosen.sql, usage:{model:"stub"} };
+} };
+const answerer = { async answer(question, result) {
+  return { text: result.total ? `I found ${result.total} ${result.entityLabel}.`
+    : "The search found no matching records.", usage:{model:"stub"} };
+} };
+
+const page = await (await worker.fetch(new Request("https://t/",{headers:{cookie:""}}), base, {})).text();
+const browser = await createBrowser({ page, handler:(r) =>
+  worker.fetch(r, { ...base, ASSISTANT_SQL:generator, ASSISTANT_ANSWERER:answerer }, {}) }).start();
+browser.type("loginUsername","ui@example.invalid"); browser.type("loginPassword",pw);
 await browser.fire("loginForm","submit").results; await browser.settle();
 
-// Download briefing lives in the panel's toolbar, in the briefing view. The
-// rail that used to carry it is gone: the chevrons moved into the card header
-// beside the count they change.
-const downloadBriefing = async () => {
-  const brief = browser.byId("askToolbar").querySelector("[data-ask-action=briefing]");
-  if (brief) { await browser.fire(brief, "click").results; await browser.settle(); }
-  const dl = browser.byId("askToolbar").querySelector("[data-ask-action=download]");
-  await browser.fire(dl, "click").results; await browser.settle();
+// Steps that need async work do it OUTSIDE step(), which is synchronous and
+// would otherwise return before an async body ever ran — a passing test that
+// asserts nothing. That was a real defect in the suite this replaces.
+const ok = [];
+const step = (n, label, fn) => {
+  try { fn(); ok.push(n); console.log(`  ${String(n).padStart(2)} ok   ${label}`); }
+  catch (e) { console.log(`  ${String(n).padStart(2)} FAIL ${label}\n       ${e.message}`); process.exitCode = 1; }
 };
-const briefingOffered = () =>
-  !!browser.byId("askToolbar").querySelector("[data-ask-action=briefing],[data-ask-action=download]");
-
-const askSetsCount=()=>{
-  const label=browser.text("askRailLabel").trim();
-  const m=label.match(/of (\d+)$/);
-  return m?Number(m[1]):(browser.byId("askOlder").disabled&&browser.byId("askNewer").disabled?1:0);
+const ask = async (q) => {
+  browser.type("wsInput", q);
+  await browser.fire("wsForm","submit").results;
+  await browser.settle();
 };
-const ok=[];const step=(n,label,fn)=>{try{fn();ok.push(n);console.log(`  ${String(n).padStart(2)} ok   ${label}`)}catch(e){console.log(`  ${String(n).padStart(2)} FAIL ${label}\n       ${e.message}`);process.exitCode=1}};
-const ask=async(q)=>{browser.type("askInput",q);await browser.fire("askForm","submit").results;await browser.settle()};
-const cls=(id,c)=>[...browser.byId(id).querySelectorAll(c)];
+const inSpace = (sel) => [...browser.byId("wsSpace").querySelectorAll(sel)];
+const inThread = (sel) => [...browser.byId("wsThread").querySelectorAll(sel)];
+const spaceText = () => browser.byId("wsSpace").textContent;
 
-step(1,"application opens signed in",()=>assert.equal(browser.byId("workspace").hidden,false));
+step(1, "the application opens signed in", () =>
+  assert.equal(browser.byId("workspace").hidden, false));
+
 await browser.fire("askNav","click").results; await browser.settle();
-step(2,"Ask the Tracker opens from the existing navigation",()=>assert.equal(browser.byId("askInput").closest("[data-pane]").hidden,false));
-step(3,"the panel renders its parts",()=>{
-  for(const id of ["askBrowse","askCrumb","askQuietMode","askVoiceMode","askToolbar","askEvidence","askOlder","askNewer","askRailLabel","askUnitScope"])
-    assert.ok(browser.byId(id),id+" is present");
-});
-step(4,"Browse records and breadcrumbs are present",()=>{
-  assert.match(browser.text("askBrowse"),/Browse records/);
-  assert.equal(cls("askInput","x").length,0); // no-op guard
-  const crumbs=[...browser.document.querySelectorAll("[data-ask-crumb]")].map(b=>b.textContent);
-  assert.deepEqual(crumbs,["Browse records","Ask the Tracker"]);
-  assert.match(browser.text("askCrumb"),/Portfolio at a glance/);
-});
-step(5,"Quiet chat and Voice are both offered",()=>{
-  assert.equal(browser.byId("askQuietMode").getAttribute("aria-pressed"),"true");
-  assert.equal(browser.byId("askVoiceMode").getAttribute("aria-pressed"),"false");
-});
-step(6,"the portfolio overview is the opening evidence view",()=>{
-  assert.ok(cls("askEvidence",".ask-unit-row").length>0,"business units are listed");
-  assert.ok(cls("askEvidence",".ask-metric").length>=2,"with headline figures");
-  assert.equal(browser.byId("askOlder").disabled,true,"and no result sets yet");
+step(2, "the workspace opens from the existing navigation", () =>
+  assert.equal(browser.byId("wsInput").closest("[data-pane]").hidden, false));
+
+step(3, "the shell renders both surfaces and nothing else", () => {
+  for (const id of ["wsPresence","wsThread","wsForm","wsInput","wsMic","wsSend",
+    "wsSubject","wsScope","wsSpace","wsBriefSlot"]) assert.ok(browser.byId(id), id + " is present");
 });
 
-await ask("Show me Gaming projects");
-const set1=browser.text("askEvidenceCount");
-step(7,"a result set is produced",()=>{
-  // One set: nothing to step between, so the label stays out of the way and
-  // the chevrons say so by being disabled.
-  assert.equal(browser.text("askRailLabel").trim(),"");
-  assert.equal(browser.byId("askOlder").disabled,true);
-  assert.equal(browser.byId("askNewer").disabled,true);
-  assert.ok(cls("askEvidence",".ask-record").length>0,"records are shown as cards");
-});
-step(8,"records carry the pilot's level of detail",()=>{
-  const card=cls("askEvidence",".ask-record")[0];
-  assert.ok(card.querySelector(".ask-record-name"),"a name that opens the record");
-  assert.equal(card.querySelectorAll(".ask-risk").length,2,"both risk ratings");
-  assert.equal(card.querySelectorAll(".ask-metric").length,2,"variance and days");
-  assert.ok(card.querySelector(".ask-record-footer"),"reporting date and Open record");
-  assert.match(card.textContent,/Schedule:/);
-  assert.match(card.textContent,/Budget:/);
-});
-await ask("Which projects have high schedule risk?");
-const set2=browser.text("askEvidenceCount");
-step(9,"a second result set is produced and becomes active",()=>{
-  assert.match(browser.text("askRailLabel"),/^2 of 2$/);
-  assert.notEqual(set1,set2,"the two sets differ");
-});
-step(10,"the first set is still available",()=>assert.equal(browser.byId("askOlder").disabled,false));
-await browser.fire("askOlder","click").results; await browser.settle();
-step(11,"the older chevron restores the first set exactly",()=>{
-  assert.match(browser.text("askRailLabel"),/^1 of 2$/);
-  assert.equal(browser.text("askEvidenceCount"),set1);
-  assert.match(browser.text("askEvidenceTitle"),/Gaming projects/);
-  assert.equal(browser.byId("askNewer").disabled,false);
-});
-await browser.fire("askNewer","click").results; await browser.settle();
-step(12,"the newer chevron restores the second set",()=>{
-  assert.match(browser.text("askRailLabel"),/^2 of 2$/);
-  assert.equal(browser.text("askEvidenceCount"),set2);
-  assert.equal(browser.byId("askNewer").disabled,true,"and newest disables it");
-});
-step(13,"navigation is between sets, not records",()=>{
-  assert.equal(browser.byId("askOlder").getAttribute("aria-label"),"Older result set");
-  assert.equal(browser.byId("askNewer").getAttribute("aria-label"),"Newer result set");
+step(4, "the resting state offers questions rather than an empty box", () => {
+  assert.ok(inSpace("[data-ws-ask]").length >= 3, "openers are offered");
+  assert.equal(inSpace(".wscard").length, 0, "and nothing is pretending to be a result");
 });
 
-const first=cls("askEvidence",".ask-record")[0].querySelector(".ask-record-name");
-const openedName=first.textContent;
-await browser.fire(first,"click").results; await browser.settle();
-step(14,"a record opens in the panel with the pilot's hierarchy",()=>{
-  assert.equal(browser.text("askEvidenceTitle"),"Project source record");
-  assert.match(browser.text("askCrumb"),new RegExp(openedName.slice(0,12).replace(/[.*+?^${}()|[\]\\]/g,"\\$&")));
-  assert.ok(cls("askEvidence",".ask-field-grid").length>0,"a field grid");
-  assert.ok(cls("askEvidence",".ask-report-section").length>0,"and the saved update");
-  assert.match(browser.byId("askEvidence").textContent,/Approved budget/);
-  assert.match(browser.byId("askEvidence").textContent,/Current turnover/);
-});
-step(15,"its activity history is shown, and the toolbar offers the way back",()=>{
-  assert.match(browser.byId("askEvidence").textContent,/Activity history/);
-  const actions=[...browser.byId("askToolbar").querySelectorAll("[data-ask-action]")].map(b=>b.dataset.askAction);
-  assert.ok(actions.includes("back"),"Back to results");
-  assert.ok(actions.includes("record-briefing"),"Project briefing");
-});
-step(16,"the selected record is part of the set, so the rail restores it",()=>{
-  assert.match(browser.text("askRailLabel"),/^2 of 2$/);
-});
-await browser.fire(browser.byId("askOlder"),"click").results; await browser.settle();
-await browser.fire(browser.byId("askNewer"),"click").results; await browser.settle();
-step(17,"and it is still the record view after moving away and back",()=>{
-  assert.equal(browser.text("askEvidenceTitle"),"Project source record");
+await ask("show me the projects");
+step(5, "the question is echoed in the conversation", () =>
+  assert.match(browser.byId("wsThread").textContent, /show me the projects/));
+step(6, "and answered with a sentence", () =>
+  assert.match(browser.byId("wsThread").textContent, /I found \d+ projects/));
+step(7, "the composer is cleared ready for the next question", () =>
+  assert.equal(browser.byId("wsInput").value, ""));
+
+step(8, "the conversation never becomes a record list", () => {
+  assert.equal(inThread(".wsrow").length, 0, "no project rows");
+  assert.equal(inThread(".wscard").length, 0, "no workspace cards");
+  assert.equal(inThread(".wsmets").length, 0, "no metric blocks");
+  assert.equal(inThread("table").length, 0, "and never a table");
 });
 
-const toolbarBack=[...browser.byId("askToolbar").querySelectorAll("[data-ask-action]")].find(b=>b.dataset.askAction==="back");
-await browser.fire(toolbarBack,"click").results; await browser.settle();
-const brief=[...browser.byId("askToolbar").querySelectorAll("[data-ask-action]")].find(b=>b.dataset.askAction==="briefing");
-await browser.fire(brief,"click").results; await browser.settle();
-step(18,"a briefing is generated for the active set",()=>{
-  assert.equal(browser.text("askEvidenceTitle"),"Briefing preview");
-  assert.match(browser.text("askCrumb"),/Briefing/);
-  assert.ok(cls("askEvidence",".ask-report-summary").length>0,"headline counts");
-  assert.match(browser.byId("askEvidence").textContent,/Matched-pair variance/);
-  const actions=[...browser.byId("askToolbar").querySelectorAll("[data-ask-action]")].map(b=>b.dataset.askAction);
-  for(const a of ["download","print","csv","back"]) assert.ok(actions.includes(a),a+" is offered");
-});
-step(19,"Download briefing is enabled and bound to the active set",()=>{
-  assert.ok(briefingOffered(),"a briefing can be built from the set on screen");
-  assert.match(browser.text("askRailLabel"),/^2 of 2$/);
-});
-console.log("     (download, print and CSV are verified below against the generated text)");
-
-// --- 20-23: downloads, empty and error states ------------------------------
-// The harness has no Blob or object URL, so the download path is captured at
-// the seam instead: what matters is that it is built from the ACTIVE set.
-const grabbed=[];
-const RealBlob=globalThis.Blob;
-globalThis.Blob=function(parts,opts){grabbed.push(String(parts[0]));return new RealBlob(parts,opts)};
-let printed=0; browser.window.print=function(){printed++};
-
-// The harness's elements have no click(); the anchor-download shape the app
-// already uses everywhere needs one, so give created elements a no-op.
-const makeEl=browser.document.createElement.bind(browser.document);
-browser.document.createElement=function(tag){
-  const el=makeEl(tag);
-  if(typeof el.click!=="function")el.click=function(){};
-  if(typeof el.remove!=="function")el.remove=function(){};
-  return el;
-};
-
-await downloadBriefing();
-step(20,"Download briefing produces a briefing for the active set",()=>{
-  assert.equal(grabbed.length,1,"one download");
-  const text=grabbed[0];
-  assert.match(text,/D&C PROJECT BRIEFING/);
-  assert.match(text,/Question: Which projects have high schedule risk\?/,"it names the question of the ACTIVE set");
-  assert.match(text,/Matched-pair variance/);
-  assert.match(text,/Reporting dates/);
-  assert.match(text,/Read-only briefing/);
-});
-// Move the rail back and download again: the briefing must follow the rail.
-await browser.fire("askOlder","click").results; await browser.settle();
-await downloadBriefing();
-step(21,"moving to an older set changes what Download briefing produces",()=>{
-  assert.equal(grabbed.length,2);
-  assert.match(grabbed[1],/Question: Show me Gaming projects/,"result set 1's briefing, not the newest");
-  assert.ok(!/high schedule risk/.test(grabbed[1].split("\n")[1]),"and not set 2's question");
-});
-const csvBtn=[...browser.byId("askToolbar").querySelectorAll("[data-ask-action]")].find(b=>b.dataset.askAction==="csv");
-await browser.fire(csvBtn,"click").results; await browser.settle();
-step(22,"CSV exports the active set with safe cells",()=>{
-  const csv=grabbed[grabbed.length-1];
-  assert.match(csv.split("\r\n")[0],/^"id","business_unit"/,"a header row");
-  assert.ok(csv.split("\r\n").length>2,"and data rows");
-  assert.match(csv,/"Gaming"/);
-  assert.ok(!/\n=/.test(csv),"no raw formula start");
-});
-const printBtn=()=>[...browser.byId("askToolbar").querySelectorAll("[data-ask-action]")].find(b=>b.dataset.askAction==="print");
-const bf=[...browser.byId("askToolbar").querySelectorAll("[data-ask-action]")].find(b=>b.dataset.askAction==="briefing");
-if(bf){await browser.fire(bf,"click").results;await browser.settle()}
-await browser.fire(printBtn(),"click").results; await browser.settle();
-step(23,"Print / PDF shows the briefing then prints",()=>{
-  assert.equal(browser.text("askEvidenceTitle"),"Briefing preview");
-  assert.ok(printed>=1,"the print dialog was asked for");
+step(9, "exactly one card is in focus, and no card nests another", () => {
+  assert.equal(inSpace(".wscard").length, 1);
 });
 
-const recordsBeforeEmpty=cls("askEvidence",".ask-record").length;
-const railBeforeEmpty=browser.text("askRailLabel");
-const titleBeforeEmpty=browser.text("askEvidenceTitle");
-await ask("show me nothing at all");
-step(24,"an empty result answers in the conversation and leaves the records alone",()=>{
-  // The answer belongs in the conversation. The records already on screen are
-  // usually what the next question is about, so a miss must not take them.
-  assert.match(browser.byId("askThread").textContent,/nothing at all/,"the question is in the transcript");
-  assert.match(browser.byId("askThread").textContent,/No records matched/i,"and so is the answer");
-  assert.equal(cls("askEvidence",".ask-record").length,recordsBeforeEmpty,
-    "the records that were on screen are still on screen");
-  assert.equal(browser.text("askEvidenceTitle"),titleBeforeEmpty,"still labelled with their own question");
-  assert.equal(browser.text("askRailLabel"),railBeforeEmpty,"and the rail has not moved");
-  assert.ok(briefingOffered(),
-    "the briefing still refers to the records that are showing");
+step(10, "a list question renders a project list", () => {
+  assert.ok(inSpace(".wsrow").length > 1, "rows are rendered");
+  assert.ok(inSpace(".wsrow-name").length === inSpace(".wsrow").length,
+    "every row names its project");
+  assert.ok(inSpace(".wsrow-meta").length > 0, "and says where it is");
 });
-failNext=true;
+
+const gaming = database.prepare(`SELECT p.name FROM projects p
+  JOIN business_units b ON b.id = p.business_unit_id
+  WHERE b.name='Gaming' AND p.archived_at IS NULL`).all().map((r) => r.name);
+step(11, "and only projects this viewer is allowed to see", () => {
+  const shown = inSpace(".wsrow-name").map((el) => el.textContent);
+  assert.ok(shown.length > 0);
+  for (const name of shown) assert.ok(gaming.includes(name), `${name} is out of scope`);
+});
+
+step(12, "the subject says what is being looked at", () =>
+  assert.ok(browser.text("wsSubject").trim().length > 0));
+step(13, "and the answer links to the view it produced", () =>
+  assert.ok(inThread("[data-ws-show]").length > 0));
+
+const subjectAfterFirst = browser.text("wsSubject");
+await ask("what are the budgets on those?");
+step(14, "a follow-up collapses the previous result to a strip, not away", () =>
+  assert.ok(inSpace(".wsstrip").length >= 1));
+step(15, "and the subject grows rather than being replaced", () =>
+  assert.ok(browser.text("wsSubject").length > subjectAfterFirst.length));
+step(16, "a budget question renders budget figures, not a plain list", () => {
+  assert.ok(inSpace(".wsmets").length === 1, "the metric row is rendered");
+  assert.ok(inSpace(".wsmet-k").length >= 4, "with the figures a budget answer needs");
+});
+step(17, "every total says how many projects it is computed over", () => {
+  const notes = inSpace(".wsmet-n").map((el) => el.textContent).join(" ");
+  assert.match(notes, /recorded|with both figures|of \d+/,
+    "a sum across the ones that have a figure is not a sum across the set");
+});
+step(18, "a variance is shown as a figure and a bar, never as typed punctuation", () => {
+  assert.ok(inSpace(".wsbar").length > 0, "bars are drawn");
+  assert.ok(!spaceText().includes("->") && !spaceText().includes("-->"),
+    "no ASCII arrows anywhere in the workspace");
+});
+
+const strip = browser.byId("wsSpace").querySelector(".wsstrip");
+await browser.fire(strip, "click").results; await browser.settle();
+step(19, "an earlier result can be brought back into focus", () =>
+  assert.ok(inSpace(".wsrow-name").length > 0));
+
+await ask("which projects have high risk?");
+step(20, "a risk question renders the risk component", () => {
+  assert.ok(inSpace(".wsrisk").length === 1, "the distribution is drawn");
+  assert.ok(inSpace(".wsrisk-row").length > 0, "with a row per level");
+});
+step(21, "a new subject folds the previous thread away rather than deleting it", () =>
+  assert.ok(inSpace("[data-ws-earlier]").length === 1));
+
+await ask("what are the turnover dates?");
+step(22, "a schedule question renders the schedule component", () => {
+  assert.ok(inSpace(".wsmets").length === 1);
+  assert.match(spaceText(), /Slipped|Holding|No date/);
+});
+
+await ask("how many projects are there?");
+step(23, "a single figure is shown as a figure, not as a one-row table", () => {
+  assert.ok(inSpace(".wsbig").length === 1, "the figure component is used");
+  assert.equal(inSpace(".wsrow").length, 0, "and no list is invented around it");
+});
+
+await ask("break that down by phase");
+step(24, "a grouped result is shown as a group, not as openable projects", () => {
+  assert.ok(inSpace(".wsgroup-row").length > 0, "the group component is used");
+  assert.equal(inSpace("[data-ws-open]").length, 0,
+    "nothing offers to open a row that has no project behind it");
+});
+
+await ask("show me the projects");
+const firstRow = browser.byId("wsSpace").querySelector("[data-ws-open]");
+const openedId = Number(firstRow.getAttribute("data-ws-open"));
+const openedName = database.prepare("SELECT name FROM projects WHERE id = ?").get(openedId).name;
+await browser.fire(firstRow, "click").results; await browser.settle();
+
+step(25, "opening a row opens the project in the workspace", () =>
+  assert.ok(spaceText().includes(openedName.slice(0, 12))));
+step(26, "the detail shows the derived figures the tracker computes", () => {
+  assert.match(spaceText(), /Forecast variance/);
+  assert.match(spaceText(), /Turnover/);
+});
+step(27, "and never opens the edit form", () =>
+  assert.equal(browser.byId("detailsDialog").open, false));
+step(28, "nothing in the workspace can be typed into or submitted", () => {
+  assert.equal(inSpace("input").length, 0, "no inputs");
+  assert.equal(inSpace("textarea").length, 0, "no editable text");
+  assert.equal(inSpace("form").length, 0, "nothing to submit");
+});
+step(29, "the workspace shows no SQL and no debug panel", () => {
+  assert.ok(!/SELECT |FROM projects|WHERE /.test(spaceText()),
+    "a query is not provenance, and it is not for the reader");
+});
+
+const pin = browser.byId("wsSpace").querySelector("[data-ws-pin]");
+await browser.fire(pin, "click").results; await browser.settle();
+step(30, "anything in focus can be pinned into the briefing", () =>
+  assert.match(browser.byId("wsBriefSlot").textContent, /1 item/));
+
+await browser.fire(browser.byId("wsBriefSlot").querySelector("[data-ws-brief]"), "click").results;
+await browser.settle();
+step(31, "the briefing is a real object that opens and lists what it holds", () => {
+  assert.ok(browser.byId("wsBriefSlot").querySelectorAll(".wsbrief-row").length === 1);
+  assert.ok(browser.byId("wsBriefSlot").querySelectorAll("[data-ws-export]").length === 2,
+    "and offers both ways out of it");
+});
+
+await browser.fire(browser.byId("wsBriefSlot").querySelector("[data-ws-unpin]"), "click").results;
+await browser.settle();
+step(32, "and anything in it can be taken out again", () =>
+  assert.match(browser.byId("wsBriefSlot").textContent, /empty/));
+
+const cardsBefore = inSpace(".wscard").length;
+const subjectBefore = browser.text("wsSubject");
+await ask("a question that matches nothing at all");
+step(33, "an empty answer says so about the search, not about the portfolio", () =>
+  assert.match(browser.byId("wsThread").textContent, /found no matching records/));
+step(34, "and leaves what is on screen alone", () => {
+  assert.equal(inSpace(".wscard").length, cardsBefore);
+  assert.equal(browser.text("wsSubject"), subjectBefore);
+});
+
+failNext = true;
 await ask("this one will fail");
-failNext=false;
-step(25,"an error says what happened and that nothing changed",()=>{
-  const thread=browser.byId("askThread");
-  assert.ok(thread.querySelectorAll(".ask-error").length>0,"the failure is shown as an error, not an answer");
-  assert.match(thread.textContent,/records have not changed/);
-  assert.match(browser.text("askRailLabel"),/^\d+ of \d+$/,"and the existing sets survive it");
+failNext = false;
+step(35, "an engine failure is reported in the conversation, not as a broken screen", () => {
+  assert.ok(inThread(".wsa-err").length === 1, "the turn carries the error");
+  assert.equal(inSpace(".wscard").length, cardsBefore, "and the workspace is untouched");
 });
 
-// --- permissions, responsiveness, and the Phase 1 gate ----------------------
-await ask("Show me Gaming projects");
-const gaming=new Set(database.prepare("SELECT p.name FROM projects p JOIN business_units b ON b.id=p.business_unit_id WHERE b.name='Gaming' AND p.archived_at IS NULL").all().map(r=>r.name));
-step(26,"existing permissions still apply to every record shown",()=>{
-  const names=cls("askEvidence",".ask-record").map(c=>c.querySelector(".ask-record-name").textContent);
-  assert.ok(names.length>0);
-  for(const n of names) assert.ok(gaming.has(n),`${n} is outside the viewer's scope`);
-  const units=[...browser.byId("askUnitScope").querySelectorAll("option")].map(o=>o.value);
-  assert.deepEqual(units,["All","Gaming"],"the scope picker offers only units this viewer can see");
+browser.byId("wsScope").value = "Gaming";
+await browser.fire("wsScope","change").results; await browser.settle();
+step(36, "changing scope clears the workspace rather than reinterpreting it", () => {
+  assert.equal(inSpace(".wscard").length, 0);
+  assert.equal(inSpace(".wsstrip").length, 0);
 });
-step(27,"the briefing cannot leak a record outside scope",()=>{
-  const text=grabbed[grabbed.length-1]||"";
-  for(const line of text.split("\n")) if(/\[Project \d+\]/.test(line)){
-    const name=line.split(" | ")[1].split(" [")[0];
-    assert.ok(gaming.has(name),`${name} escaped into a briefing`);
-  }
-});
-const css=(await readFile(`${root}/worker/styles.js`,"utf8"));
-step(28,"responsive and print rules are present, not just the desktop layout",()=>{
-  for(const q of ["max-width:1280px","max-width:1024px","max-width:640px","prefers-reduced-motion","@media print"])
-    assert.ok(css.includes(q),q+" is handled");
-  assert.ok(css.includes(".ask-evidence-nav"),"the result-set chevrons sit in the panel header");
-  assert.ok(css.includes(".ask-step:disabled"),"and say when there is nothing to step to");
-  assert.ok(css.includes(".ask-btn:disabled"),"disabled states are styled");
-  assert.ok(css.includes("data-selected=true"),"selected states are styled");
-  assert.ok(css.includes(".ask-suggestion:hover"),"hover states are styled");
-});
-const wrangler=await readFile(`${root}/wrangler.toml`,"utf8");
-const deployCheck=await readFile(`${root}/scripts/check-deploy-target.sh`,"utf8");
-step(29,"the Phase 1 production gate is unchanged",()=>{
-  assert.match(wrangler,/ASSISTANT_LEGACY_PLANNER = "false"/);
-  assert.match(wrangler,/ASSISTANT_DEBUG = "false"/);
-  assert.match(deployCheck,/kv ASSISTANT_LEGACY_PLANNER "false"/);
-  assert.match(deployCheck,/kv ASSISTANT_DEBUG "false"/);
-});
-await browser.fire("askBrowse","click").results; await browser.settle();
-// Clicks land on the icon, not the button. Every control in this pane that
-// holds an svg was matched by the target's own id, so the icon - which is most
-// of the hit area - was a dead centre, and the control read as unreliable
-// rather than as broken. These fire from the icon, the way a browser does.
-//
-// The awaiting happens out here: step() is synchronous and would record a pass
-// before an async body had asserted anything, which is exactly how the first
-// version of this test passed against the bug it was written to catch.
-await browser.fire("askNewer","click").results; await browser.settle();
-const iconOf=(id)=>{
-  const button=browser.byId(id);
-  const icon=button.querySelector("svg");
-  if(!icon)throw new Error(id+" has no icon, so this proves nothing");
-  return icon;
-};
-const sets=askSetsCount();
-const titleBefore=browser.text("askEvidenceTitle");
-await browser.fire(iconOf("askOlder"),"click").results; await browser.settle();
-const afterOlder=browser.text("askEvidenceTitle");
-await browser.fire(iconOf("askNewer"),"click").results; await browser.settle();
-const afterNewer=browser.text("askEvidenceTitle");
-step(31,"a click on a chevron's icon steps the result set, not just its padding",()=>{
-  assert.ok(sets>1,"there are several sets to step between");
-  assert.notEqual(afterOlder,titleBefore,"the older icon moved the panel");
-  assert.equal(afterNewer,titleBefore,"and the newer icon moved it back");
-});
-await browser.fire(iconOf("askBrowse"),"click").results; await browser.settle();
-// Left closed deliberately: the next step is about having left the pane.
-const leftPane=browser.byId("askInput").closest("[data-pane]").hidden;
-step(32,"and on the other icon buttons in the pane",()=>{
-  assert.equal(leftPane,true,"the Browse records icon leaves the pane");
+step(37, "but the conversation is kept, because it is a record of what was asked", () =>
+  assert.ok(inThread(".wsturn").length > 0));
+
+step(38, "the call control lives in the composer, not on a screen of its own", () => {
+  assert.ok(browser.byId("wsMic"), "one control");
+  assert.equal(browser.byId("wsForm").hidden, false, "and the composer never steps aside");
+  assert.equal(browser.byId("wsPresence").getAttribute("data-state"), "off");
 });
 
-step(30,"Browse records returns to the normal record browsing experience",()=>{
-  assert.equal(browser.byId("askInput").closest("[data-pane]").hidden,true,"the ask pane closes");
-  assert.match(browser.text("pageTitle"),/Projects/,"and the projects view is shown");
-});
-if(ok.length!==32)throw new Error(`Ask UI acceptance: only ${ok.length} of 32 steps passed`);
-console.log(`Ask the Tracker UI: ${ok.length}/32 acceptance steps \u2014 panel, breadcrumbs, modes, result-set history, chevrons, record, briefing, CSV, print, empty, error, permissions, gate.`);
+console.log(`\n${ok.length}/38 steps passed.`);
+if (process.exitCode) { console.log("Workspace UI walk FAILED."); }
+else console.log("Workspace UI walk passed: two surfaces, component selection, progressive disclosure, briefing, scope and failure.");

@@ -2052,12 +2052,25 @@ for (const [parent, child] of [
           usage: { model: "stub" },
         };
       }
+      const columns = "SELECT id, name, business_unit, status, budget_risk, schedule_risk, "
+        + "approved_budget, anticipated_final_cost, forecast_variance, duration_change_days, "
+        + "current_update, previous_update, original_turnover_date, current_turnover_date, "
+        + "reporting_period, venue, section_name, project_manager, project_type, phase, "
+        + "original_start_date, current_start_date, capp_number, initiative_number, "
+        + "scope_description FROM projects";
+      // A narrowing question, so the workspace's follow-up behaviour can be
+      // driven: the previous result must collapse to a strip rather than go.
+      if (/those/i.test(String(question))) {
+        return {
+          intent: "search", language: "English", message: null, followUp: true,
+          view: "budget_variance",
+          sql: columns + " WHERE duration_change_days >= 30 AND approved_budget IS NOT NULL",
+          usage: { model: "stub" },
+        };
+      }
       return {
-        intent: "search", language: "English", message: null,
-        sql: "SELECT id, name, business_unit, status, budget_risk, schedule_risk, "
-          + "approved_budget, anticipated_final_cost, forecast_variance, duration_change_days, "
-          + "current_update, reporting_period, venue, section_name, project_manager "
-          + "FROM projects WHERE duration_change_days >= 30",
+        intent: "search", language: "English", message: null, view: "project_list",
+        sql: columns + " WHERE duration_change_days >= 30",
         usage: { model: "stub", inputTokens: 10, outputTokens: 5 },
       };
     },
@@ -2085,205 +2098,163 @@ for (const [parent, child] of [
   // The pane is reachable from the navigation, and the heading follows.
   await browser.fire("askNav", "click").results;
   await browser.settle();
-  assert.equal(browser.byId("askInput").closest("[data-pane]").hidden, false,
-    "the Ask pane is shown when its nav button is used");
+  assert.equal(browser.byId("wsInput").closest("[data-pane]").hidden, false,
+    "the workspace pane is shown when its nav button is used");
   assert.match(browser.text("pageTitle"), /Ask the Tracker/);
 
-  // Suggestion chips are offered rather than leaving an empty box.
-  assert.ok(browser.byId("askSuggestions").querySelectorAll(".ask-suggestion").length > 0,
-    "suggestions are offered rather than an empty box");
+  // The resting state offers questions. An empty box with a cursor in it tells
+  // a reader nothing about what this will answer.
+  const opening = browser.byId("wsSpace");
+  assert.ok(opening.querySelectorAll("[data-ws-ask]").length > 0,
+    "the workspace opens with questions rather than an empty box");
 
   // Ask a question the way a person would.
-  browser.type("askInput", "which projects slipped more than 30 days?");
-  await browser.fire("askForm", "submit").results;
+  browser.type("wsInput", "which projects slipped more than 30 days?");
+  await browser.fire("wsForm", "submit").results;
   await browser.settle();
 
-  const thread = browser.byId("askThread");
+  const thread = browser.byId("wsThread");
   assert.match(thread.textContent, /which projects slipped more than 30 days\?/,
-    "the question is echoed in the transcript");
-  // The filter list is deliberately not rendered: it was internal plan detail.
-  // What must still be visible is the answer itself and what it was drawn from.
-  assert.ok(!thread.textContent.includes("Slipped 30 days or more"),
-    "the internal filter list is not shown to the reader");
-  // The sentence describes what was searched for, not just how many turned up,
-  // so a question read wrongly is visible in the answer itself.
+    "the question is echoed in the conversation");
   assert.match(thread.textContent, /I found \d+ projects? that slipped 30 days or more/,
-    "the answer says what it searched for, not only how many it found");
-  assert.match(thread.textContent, /AI Tracker/, "replies are attributed to the assistant");
-  // How many, and what they are. The entity comes from the engine, so a query
-  // over activity updates says updates rather than quietly calling them projects.
-  assert.match(thread.textContent, /\d+ projects?/,
-    "the answer says how many records stand behind it, and what they are");
-  // The conversation is not a record list. The records are in the panel, where
-  // they can be opened, sorted and exported; restating them here would make
-  // the chat a worse version of the thing beside it.
-  assert.equal(thread.querySelectorAll(".ask-record").length, 0,
-    "no project cards in the conversation");
-  assert.equal(thread.querySelectorAll(".ask-result").length, 0,
-    "and no record list either");
-  // Not even a button back to the records: they are in the panel beside this,
-  // and the chevrons in its header reach any earlier answer.
-  assert.equal(thread.querySelectorAll("[data-ask-set]").length, 0,
-    "no per-answer buttons in the conversation");
-  assert.ok(browser.byId("askOlder"), "the panel's own header carries the chevrons");
-  assert.equal(browser.byId("askInput").value, "", "the box is cleared ready for the next question");
+    "and the answer is a sentence, not a result set");
+  assert.equal(browser.byId("wsInput").value, "", "the box is cleared ready for the next question");
 
-  // The evidence panel carries the records behind the answer, and only ones this
-  // viewer may see. Elements are found by class rather than by a descendant
-  // selector: the harness's selector engine has no descendant combinator, so
-  // "tbody tr" matches nothing at all rather than failing loudly.
+  // THE invariant of this design: the conversation never becomes a record list.
+  // Everything structured lives in the workspace, so nothing that renders a
+  // project may appear in the thread.
+  assert.equal(thread.querySelectorAll(".wsrow").length, 0,
+    "no project rows in the conversation");
+  assert.equal(thread.querySelectorAll(".wscard").length, 0,
+    "no workspace cards in the conversation");
+  assert.equal(thread.querySelectorAll("table").length, 0,
+    "and never a table");
+
+  // The workspace carries the records, and only ones this viewer may see.
+  // Elements are found by class rather than by a descendant selector: the
+  // harness's selector engine has no descendant combinator, so "ul li" matches
+  // nothing at all rather than failing loudly.
   const gamingNames = database.prepare(`
     SELECT p.name FROM projects p JOIN business_units b ON b.id = p.business_unit_id
     WHERE b.name = 'Gaming' AND p.archived_at IS NULL`).all().map((row) => row.name);
-  const evidence = browser.byId("askEvidence");
-  const shown = [...evidence.querySelectorAll(".ask-record")];
-  assert.ok(shown.length > 0, "the evidence panel lists the records behind the answer");
-  for (const record of shown) {
-    const name = record.querySelector(".ask-record-name").textContent;
-    assert.ok(gamingNames.includes(name), `${name} is outside this viewer's scope`);
+  const space = browser.byId("wsSpace");
+  const rows = [...space.querySelectorAll(".wsrow-name")];
+  assert.ok(rows.length > 0, "the workspace lists the records behind the answer");
+  for (const row of rows) {
+    assert.ok(gamingNames.includes(row.textContent),
+      `${row.textContent} is outside this viewer's scope`);
   }
-  assert.ok(browser.text("askEvidenceCount").trim().length > 0,
-    "the evidence panel shows how many records matched");
+  assert.ok(space.querySelectorAll(".wscard").length === 1,
+    "exactly one card is in focus, and no card is nested inside another");
+  assert.ok(browser.text("wsSubject").trim().length > 0,
+    "the workspace says what is being looked at");
+
+  // The conversation offers a way back to the result it produced, which is a
+  // link into the workspace rather than a copy of the data.
+  assert.ok(thread.querySelectorAll("[data-ws-show]").length > 0,
+    "each answer points at the view it put on screen");
 
   // The transcript is stored for this user, so a refresh keeps it.
   assert.equal(browser.sessionStorage.length, 1, "the transcript is kept in sessionStorage");
   assert.match(browser.sessionStorage.key(0), /^dn-dc-ask:/);
-  assert.match(browser.sessionStorage.getItem(browser.sessionStorage.key(0)), /slipped more than 30 days/);
+  assert.match(browser.sessionStorage.getItem(browser.sessionStorage.key(0)),
+    /slipped more than 30 days/);
 
+  // Progressive disclosure. A narrowing question refines what is on screen: the
+  // previous result collapses to a strip above the new one rather than being
+  // thrown away, and the subject grows rather than being replaced.
+  const firstTitle = browser.byId("wsSubject").textContent;
+  browser.type("wsInput", "what are the budgets on those?");
+  await browser.fire("wsForm", "submit").results;
+  await browser.settle();
 
-  // A result opens the project it names. It reuses the data-details handler the
-  // tables already use rather than a second path, so a Development record still
-  // routes to its own dialog and the two cannot drift apart.
-  const firstResult = evidence.querySelector(".ask-record-name");
-  assert.ok(firstResult, "the panel lists the records");
-  const openedId = Number(firstResult.getAttribute("data-ask-open"));
-  assert.ok(openedId > 0, "a result carries the project it names");
+  assert.ok(browser.byId("wsSpace").querySelectorAll(".wsstrip").length >= 1,
+    "the previous result collapses to a strip rather than disappearing");
+  assert.ok(browser.byId("wsSubject").textContent.length > firstTitle.length,
+    "the subject grows as the question follows on, rather than being replaced");
+  assert.ok(browser.byId("wsSpace").querySelectorAll(".wsmets").length > 0,
+    "a budget question is shown as a budget component, not as a plain list");
+
+  // And the strip goes back. Nothing in the thread is lost by asking again.
+  const strip = browser.byId("wsSpace").querySelector(".wsstrip");
+  await browser.fire(strip, "click").results;
+  await browser.settle();
+  assert.ok(browser.byId("wsSpace").querySelectorAll(".wsrow-name").length > 0,
+    "an earlier result can be brought back into focus");
+
+  // Opening a project from a row is itself a question: it refines the subject
+  // and stays in the workspace. It goes through the same scoped tool the voice
+  // model uses, so an out-of-scope id would answer nothing either way.
+  const firstRow = browser.byId("wsSpace").querySelector("[data-ws-open]");
+  assert.ok(firstRow, "rows can be opened");
+  const openedId = Number(firstRow.getAttribute("data-ws-open"));
   const openedName = database.prepare("SELECT name FROM projects WHERE id = ?").get(openedId).name;
-
-  await browser.fire(firstResult, "click").results;
+  await browser.fire(firstRow, "click").results;
   await browser.settle();
-
-  // A record in the panel opens in the panel, where there is a way back to the
-  // results it came from. It is a read-only view either way: the assistant does
-  // not write, and a Save button on a pane that cannot save is a promise it
-  // does not keep.
-  assert.equal(browser.text("askEvidenceTitle"), "Project source record",
-    "clicking a record opens it in the panel");
+  assert.match(browser.byId("wsSpace").textContent, new RegExp(openedName.slice(0, 10)
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the project opens in the workspace");
   assert.equal(browser.byId("detailsDialog").open, false, "and never the edit form");
-  assert.match(browser.text("askCrumb"), new RegExp(openedName.slice(0, 10)
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the breadcrumb names the project opened");
-  assert.ok(browser.byId("askEvidence").querySelectorAll(".ask-field-grid").length > 0,
-    "the record view is populated rather than blank");
-  assert.equal(browser.byId("askEvidence").querySelectorAll("input").length, 0,
-    "nothing in it can be typed into");
+  assert.equal(browser.byId("wsSpace").querySelectorAll("input").length, 0,
+    "nothing in the workspace can be typed into");
+  assert.equal(browser.byId("wsSpace").querySelectorAll("form").length, 0,
+    "and there is nothing to submit");
 
-  // The full activity history is the one thing that still uses the dialog,
-  // because six entries in the panel is not always all of them.
-  const fullHistory = browser.byId("askToolbar").querySelector("[data-ask-record-full]");
-  assert.ok(fullHistory, "the record view offers its full history");
-  await browser.fire(fullHistory, "click").results;
+  // The briefing is a real workspace object that fills as you work.
+  const pin = browser.byId("wsSpace").querySelector("[data-ws-pin]");
+  assert.ok(pin, "anything in focus can be pinned");
+  await browser.fire(pin, "click").results;
   await browser.settle();
-  assert.equal(browser.byId("askRecordDialog").open, true, "which opens the record dialog");
-  assert.equal(browser.text("askRecordTitle"), openedName,
-    "it shows the project that was clicked, not another");
-  assert.ok(browser.byId("askRecordGrid").querySelectorAll(".ask-record-field").length > 5,
-    "the dialog is populated rather than blank");
+  assert.match(browser.byId("wsBriefSlot").textContent, /1 item/,
+    "pinning puts it in the briefing");
 
-  // Nothing in it can be typed into or saved.
-  const dialog = browser.byId("askRecordDialog");
-  assert.equal(dialog.querySelectorAll("input").length, 0, "no inputs");
-  assert.equal(dialog.querySelectorAll("textarea").length, 0, "no editable text");
-  assert.equal(dialog.querySelectorAll("select").length, 0, "no pickers");
-  assert.equal(dialog.querySelectorAll("form").length, 0, "nothing to submit");
-  assert.match(dialog.textContent, /Read only/,
-    "and it says so, rather than leaving the reader to infer it");
-  // Clicking outside closes it; clicking inside does not. The record view holds
-  // nothing, so the gesture costs nothing here, which is why it is not wired to
-  // the edit dialogs.
-  await browser.fire(browser.byId("askRecordGrid"), "click").results;
+  // An answer that finds nothing says so, and leaves the workspace alone. What
+  // is already on screen is usually what the next question is about.
+  const cardsBefore = browser.byId("wsSpace").querySelectorAll(".wscard").length;
+  const subjectBefore = browser.text("wsSubject");
+  browser.type("wsInput", "a question that matches nothing at all");
+  await browser.fire("wsForm", "submit").results;
   await browser.settle();
-  assert.equal(browser.byId("askRecordDialog").open, true,
-    "a click inside the record view leaves it open");
+  assert.match(browser.byId("wsThread").textContent, /nothing at all/,
+    "the question is in the conversation");
+  assert.equal(browser.byId("wsSpace").querySelectorAll(".wscard").length, cardsBefore,
+    "and the card that was on screen is still on screen");
+  assert.equal(browser.text("wsSubject"), subjectBefore,
+    "an empty answer does not move the subject");
 
-  await browser.fire(browser.byId("askRecordDialog"), "click").results;
+  // Voice is one control on the same screen, not a second mode with its own
+  // view. The harness has no WebRTC and no microphone, which is exactly what a
+  // locked-down browser presents: it must say so and stay usable.
+  assert.ok(browser.byId("wsMic"), "the call control sits in the composer");
+  assert.equal(browser.byId("wsPresence").getAttribute("data-state"), "off",
+    "the presence dot rests until there is a call");
+  const beforeCall = browser.byId("wsThread").textContent;
+  await browser.fire("wsMic", "click").results;
   await browser.settle();
-  assert.equal(browser.byId("askRecordDialog").open, false,
-    "a click on the backdrop closes it");
-
-  // Back to the records, and the panel names the question they belong to, so a
-  // panel left over from an earlier answer can never be read as this one's.
-  const backToResults = browser.byId("askToolbar").querySelector("[data-ask-action=back]");
-  assert.ok(backToResults, "the record view offers the way back");
-  await browser.fire(backToResults, "click").results;
-  await browser.settle();
-  assert.match(browser.text("askEvidenceTitle"), /slipped more than 30 days/,
-    "the evidence panel says which question it is showing");
-
-  // An answer that finds nothing says so in the conversation and leaves the
-  // records alone. The previous answer's records are usually what the next
-  // question is about, and clearing them for a miss loses that.
-  const recordsBefore = browser.byId("askEvidence").querySelectorAll(".ask-record").length;
-  const railBefore = browser.text("askRailLabel");
-  browser.type("askInput", "a question that matches nothing at all");
-  await browser.fire("askForm", "submit").results;
-  await browser.settle();
-  assert.match(browser.byId("askThread").textContent, /nothing at all/,
-    "the question is in the transcript");
-  assert.equal(browser.byId("askEvidence").querySelectorAll(".ask-record").length, recordsBefore,
-    "and the records that were on screen are still on screen");
-  assert.equal(browser.text("askRailLabel"), railBefore,
-    "an empty answer makes no result set, so the rail does not move");
-
-  // The voice control is present and degrades honestly. The harness has no
-  // WebRTC and no microphone, which is exactly the condition a locked-down
-  // browser presents, so the path that matters here is the one that says so
-  // instead of failing silently.
-  // Quiet chat and Voice are two ways into one conversation, so the transcript
-  // survives switching between them.
-  assert.equal(browser.byId("askVoicePanel").hidden, true, "the pane opens in quiet chat");
-  const beforeSwitch = browser.byId("askThread").textContent;
-  await browser.fire("askVoiceMode", "click").results;
-  await browser.settle();
-  assert.equal(browser.byId("askVoicePanel").hidden, false, "the voice panel appears");
-  assert.equal(browser.byId("askForm").hidden, true, "and the typing composer steps aside");
-  assert.equal(browser.byId("askVoiceMode").getAttribute("aria-pressed"), "true");
-  assert.equal(browser.byId("askThread").textContent, beforeSwitch,
-    "switching mode keeps the conversation rather than starting a new one");
-
-  // The orb says what is happening without being read.
-  assert.equal(browser.byId("askOrb").getAttribute("data-state"), "idle");
-
-  // Stop is offered only while there is something to stop. The assistant is no
-  // longer cut off by the listener speaking, so this is how an answer is ended
-  // early, and offering it when nothing is being said would be a dead control.
-  assert.equal(browser.byId("askStopBtn").hidden, true, "nothing to stop while resting");
-
-  // The harness has no WebRTC and no microphone, which is also what a
-  // locked-down browser looks like: it must say so and stay usable.
-  await browser.fire("askVoiceBtn", "click").results;
-  await browser.settle();
-  assert.match(browser.text("askVoiceStatus"), /cannot open a voice session|Typing still works/,
+  assert.match(browser.text("wsVoiceNote"), /cannot open a call|Typing still works/,
     "a browser without WebRTC is told so, and typing is still offered");
-  assert.equal(browser.byId("askOrb").getAttribute("data-state"), "idle",
-    "and the orb returns to rest rather than spinning for ever");
+  assert.equal(browser.byId("wsPresence").getAttribute("data-state"), "off",
+    "and the dot returns to rest rather than pulsing for ever");
+  assert.equal(browser.byId("wsThread").textContent, beforeCall,
+    "a failed call does not disturb the conversation");
+  assert.equal(browser.byId("wsForm").hidden, false,
+    "and the composer never steps aside for voice");
 
-  await browser.fire("askQuietMode", "click").results;
-  await browser.settle();
-  assert.equal(browser.byId("askVoicePanel").hidden, true, "quiet chat comes back");
-  assert.equal(browser.byId("askForm").hidden, false, "with the composer");
-
-  // Signing out must leave nothing behind: not the rendered transcript, and not
-  // the stored one. A site office shares a browser.
+  // Signing out must leave nothing behind: not the rendered conversation, not
+  // the workspace, and not the stored transcript. A site office shares a browser.
   await browser.fire("logoutBtn", "click").results;
   await browser.settle();
   assert.equal(browser.byId("workspace").hidden, true, "the workspace is hidden after sign-out");
-  assert.equal(browser.byId("askThread").textContent, "",
-    "the rendered transcript is cleared on sign-out");
+  assert.ok(!browser.byId("wsThread").textContent.includes("slipped more than 30 days"),
+    "the rendered conversation is cleared on sign-out");
+  assert.equal(browser.byId("wsThread").querySelectorAll(".wsturn").length, 0,
+    "not one turn of it is left for the next person");
+  assert.equal(browser.byId("wsSpace").querySelectorAll(".wscard").length, 0,
+    "and the workspace goes with it");
   assert.equal(browser.sessionStorage.length, 0,
     "and the stored transcript is removed, not left for the next person");
 
 
-  console.log("Ask the Tracker UI: pane, question, filters, scoped rows and sign-out clearing covered.");
+  console.log("Workspace UI: pane, conversation/workspace split, progressive disclosure, scoped rows, briefing and sign-out clearing covered.");
 }
 
 console.log("Smoke test passed: source data, KPIs, development workflow, history, formulas, export, secure roles, directory, and PDF guide.");

@@ -251,8 +251,13 @@ await check("a voice session asks for the reply not to be interrupted", async ()
     },
   });
   const detection = sent.session.audio.input.turn_detection;
-  assert.equal(detection.interrupt_response, false, "speech does not cancel the reply");
-  assert.equal(detection.create_response, true, "but it still starts the next turn");
+  // Interruption is now on, and detection is semantic rather than a silence
+  // timer. Both were changed deliberately when voice moved to one realtime
+  // session: see docs/ASSISTANT_WORKSPACE.md. The current contract is asserted
+  // in scripts/voice-flow-test.mjs; what matters here is only that the legacy
+  // planner still mints a usable session.
+  assert.equal(detection.interrupt_response, true, "the listener can interrupt the reply");
+  assert.equal(detection.create_response, true, "and a finished question still starts a turn");
   assert.ok(sent.session.audio.input.transcription, "and the listener's words are transcribed");
 });
 

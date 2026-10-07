@@ -1,7 +1,7 @@
 import { ENHANCED_CLIENT } from "./enhanced.js";
 export const CLIENT = `
 var state={projects:[],summary:{},updates:[],me:null,csrf:null,preset:"progress",sortKey:"source_sort_order",sortDir:"asc",devSortKey:"source_sort_order",devSortDir:"asc",activityId:null,unitScope:"All",adminUsers:[],adminAudit:[],adminPage:1,adminLoginEvents:[],loginPage:1,kpiDragKey:null,kpiDragged:false};
-var titles={portfolio:["Portfolio","Leadership summary by business unit"],projects:["Projects","Project activity, cost and schedule"],development:["Development Pipeline","Design & Development requests, estimates and promotion workflow"],cost:["Cost Control","Budgets, forecasts and variances"],risk:["Risk Register","All projects and all recorded risk levels"],admin:["Admin","User directory, roles and audit history"],help:["Help & User Guide","Quick reference and complete PDF instructions"],ask:["Ask the Tracker","Ask a question about the projects you can see"]};
+var titles={portfolio:["Portfolio","Leadership summary by business unit"],projects:["Projects","Project activity, cost and schedule"],development:["Development Pipeline","Design & Development requests, estimates and promotion workflow"],cost:["Cost Control","Budgets, forecasts and variances"],risk:["Risk Register","All projects and all recorded risk levels"],admin:["Admin","User directory, roles and audit history"],help:["Help & User Guide","Quick reference and complete PDF instructions"],ask:["Ask the Tracker","A conversation with your project portfolio"]};
 var money=new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 var colors=["#087db5","#13a6c8","#008f78","#7ac143","#f2b134","#7357a6"];
 function esc(v){return String(v==null?"":v).replace(/[&<>\"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[c]})}
@@ -118,7 +118,7 @@ function renderAll(){renderUnitBar();renderProjects();renderPortfolio();renderDe
 // admin views write account data into. They are deliberately written out rather
 // than derived from a selector: a container that stops being cleared should break
 // a named assertion, not silently drop out of a query.
-var ACCOUNT_HTML=["projectsHead","projectsBody","costHead","costBody","riskHead","riskBody","developmentHead","developmentBody","businessUnitBar","unitSummary","attentionList","highRiskCards","portfolioDonut","portfolioLegend","needsStatusCallout","historyList","roleList","auditList","adminPagination","loginEventList","loginPagination","headerAvatar","askThread","askSuggestions"];
+var ACCOUNT_HTML=["projectsHead","projectsBody","costHead","costBody","riskHead","riskBody","developmentHead","developmentBody","businessUnitBar","unitSummary","attentionList","highRiskCards","portfolioDonut","portfolioLegend","needsStatusCallout","historyList","roleList","auditList","adminPagination","loginEventList","loginPagination","headerAvatar","wsThread","wsSpace","wsBriefSlot"];
 var ACCOUNT_TEXT=["projectCount","developmentCount","unitSelectionText","kpiActive","kpiBudget","kpiHigh","kpiDevelopment","devTotal","devCurrent","devNeeds","devEstimate","sumPrecon","sumConstruction","sumApproved","sumAfc","riskHigh","riskMedium","riskLow","riskUnrated","adminCounts","directoryCount","loginEventCount","userChip","activityTitle","activityMeta","detailsTitle","detailsMeta","developmentTitle","developmentMeta","promoteMeta"];
 var ACCOUNT_FORMS=["detailsForm","developmentForm","promoteForm","userForm","profileForm","addForm","passwordForm"];
 function clearAccountData(){
@@ -746,70 +746,76 @@ document.addEventListener("error",function(event){if(event.target.matches&&event
 ${ENHANCED_CLIENT}
 load(true).catch(function(e){byId("loading").innerHTML="<strong>Unable to load tracker.</strong><br>"+esc(e.message)});
 
-// --- Ask the Tracker ---------------------------------------------------------
-// A question goes to /api/assistant/ask, which turns it into a query plan and
-// runs it under the same business-unit scope every other screen obeys. The
-// answer carries the filters it applied, so a misread question is visible
-// rather than silently producing a confident wrong answer.
+// --- The conversational project-analysis workspace ---------------------------
+// Two surfaces, one state. The conversation is how a question is asked; the
+// workspace is where the answer lives. Nothing structured is ever rendered into
+// the conversation - a list, a figure or a comparison goes to the workspace as
+// a View, and the conversation keeps the sentence a colleague would say while
+// pointing at it.
 //
-// The transcript lives in sessionStorage only: it survives a refresh, dies with
-// the tab, and is never written to the database. It is keyed by user id and
-// cleared on sign-out, because this runs on shared machines and an answer holds
-// project budgets the next person may not be entitled to see.
-var ASK_SUGGESTIONS=[
-  {label:"High schedule risk",q:"Which projects have high schedule risk?"},
-  {label:"Over budget",q:"Which projects are over budget?"},
-  {label:"Slipped 30 days",q:"Which projects slipped more than 30 days?"},
-  {label:"What does Days mean?",q:"What does Days mean?"}
-];
-// Once a set exists these are the moves worth offering: they act on it rather
-// than starting a new search, which is what a reader is usually after next.
-var ASK_NEXT=[
-  {label:"Latest updates",q:"What are their latest updates?"},
-  {label:"Only high risk",q:"Which of those are high risk?"},
-  {label:"Draft a briefing",q:"Draft a briefing for these projects"},
-  {label:"Explain the figures",q:"What does variance mean?"}
-];
-var askTurns=[];
+// Both input paths produce the same thing. A typed question goes to /ask, where
+// the model writes SQL; a spoken one has the realtime model call a data tool
+// through /tool. Either way the worker returns a View, and the workspace does
+// not know or care which arrived.
+//
+// The transcript and the pins live in sessionStorage only: they survive a
+// refresh, die with the tab, and are never written to the database. Keyed by
+// the signed-in address, because this runs on shared machines.
 
-// Keyed on the signed-in email: /api/bootstrap's "me" carries no id, so keying
-// on one silently produced no key at all and nothing was ever stored. The value
-// is the user's own address, in their own browser, already shown in the header.
+var WS_OPENERS=[
+  "Which projects are over budget?",
+  "What slipped this period?",
+  "Show me high risk projects",
+  "What is turning over this quarter?"
+];
+
+var ws={
+  turns:[],
+  views:[],
+  focus:-1,
+  subject:null,
+  pins:[],
+  thread:0,
+  activity:[],
+  seq:0,
+  busy:false,
+  briefOpen:false
+};
+
 function askStorageKey(){return state.me&&state.me.email?"dn-dc-ask:"+state.me.email:null}
 
 function askLoad(){
-  askTurns=[];askSets=[];askIndex=-1;
+  ws.turns=[];ws.views=[];ws.focus=-1;ws.subject=null;ws.pins=[];ws.thread=0;ws.seq=0;
   var key=askStorageKey();
   if(!key)return;
   try{
-    var raw=sessionStorage.getItem(key);
-    if(raw){var parsed=JSON.parse(raw);if(Array.isArray(parsed))askTurns=parsed.slice(-50)}
-  }catch(e){/* private window, blocked storage: the feature still works */}
-  // Rebuild the result sets from the transcript. The rows were always stored -
-  // they live inside each turn's answer - but askSets was not, so after a
-  // refresh every "Show these records" and "Draft briefing" button pointed at
-  // an index of an empty array and did nothing at all. Replaying the turns
-  // keeps one source of truth rather than storing the sets a second time.
-  askTurns.forEach(function(turn){
-    if(turn&&turn.state==="done"&&turn.answer&&turn.answer.rows&&turn.answer.rows.length){
-      recordSet(turn.question,turn.answer);
-      turn.setIndex=askSets.length-1;
-    }else if(turn){
-      delete turn.setIndex;
-    }
-  });
+    var saved=JSON.parse(sessionStorage.getItem(key)||"null");
+    if(!saved||!saved.turns)return;
+    ws.turns=saved.turns||[];
+    ws.views=saved.views||[];
+    ws.focus=typeof saved.focus==="number"?saved.focus:ws.views.length-1;
+    ws.subject=saved.subject||null;
+    ws.pins=saved.pins||[];
+    ws.thread=saved.thread||0;
+    ws.seq=saved.seq||ws.views.length;
+  }catch(e){}
 }
 
 function askSave(){
   var key=askStorageKey();
   if(!key)return;
-  try{sessionStorage.setItem(key,JSON.stringify(askTurns.slice(-50)))}catch(e){}
+  try{
+    sessionStorage.setItem(key,JSON.stringify({
+      turns:ws.turns,views:ws.views,focus:ws.focus,
+      subject:ws.subject,pins:ws.pins,thread:ws.thread,seq:ws.seq
+    }));
+  }catch(e){}
 }
 
-// Every per-user transcript, not only this one's: a shared browser may hold the
-// previous account's answers under its own key.
 function askForget(){
-  askTurns=[];
+  // Every stored conversation, not the signed-in one. showSignIn() clears
+  // state.me before it calls this, so askStorageKey() is already null by the
+  // time we get here and keying on it removed nothing at all.
   try{
     var drop=[];
     for(var i=0;i<sessionStorage.length;i++){
@@ -818,1050 +824,537 @@ function askForget(){
     }
     drop.forEach(function(k){sessionStorage.removeItem(k)});
   }catch(e){}
-  var thread=byId("askThread");if(thread)thread.innerHTML="";
+  ws.turns=[];ws.views=[];ws.focus=-1;ws.subject=null;ws.pins=[];ws.thread=0;ws.seq=0;
+  ws.activity=[];ws.briefOpen=false;
+  if(typeof stopVoice==="function"&&voice.state!=="off")stopVoice("");
+  // The rendered conversation goes with the stored one. Clearing the store and
+  // leaving the screen populated is how the previous person's answers stay
+  // visible to the next, which is the thing sessionStorage was chosen to avoid.
+  renderAsk();
 }
 
-function askMoney(value){
-  if(value===null||value===undefined||value==="")return "—";
-  var n=Number(value);
-  if(!isFinite(n))return "—";
-  return (n<0?"-$":"$")+Math.abs(Math.round(n)).toLocaleString("en-US");
-}
+// --- Formatting --------------------------------------------------------------
+// Short forms everywhere. A column of $1.2m reads; a column of $1,243,000 is a
+// column of digits nobody compares.
 
-function askRiskClass(level){
-  return level==="High"?"ask-risk-high":level==="Medium"?"ask-risk-medium"
-    :level==="Low"?"ask-risk-low":"ask-risk-other";
-}
+function wsNum(v){if(v===null||v===undefined||v==="")return null;var n=Number(v);return Number.isFinite(n)?n:null}
 
-// The evidence panel: the records behind the most recent answer, so a figure can
-// be traced to the project it came from instead of being taken on trust.
-// --- Result sets -------------------------------------------------------------
-// Every question that returns records keeps its own result set, and the rail
-// moves between them. A set is restored from what it stored, never by asking
-// again: re-running would be a different question against the same words, and
-// the point of going back is to see what you were shown.
-var askSets=[];
-var askIndex=-1;
-var ASK_PAGE=12;
-
-function activeSet(){return askIndex>=0&&askIndex<askSets.length?askSets[askIndex]:null}
-
-function recordSet(question,answer){
-  var set={
-    question:question,
-    // The answer in words, kept with the set so moving the chevrons back shows
-    // the sentence that went with those records.
-    summary:answer.summary||answer.message||"",
-    rows:(answer.rows||[]).slice(),
-    total:answer.total,
-    returned:answer.returned,
-    truncated:!!answer.truncated,
-    limit:answer.limit,
-    intent:answer.intent,
-    // What one row is, from the engine. The panel presents a figure, a set of
-    // grouped totals and a list of projects differently, and guessing from the
-    // column names is how a count ends up rendered as an empty project card.
-    entity:answer.entity||"projects",
-    entityLabel:answer.entityLabel||"records",
-    aggregate:!!answer.aggregate,
-    fannedOut:!!answer.fannedOut,
-    projects:answer.projects||null,
-    filters:(answer.description||[]).slice(),
-    sources:(answer.sources||[]).slice(),
-    // The scope the question was asked under, so a restored set is labelled
-    // with the scope that produced it rather than whatever is selected now.
-    unit:askUnit(),
-    // UI state, so a set comes back the way it was left rather than reset.
-    view:"records",
-    recordId:null,
-    shown:ASK_PAGE,
-    history:null
-  };
-  askSets.push(set);
-  askIndex=askSets.length-1;
-  return set;
-}
-
-function askTitleCase(text){
-  return String(text||"").replace(/^\w/,function(c){return c.toUpperCase()});
-}
-
-function askUnit(){var pick=byId("askUnitScope");return pick&&pick.value?pick.value:"All"}
-
-function askUnitRows(){
-  var unit=askUnit();
-  return unit==="All"?state.projects:state.projects.filter(function(p){return p.business_unit===unit});
-}
-
-// --- Figures, counted the way the rest of the Tracker counts them -----------
-function askTotals(rows){
-  var budgets=rows.filter(function(p){return p.approved_budget!==null&&p.approved_budget!==undefined});
-  var forecasts=rows.filter(function(p){return p.anticipated_final_cost!==null&&p.anticipated_final_cost!==undefined});
-  var paired=rows.filter(function(p){return askNum(p.forecast_variance)!==null});
-  var dated=rows.filter(function(p){return askNum(p.duration_change_days)!==null});
-  var add=function(list,key){return list.reduce(function(sum,p){return sum+Number(p[key])},0)};
-  return {
-    count:rows.length,
-    approved:add(budgets,"approved_budget"),approvedCount:budgets.length,
-    forecast:add(forecasts,"anticipated_final_cost"),forecastCount:forecasts.length,
-    pairedCount:paired.length,
-    pairedVariance:paired.reduce(function(sum,p){return sum+Number(p.forecast_variance)},0),
-    overBudget:paired.filter(function(p){return Number(p.forecast_variance)>0}).length,
-    delayed:dated.filter(function(p){return Number(p.duration_change_days)>0}).length,
-    datedCount:dated.length,
-    highRisk:rows.filter(function(p){return p.budget_risk==="High"||p.schedule_risk==="High"}).length,
-    capital:rows.filter(function(p){return p.project_type==="Capital"}).length,
-    development:rows.filter(function(p){return p.project_type==="Development"}).length
-  };
-}
-function askNum(value){
-  if(value===null||value===undefined||value==="")return null;
-  var n=Number(value);
-  return isFinite(n)?n:null;
-}
-function askShortMoney(value){
-  var n=askNum(value);
-  if(n===null)return "Not recorded";
+function wsMoney(v){
+  var n=wsNum(v);
+  if(n===null)return "—";
   var sign=n<0?"-":"",a=Math.abs(n);
-  if(a>=1e9)return sign+"$"+(a/1e9).toFixed(1)+"B";
-  if(a>=1e6)return sign+"$"+(a/1e6).toFixed(1)+"M";
-  if(a>=1e3)return sign+"$"+Math.round(a/1e3)+"K";
-  return sign+"$"+a;
+  if(a>=1000000)return sign+"$"+(a/1000000).toFixed(a>=10000000?0:1).replace(/\\.0$/,"")+"m";
+  if(a>=1000)return sign+"$"+Math.round(a/1000)+"k";
+  return sign+"$"+Math.round(a);
 }
 
-// --- The evidence panel ------------------------------------------------------
-// Four views over one panel: the portfolio before anything is asked, the
-// records an answer found, one of those records, and a briefing built from the
-// set. The toolbar belongs to the view, so the actions on offer are always the
-// ones that apply to what is on screen.
-function renderEvidence(){
-  var body=byId("askEvidence"),title=byId("askEvidenceTitle"),count=byId("askEvidenceCount");
-  var bar=byId("askToolbar"),crumb=byId("askCrumb");
-  if(!body)return;
-  var set=activeSet();
-  var view=set?set.view:"overview";
-  var head={title:"Portfolio at a glance",count:"—",crumb:"Portfolio at a glance"};
-
-  if(view==="overview"){
-    body.innerHTML=askOverviewHtml();
-    var rows=askUnitRows();
-    head={title:askUnit()==="All"?"Portfolio at a glance":askUnit(),
-      count:String(rows.length),crumb:"Portfolio at a glance"};
-    bar.innerHTML='<button type="button" class="ask-btn" data-ask-action="browse">Browse records</button>'
-      +'<button type="button" class="ask-btn" data-ask-ask="Draft a briefing for all projects">Draft briefing</button>';
-  }else if(view==="record"){
-    var project=askRecordById(set.recordId);
-    body.innerHTML=askRecordHtml(set,project);
-    head={title:"Project source record",count:project?"#"+project.id:"—",
-      crumb:project?project.name:"Project record"};
-    bar.innerHTML='<button type="button" class="ask-btn" data-ask-action="back">Back to results</button>'
-      +'<button type="button" class="ask-btn" data-ask-action="record-briefing">Project briefing</button>'
-      +(project?'<button type="button" class="ask-btn" data-ask-record-full="'+esc(String(project.id))+'">Full activity history</button>':"");
-  }else if(view==="briefing"){
-    body.innerHTML=askBriefingHtml(set);
-    head={title:"Briefing preview",count:String(set.total),crumb:"Briefing"};
-    bar.innerHTML='<button type="button" class="ask-btn ask-btn-primary" data-ask-action="download">Download briefing</button>'
-      +'<button type="button" class="ask-btn" data-ask-action="print">Print / PDF</button>'
-      +'<button type="button" class="ask-btn" data-ask-action="csv">CSV</button>'
-      +'<button type="button" class="ask-btn" data-ask-action="back">Back to results</button>';
-  }else{
-    body.innerHTML=askRecordsHtml(set);
-    // The question, not "Matching projects". With several result sets kept at
-    // once the panel has to say which one it is showing, or the rail moves and
-    // nothing on screen changes its mind about what it is.
-    head={title:set.question,
-      // The cards are projects, deduplicated. When a join multiplied the rows,
-      // the row count is not what is on screen and must not label it.
-      count:set.entity==="figure"?"1"
-        :set.fannedOut&&set.projects&&set.projects.matched!==null?String(set.projects.matched)
-        :String(set.total),
-      crumb:set.entity==="figure"?"Figure":set.entity==="group"?"Grouped totals"
-        :set.entity==="projects"?"Matching projects":askTitleCase(set.entityLabel)};
-    // A briefing and a CSV are built from project records. A figure has none,
-    // so offering them would produce an empty file.
-    var exportable=set.rows.length&&set.entity!=="figure";
-    bar.innerHTML=(exportable
-      ?'<button type="button" class="ask-btn" data-ask-action="briefing">Draft briefing</button>'
-       +'<button type="button" class="ask-btn" data-ask-action="csv">Export CSV</button>'
-      :"")
-      +'<button type="button" class="ask-btn" data-ask-action="browse">Browse records</button>';
-  }
-
-  if(title)title.textContent=head.title;
-  if(count)count.textContent=head.count;
-  if(crumb)crumb.textContent=head.crumb;
-  body.scrollTop=0;
-  renderRail();
-  renderAskContext();
+function wsMoneySigned(v){
+  var n=wsNum(v);
+  if(n===null)return "—";
+  return (n>0?"+":"")+wsMoney(n);
 }
 
-// The portfolio, before anything has been asked. Counts come from the records
-// this reader can see, so it states their portfolio rather than the company's.
-function askOverviewHtml(){
-  var rows=askUnitRows(),totals=askTotals(rows);
-  if(!rows.length){
-    return '<div class="ask-empty"><strong>No projects are visible to you yet.</strong>'
-      +'If that looks wrong, ask an administrator to check your business-unit access.</div>';
-  }
-  var units=[];
-  state.projects.forEach(function(p){if(units.indexOf(p.business_unit)<0)units.push(p.business_unit)});
-  var biggest=units.reduce(function(max,u){
-    var n=state.projects.filter(function(p){return p.business_unit===u}).length;
-    return n>max?n:max;
-  },1);
-  var period=rows.map(function(p){return p.reporting_period}).filter(Boolean).sort().pop();
-  return '<p class="ask-source-meta">'+esc(String(rows.length))+' project record'
-      +(rows.length===1?"":"s")+(period?' · latest reporting period '+esc(dateText(period)):"")+'</p>'
-    +'<div class="ask-metric-pair">'
-      +'<div class="ask-metric"><span>Project records</span><strong>'+totals.count+'</strong>'
-        +'<small>'+totals.capital+' capital · '+totals.development+' development</small></div>'
-      +'<div class="ask-metric"><span>Forecast cost recorded</span><strong>'+esc(askShortMoney(totals.forecast))+'</strong>'
-        +'<small>'+totals.forecastCount+' of '+totals.count+' projects</small></div>'
-    +'</div>'
-    +'<div class="ask-section-label">Business units</div>'
-    +units.map(function(u){
-      var n=state.projects.filter(function(p){return p.business_unit===u}).length;
-      return '<div class="ask-unit-row">'
-        +'<button type="button" data-ask-ask="Show '+esc(u)+' projects">'+esc(u)+'</button>'
-        +'<div class="ask-unit-track"><div class="ask-unit-fill" style="width:'
-          +Math.max(4,Math.round(n/biggest*100))+'%"></div></div>'
-        +'<b>'+n+'</b></div>';
-    }).join("")
-    +'<div class="ask-note">These are the records you are entitled to see. An answer never '
-      +'reaches a business unit outside your access, so a count here is your portfolio, not the whole company.</div>';
+var WS_MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function wsDate(v){
+  var text=String(v==null?"":v).trim();
+  if(!/^\\d{4}-\\d{2}-\\d{2}/.test(text))return text?text:"—";
+  var y=text.slice(0,4),m=Number(text.slice(5,7)),d=Number(text.slice(8,10));
+  return d+" "+(WS_MONTHS[m-1]||"")+" "+y;
 }
 
-// The records an answer found, as cards. The figures on each card are the two a
-// reader checks first, and the update excerpt is what makes a card worth
-// reading rather than a row of labels.
-// What a result set looks like in the panel. The engine says what one row is,
-// and each kind is shown as itself: a figure is a figure, grouped totals are a
-// comparison, projects are cards. Rendering a COUNT as a project card with no
-// name in it was the thing to avoid.
-function askRecordsHtml(set){
-  if(!set.rows.length){
-    return '<div class="ask-empty"><strong>No records match that question.</strong>'
-      +'Try a project name, a venue, a CAPP number, or a wider business unit.</div>';
-  }
-  if(set.entity==="figure")return askFigureHtml(set);
-  if(set.entity==="group")return askGroupHtml(set);
-  if(set.entity!=="projects")return askChildHtml(set);
-
-  var shown=set.rows.slice(0,set.shown);
-  var more=set.rows.length-shown.length;
-  return askSetHeadHtml(set)
-    +shown.map(function(p){return askCardHtml(p,set)}).join("")
-    +(more>0?'<button type="button" class="ask-btn" data-ask-action="more">Show '
-      +Math.min(ASK_PAGE,more)+' more</button>':"")
-    +askTruncationNote(set);
+function wsDays(v){
+  var n=wsNum(v);
+  if(n===null)return "—";
+  if(n===0)return "on plan";
+  return (n>0?"+":"")+n+"d";
 }
 
-// The question's own conditions, and what the set is of.
-function askSetHeadHtml(set){
-  var chips=set.filters.map(function(f){
-    return '<span class="ask-chip">'+esc(f)+'</span>'}).join("");
-  return chips?'<div class="ask-chips">'+chips+'</div>':"";
+function wsText(v){
+  var text=String(v==null?"":v).trim();
+  return text?text:"—";
 }
 
-function askTruncationNote(set){
-  if(!set.truncated)return "";
-  return '<div class="ask-note">'+esc(String(set.total))+' '+esc(set.entityLabel)
-    +' match. '+esc(String(set.returned))+' were returned, which is the cap on one answer. '
-    +'Narrow the question to see a different part of the set.</div>';
+function wsCount(n,one,many){return n+" "+(n===1?one:many)}
+
+// The whole visual vocabulary of state: three marks, no more. Anything else is
+// a figure the reader can see for themselves.
+function wsMarks(p){
+  var out="",variance=wsNum(p.forecast_variance),slip=wsNum(p.duration_change_days);
+  var high=function(v){return String(v||"").trim().toLowerCase()==="high"};
+  if(variance!==null&&variance>0)out+='<i class="wsm wsm-rose" title="Forecasting over budget">over</i>';
+  if(slip!==null&&slip>0)out+='<i class="wsm wsm-amber" title="Turnover has moved later">late</i>';
+  if(high(p.budget_risk)||high(p.schedule_risk))out+='<i class="wsm wsm-ring" title="Rated High risk">high</i>';
+  return out;
 }
 
-// A single figure. One number, named, with what it was counted over.
-function askFigureHtml(set){
-  var row=set.rows[0]||{};
-  var entries=Object.keys(row).map(function(key){
-    var value=row[key];
-    var looksLikeMoney=/budget|cost|variance|estimate|capp|expense/.test(key)&&askNum(value)!==null;
-    return {
-      label:key.replace(/_/g," ").replace(/\b\w/g,function(c){return c.toUpperCase()}),
-      value:value===null||value===undefined?"Not recorded"
-        :looksLikeMoney?askMoney(value)
-        :typeof value==="number"?value.toLocaleString("en-US"):String(value)
-    };
+// A proportional bar. No axis, no legend, no label of its own: it sits beside
+// the number it is a picture of.
+function wsBar(value,max,tone){
+  var n=Math.abs(wsNum(value)||0),top=Math.abs(wsNum(max)||0);
+  var pct=top>0?Math.min(100,Math.round(n/top*100)):0;
+  return '<span class="wsbar"><i class="wsbar-f'+(tone?" wsbar-"+tone:"")+'" style="width:'+pct+'%"></i></span>';
+}
+
+function wsMetric(label,value,note,tone){
+  return '<div class="wsmet"><span class="wsmet-k">'+esc(label)+'</span>'
+    +'<span class="wsmet-v'+(tone?" wsmet-"+tone:"")+'">'+value+'</span>'
+    +(note?'<span class="wsmet-n">'+esc(note)+'</span>':'')+'</div>';
+}
+
+function wsField(label,value){
+  return '<div class="wsfld"><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong></div>';
+}
+
+// --- Component renderers -----------------------------------------------------
+// One per View kind. Each is handed the data and returns the inside of one card.
+// None of them renders another card, and none of them renders a markdown table.
+
+function wsRowHtml(p,trailing){
+  var place=[p.venue,p.business_unit].filter(Boolean).join(" · ");
+  return '<li><button type="button" class="wsrow" data-ws-open="'+esc(p.id)+'">'
+    +'<span class="wsrow-main"><span class="wsrow-name">'+esc(p.name||"Untitled project")+'</span>'
+    +'<span class="wsrow-meta">'+esc(place)+'</span></span>'
+    +'<span class="wsrow-marks">'+wsMarks(p)+'</span>'
+    +'<span class="wsrow-fig">'+(trailing||"")+'</span></button></li>';
+}
+
+function wsListHtml(rows,trailing){
+  if(!rows.length)return '<p class="wsnote">Nothing to list.</p>';
+  return '<ul class="wslist">'+rows.map(function(p){
+    return wsRowHtml(p,trailing?trailing(p):"");
+  }).join("")+'</ul>';
+}
+
+var WS_VIEWS={};
+
+WS_VIEWS.project_list=function(d){
+  return wsListHtml(d.rows||[],function(p){
+    return wsNum(p.approved_budget)!==null?'<span class="wsq">'+wsMoney(p.approved_budget)+'</span>':"";
   });
-  return askSetHeadHtml(set)
-    +'<div class="ask-figures">'+entries.map(function(entry){
-      return '<div class="ask-figure"><span>'+esc(entry.label)+'</span>'
-        +'<strong>'+esc(entry.value)+'</strong></div>';
-    }).join("")+'</div>'
-    +'<div class="ask-note">This is a calculated figure, not a list of records. '
-      +'Projects with no value recorded are not included in it, so a total covers '
-      +'only the projects that have the figure.</div>';
-}
-
-// Grouped totals. A bar each, so the comparison is the point rather than the
-// numbers being read one at a time.
-function askGroupHtml(set){
-  var rows=set.rows;
-  var keys=Object.keys(rows[0]||{});
-  var labelKey=keys.find(function(k){return typeof rows[0][k]==="string"})||keys[0];
-  var valueKey=keys.find(function(k){return k!==labelKey&&askNum(rows[0][k])!==null})||keys[1]||keys[0];
-  var biggest=rows.reduce(function(max,row){
-    var n=Math.abs(askNum(row[valueKey])||0);return n>max?n:max},1);
-  var money=/budget|cost|variance|estimate|expense/.test(valueKey);
-  return askSetHeadHtml(set)
-    +'<div class="ask-section-label">'+esc(String(valueKey).replace(/_/g," "))+' by '
-      +esc(String(labelKey).replace(/_/g," "))+'</div>'
-    +rows.map(function(row){
-      var n=askNum(row[valueKey])||0;
-      return '<div class="ask-unit-row">'
-        +'<button type="button" data-ask-ask="Show '+esc(String(row[labelKey]))+' projects">'
-          +esc(String(row[labelKey]===null||row[labelKey]===undefined?"Not recorded":row[labelKey]))+'</button>'
-        +'<div class="ask-unit-track"><div class="ask-unit-fill" style="width:'
-          +Math.max(3,Math.round(Math.abs(n)/biggest*100))+'%"></div></div>'
-        +'<b>'+esc(money?askShortMoney(n):String(n))+'</b></div>';
-    }).join("")
-    +askTruncationNote(set);
-}
-
-// Activity updates, photographs or development records: child rows, shown as
-// entries rather than as cards, with the project they belong to.
-function askChildHtml(set){
-  var shown=set.rows.slice(0,set.shown);
-  var more=set.rows.length-shown.length;
-  var projectName=function(row){
-    var id=row.project_id||row.id;
-    var p=askRecordById(id);
-    return p?p.name:("Project "+id);
-  };
-  return askSetHeadHtml(set)
-    +(set.projects&&set.projects.matched!==null&&set.projects.matched!==undefined
-      ?'<p class="ask-source-meta">'+esc(String(set.total))+' '+esc(set.entityLabel)
-        +' across '+esc(String(set.projects.matched))+' project'
-        +(set.projects.matched===1?"":"s")+'.</p>'
-      :"")
-    +shown.map(function(row){
-      var when=row.reporting_period||row.date_taken||row.request_date||row.created_at;
-      var text=row.current_summary||row.caption||row.notes||row.consultants||"";
-      return '<div class="ask-history-entry">'
-        +'<time>'+esc(when?dateText(when):"No date")+'</time>'
-        +(row.project_id||row.id
-          ?' <button type="button" class="ask-text-link" data-ask-open="'
-            +esc(String(row.project_id||row.id))+'">'+esc(projectName(row))+'</button>':"")
-        +(text?'<p>'+esc(String(text).slice(0,400))+'</p>':"")
-        +'</div>';
-    }).join("")
-    +(more>0?'<button type="button" class="ask-btn" data-ask-action="more">Show '
-      +Math.min(ASK_PAGE,more)+' more</button>':"")
-    +askTruncationNote(set);
-}
-
-function askCardHtml(p,set){
-  var variance=p.forecast_variance,days=p.duration_change_days;
-  var update=p.current_update||"";
-  var excerpt=update.length>220?update.slice(0,220)+"…":update;
-  var where=p.venue||p.section_name||"";
-  return '<article class="ask-record" data-selected="'+(set&&set.recordId===p.id?"true":"false")+'">'
-    +'<div class="ask-record-top"><span>'+esc(where||p.business_unit||"")+'</span>'
-      +'<span>#'+esc(String(p.id))+'</span></div>'
-    +'<button type="button" class="ask-record-name" data-ask-open="'+esc(String(p.id))+'">'
-      +esc(p.name)+'</button>'
-    +'<p>'+esc([p.business_unit,p.status,p.project_manager||p.development_lead].filter(Boolean).join(" · "))+'</p>'
-    +'<div class="ask-chips">'
-      +'<span class="ask-risk '+askRiskClass(p.schedule_risk)+'">Schedule: '+esc(p.schedule_risk||"Not Rated")+'</span>'
-      +'<span class="ask-risk '+askRiskClass(p.budget_risk)+'">Budget: '+esc(p.budget_risk||"Not Rated")+'</span>'
-    +'</div>'
-    +'<div class="ask-metric-pair" style="border:0;padding-bottom:6px">'
-      +'<div class="ask-metric"><span>Variance</span><strong class="'+(Number(variance)>0?"over":"")+'">'
-        +esc(askMoney(variance))+'</strong><small>forecast less approved</small></div>'
-      +'<div class="ask-metric"><span>Days</span><strong class="'+(Number(days)>0?"late":"")+'">'
-        +(askNum(days)===null?"—":esc(String(days)))+'</strong><small>turnover movement</small></div>'
-    +'</div>'
-    +(excerpt?'<p>'+esc(excerpt)+'</p>':'<p class="ask-source-line">No activity update recorded.</p>')
-    +'<div class="ask-record-footer">'
-      +'<span class="ask-source-line" style="margin:0">'
-        +(p.reporting_period?esc(dateText(p.reporting_period)):"No reporting date")+'</span>'
-      +'<button type="button" class="ask-text-link" data-ask-open="'+esc(String(p.id))+'">Open record</button>'
-    +'</div></article>';
-}
-
-// One record, at the level of detail the pilot established: identity, the
-// ratings, the money, the dates, the scope, then the saved updates.
-function askRecordHtml(set,p){
-  if(!p){
-    return '<div class="ask-empty"><strong>That record is no longer loaded.</strong>'
-      +'Refresh the page, or go back to the results and open it again.</div>';
-  }
-  var field=function(label,value,cls){
-    return '<div><dt>'+esc(label)+'</dt><dd'+(cls?' class="'+cls+'"':"")+'>'
-      +esc(value===null||value===undefined||value===""?"Not recorded":String(value))+'</dd></div>';
-  };
-  var days=p.duration_change_days,variance=p.forecast_variance;
-  var html='<span class="ask-kicker">'+esc(p.venue||p.section_name||p.business_unit||"")+'</span>'
-    +'<h3 class="ask-report-title">'+esc(p.name)+'</h3>'
-    +'<p class="ask-source-meta">'+esc([p.business_unit,p.status,
-        p.capp_number||p.initiative_number||"No project number"].filter(Boolean).join(" · "))+'</p>'
-    +'<div class="ask-chips">'
-      +'<span class="ask-risk '+askRiskClass(p.schedule_risk)+'">Schedule: '+esc(p.schedule_risk||"Not Rated")+'</span>'
-      +'<span class="ask-risk '+askRiskClass(p.budget_risk)+'">Budget: '+esc(p.budget_risk||"Not Rated")+'</span>'
-    +'</div>'
-    +'<dl class="ask-field-grid">'
-      +field("Project lead",p.project_manager||p.development_lead)
-      +field("Phase",p.phase)
-      +field("Type",p.project_type)
-      +field("Approved budget",askMoney(p.approved_budget))
-      +field("Forecast final cost",askMoney(p.anticipated_final_cost))
-      +field("Variance",askMoney(variance),Number(variance)>0?"over":"")
-      +field("Original turnover",p.original_turnover_date?dateText(p.original_turnover_date):null)
-      +field("Current turnover",p.current_turnover_date?dateText(p.current_turnover_date):null)
-      +field("Days moved",askNum(days)===null?null:String(days),Number(days)>0?"late":"")
-      +field("Reporting period",p.reporting_period?dateText(p.reporting_period):null)
-    +'</dl>';
-  if(p.scope_description){
-    html+='<div class="ask-report-section"><h4>Scope</h4><p>'+esc(p.scope_description)+'</p></div>';
-  }
-  html+='<div class="ask-report-section"><h4>Latest saved update</h4>'
-    +'<p>'+esc(p.current_update||"No activity update recorded.")+'</p>'
-    +(p.reporting_period?'<span class="ask-small">Saved for '+esc(dateText(p.reporting_period))+'</span>':"")
-    +'</div>';
-  if(set.history===null){
-    html+='<div class="ask-report-section"><h4>Activity history</h4>'
-      +'<p class="ask-pending"><span class="ask-dots"><i></i><i></i><i></i></span>Loading saved updates…</p></div>';
-  }else if(set.history&&set.history.length){
-    html+='<div class="ask-report-section"><h4>Activity history</h4>'
-      +set.history.slice(0,6).map(function(h){
-        return '<div class="ask-history-entry"><time>'+esc(dateText(h.reporting_period))+'</time>'
-          +'<p>'+esc(h.current_summary||"")+'</p></div>';
-      }).join("")
-      +(set.history.length>6?'<span class="ask-small">'+(set.history.length-6)
-        +' earlier entries are in the full history.</span>':"")
-      +'</div>';
-  }else if(set.history&&!set.history.length){
-    html+='<div class="ask-report-section"><h4>Activity history</h4>'
-      +'<p class="ask-source-line">No earlier updates are recorded for this project.</p></div>';
-  }
-  if(p.previous_update){
-    html+='<div class="ask-note"><strong>Previous update</strong><br>'+esc(p.previous_update)+'</div>';
-  }
-  return html;
-}
-
-// The briefing, on screen before it is downloaded or printed. What prints is
-// this view, which is why the print stylesheet hides everything else.
-function askBriefingHtml(set){
-  var totals=askTotals(set.rows);
-  var scope=set.plan&&set.plan.unit&&set.plan.unit!=="All"?set.plan.unit+" project review":"Project portfolio review";
-  var periods=set.rows.map(function(p){return p.reporting_period}).filter(Boolean).sort();
-  return '<span class="ask-kicker">D&amp;C · Project briefing</span>'
-    +'<h3 class="ask-report-title">'+esc(scope)+'</h3>'
-    +'<p class="ask-source-meta">Prepared from the question “'+esc(set.question)+'”.<br>'
-      +(periods.length?'Reporting dates '+esc(dateText(periods[0]))
-        +(periods[periods.length-1]!==periods[0]?' to '+esc(dateText(periods[periods.length-1])):"")+'.':'No reporting dates recorded.')
-      +'</p>'
-    +'<div class="ask-chips">'+set.filters.map(function(f){
-        return '<span class="ask-chip">'+esc(f)+'</span>'}).join("")+'</div>'
-    +'<div class="ask-report-summary">'
-      +'<span><strong>'+totals.count+'</strong> project'+(totals.count===1?"":"s")+'</span>'
-      +'<span><strong>'+totals.highRisk+'</strong> high risk</span>'
-      +'<span><strong>'+totals.overBudget+'</strong> above budget</span>'
-      +'<span><strong>'+totals.delayed+'</strong> turnover moved later</span>'
-    +'</div>'
-    +'<dl class="ask-field-grid">'
-      +'<div><dt>Recorded approved budgets</dt><dd>'+esc(askMoney(totals.approved))
-        +' <span class="ask-small" style="display:inline">('+totals.approvedCount+' of '+totals.count+')</span></dd></div>'
-      +'<div><dt>Recorded forecast costs</dt><dd>'+esc(askMoney(totals.forecast))
-        +' <span class="ask-small" style="display:inline">('+totals.forecastCount+' of '+totals.count+')</span></dd></div>'
-      +'<div><dt>Matched-pair variance</dt><dd class="'+(totals.pairedVariance>0?"over":"")+'">'
-        +esc(askMoney(totals.pairedVariance))+' <span class="ask-small" style="display:inline">('
-        +totals.pairedCount+' with both figures)</span></dd></div>'
-      +'<div><dt>Turnover dates comparable</dt><dd>'+totals.datedCount+' of '+totals.count+'</dd></div>'
-    +'</dl>'
-    +'<div class="ask-note">Totals cover different sets of projects where figures are missing. '
-      +'The matched-pair variance is the only directly comparable number.</div>'
-    +set.rows.map(function(p){
-      var days=p.duration_change_days;
-      return '<div class="ask-report-section"><h4>'+esc(p.name)+'</h4>'
-        +'<p class="ask-source-meta" style="margin:0 0 6px">'+esc([p.business_unit,p.status,
-            p.project_manager||p.development_lead||"Manager not recorded"].filter(Boolean).join(" · "))+'</p>'
-        +'<p style="margin:4px 0">Budget risk '+esc(p.budget_risk||"Not Rated")
-          +' · Schedule risk '+esc(p.schedule_risk||"Not Rated")
-          +' · Approved '+esc(askMoney(p.approved_budget))
-          +' · Forecast '+esc(askMoney(p.anticipated_final_cost))
-          +(askNum(days)===null?"":' · '+esc(String(days))+' days')+'</p>'
-        +'<p>'+esc(p.current_update||"No activity update recorded.")+'</p>'
-        +(p.reporting_period?'<span class="ask-small">Saved for '+esc(dateText(p.reporting_period))+'</span>':"")
-        +'</div>';
-    }).join("");
-}
-
-// --- The rail ----------------------------------------------------------------
-// Older and newer move between result SETS. They never move between records:
-// that is what Open record and Back to results are for.
-function renderRail(){
-  var older=byId("askOlder"),newer=byId("askNewer"),label=byId("askRailLabel"),down=byId("askDownload");
-  if(!older)return;
-  var has=askSets.length>0;
-  older.disabled=!has||askIndex<=0;
-  newer.disabled=!has||askIndex>=askSets.length-1;
-  if(down)down.disabled=!has||!askSets[askIndex].rows.length;
-  if(label){
-    // Only once there is something to step between. Beside a count reading "—",
-    // "No results yet" said the same nothing twice.
-    label.textContent=has&&askSets.length>1?(askIndex+1)+" of "+askSets.length:"";
-    label.title=has?askSets[askIndex].question:"";
-  }
-}
-
-function showSet(index){
-  if(index<0||index>=askSets.length)return;
-  askIndex=index;
-  renderEvidence();
-}
-
-function renderAskContext(){
-  // One statement of what is on screen, in the card that holds it. The same
-  // count written twice - once above the conversation and again in the panel's
-  // own header - read as two different facts.
-  var scope=byId("askScope");
-  if(scope)scope.textContent=state.me?"Scoped to "+(state.me.name||state.me.email):"";
-}
-
-
-var ASK_SPARK='<svg class="ai-spark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
-  +'<path d="M12 2.2l2.15 6.15 6.15 2.15-6.15 2.15L12 18.8l-2.15-6.15L3.7 10.5l6.15-2.15z"/>'
-  +'<path d="M18.6 2.6l.78 2.22 2.22.78-2.22.78-.78 2.22-.78-2.22-2.22-.78 2.22-.78z" opacity=".65"/>'
-  +'</svg>';
-
-function askAiLabel(){
-  return '<div class="ask-label ask-label-ai"><span class="ask-ai-mark">'+ASK_SPARK+'</span>AI Tracker</div>';
-}
-
-
-
-
-
-function askTurnHtml(turn,index){
-  var answer=turn.answer||{};
-  var body="";
-  if(turn.state==="pending"){
-    body='<div class="ask-bubble"><p class="ask-pending">'
-      +'<span class="ask-dots"><i></i><i></i><i></i></span>Reading your records…</p></div>';
-  }else if(turn.state==="error"){
-    body='<div class="ask-bubble"><div class="ask-error">'
-      +esc(turn.message||"That question could not be answered.")
-      +'<br>Your records have not changed. Try asking again.</div></div>';
-  }else{
-    // The answer, in words. The records are not repeated here: they are in the
-    // panel beside this, where they can be sorted, opened and exported. A
-    // conversation that restates the database is a worse way to read the
-    // database than the database.
-    var html="";
-    if(answer.message)html+='<p>'+esc(answer.message)+'</p>';
-    if(answer.summary)html+='<p>'+esc(answer.summary)+'</p>';
-    if(!answer.message&&!answer.summary&&answer.rows)html+='<p>No records matched that question.</p>';
-    if(answer.rows&&answer.rows.length){
-      html+=askEvidenceLine(answer,turn);
-    }
-    body='<div class="ask-bubble">'+html+'</div>';
-  }
-  return '<article class="ask-turn">'
-    +'<div class="ask-turn-user"><div class="ask-bubble">'+esc(turn.question)+'</div></div>'
-    +'</article><article class="ask-turn">'+askAiLabel()+body
-    // The developer's query is not part of the conversation at all. It was
-    // furniture for building this; the developer panel setting still carries it
-    // in the response for anyone who needs it.
-    +'</article>';
-}
-
-// One line pointing at the panel, and the way back to this set once the
-// chevrons have moved on. Not a list: a count, what those rows are, and what
-// can be done with them.
-function askEvidenceLine(answer,turn){
-  var what=answer.entityLabel||"records";
-  var line=esc(String(answer.total))+" "+esc(what)
-    +(answer.truncated?" · showing the first "+esc(String(answer.returned)):"");
-  if(answer.projects&&answer.projects.matched!==null&&answer.projects.matched!==undefined
-    &&(answer.fannedOut||(answer.entity!=="projects"&&answer.entity!=="figure"))){
-    line+=" · across "+esc(String(answer.projects.matched))+" project"
-      +(answer.projects.matched===1?"":"s");
-  }
-  // No buttons here. The records are in the panel beside this and the chevrons
-  // reach any earlier answer; repeating both under every reply was the clutter
-  // that made the conversation hard to read.
-  return '<div class="ask-sources">'+line+'</div>';
-}
-
-// A read-only view of one project. The assistant reads and does not write, so
-// a result opens this rather than the edit form behind data-details: a Save
-// button on a pane that cannot save is a promise the feature does not keep.
-function askRecordField(label,value,cls){
-  return '<div class="ask-record-field"><span>'+esc(label)+'</span>'
-    +'<strong'+(cls?' class="'+cls+'"':"")+'>'+esc(value===null||value===undefined||value===""?"—":String(value))+'</strong></div>';
-}
-
-// Looks the record up in the answer it was listed in, before falling back to the
-// loaded projects. The answer carries the row it was built from, so the view
-// shows exactly the figures the assistant used - if the two ever disagreed, the
-// one on screen would be the one the reader could not check.
-function askRecordById(id){
-  var wanted=Number(id);
-  for(var i=askTurns.length-1;i>=0;i--){
-    var answer=askTurns[i].answer;
-    if(!answer||!answer.rows)continue;
-    for(var j=0;j<answer.rows.length;j++){
-      if(answer.rows[j].id===wanted)return answer.rows[j];
-    }
-  }
-  return state.projects.find(function(x){return x.id===wanted})||null;
-}
-
-function openAskRecord(id){
-  var p=askRecordById(id);
-  if(!p)return toast("That project is no longer loaded. Refresh and try again.");
-  byId("askRecordTitle").textContent=p.name;
-  // Venue and section are often the same word on these records, so show it once.
-  var meta=[];
-  [p.business_unit,p.venue,p.section_name].forEach(function(part){
-    if(part&&meta.indexOf(part)<0)meta.push(part);
-  });
-  byId("askRecordMeta").textContent=meta.join(" · ");
-  var days=p.duration_change_days,variance=p.forecast_variance;
-  var fields=[
-    askRecordField("Type",p.project_type),
-    askRecordField("Status",p.status),
-    askRecordField("Phase",p.phase),
-    askRecordField(p.project_type==="Development"?"Development lead":"Project manager",
-      p.project_manager||p.development_lead),
-    askRecordField(p.project_type==="Development"?"Initiative number":"CAPP number",
-      p.project_type==="Development"?p.initiative_number:p.capp_number),
-    askRecordField("Budget risk",p.budget_risk),
-    askRecordField("Schedule risk",p.schedule_risk),
-    askRecordField("Approved budget",moneyText(p.approved_budget)),
-    askRecordField("Anticipated final cost",moneyText(p.anticipated_final_cost)),
-    askRecordField("Variance",moneyText(variance),Number(variance)>0?"over":""),
-    askRecordField("Original turnover",dateText(p.original_turnover_date)),
-    askRecordField("Current turnover",dateText(p.current_turnover_date)),
-    askRecordField("Days",days===null||days===undefined?"—":String(days),Number(days)>0?"late":""),
-    askRecordField("Reporting period",dateText(p.reporting_period))
-  ];
-  byId("askRecordGrid").innerHTML=fields.join("");
-  byId("askRecordUpdate").innerHTML=p.current_update
-    ? '<h4>Latest activity update</h4><p>'+esc(p.current_update)+'</p>'
-    : '<h4>Latest activity update</h4><p>No update recorded.</p>';
-  byId("askRecordDialog").showModal();
-}
-
-// --- Voice -------------------------------------------------------------------
-// The browser opens its own realtime connection to OpenAI, because audio has to
-// go straight there to stay in step with speech. What it holds is a credential
-// this worker minted that expires in about a minute; the account key never
-// leaves the server.
-//
-// The model cannot read the database. When it wants data it calls one tool,
-// ask_tracker, with a question in plain words, and the browser passes that to
-// /api/assistant/ask - the same endpoint typing uses, with the same session
-// cookie, the same planner and the same scope. Speaking therefore reaches
-// exactly what typing reaches, and nothing more.
-var voice={state:"off",pc:null,mic:null,channel:null,audio:null,heard:"",responding:false,muted:false};
-
-// Four states a caller can act on, and what each one means for them. The call
-// listens again by itself after every answer, so none of these asks for a press.
-var VOICE_STATE={
-  off:["Not connected","Start the call and just talk. There is nothing to press."],
-  connecting:["Connecting","Setting up the call."],
-  listening:["Listening","Ask whenever you are ready. I answer when you stop."],
-  thinking:["Thinking","Looking through your records."],
-  speaking:["Speaking","Stop speaking if you would rather ask something else."],
-  muted:["Muted","The microphone is off. Unmute to carry on."]
 };
 
-function setVoiceState(next,detail){
-  voice.state=next;
-  var live=next!=="off"&&next!=="connecting";
-  var shown=voice.muted&&live?"muted":next;
-  var start=byId("askVoiceBtn"),startLabel=byId("askVoiceBtnLabel");
-  if(start){
-    start.dataset.live=live?"true":"false";
-    start.setAttribute("aria-label",live?"End the call":"Start the call");
-    start.disabled=next==="connecting";
-  }
-  if(startLabel)startLabel.textContent=live?"End call":"Start call";
-  // Mute is offered for the whole call, not only while listening: the reason to
-  // reach for it is usually that someone else has started talking.
-  var mute=byId("askMuteBtn"),muteLabel=byId("askMuteLabel");
-  if(mute){
-    mute.hidden=!live;
-    mute.setAttribute("aria-pressed",String(!!voice.muted));
-    mute.setAttribute("aria-label",voice.muted?"Turn the microphone back on":"Turn the microphone off");
-  }
-  if(muteLabel)muteLabel.textContent=voice.muted?"Unmute":"Mute";
-  // Stop is offered only while there is something to stop. A reply is never cut
-  // off by a noise, so this is the way to end one early.
-  var stop=byId("askStopBtn");
-  if(stop)stop.hidden=next!=="speaking";
-  var orb=byId("askOrb");
-  if(orb)orb.dataset.state=next==="off"?"idle":shown;
-  var words=VOICE_STATE[shown]||VOICE_STATE.off;
-  var heading=byId("askVoiceState");
-  if(heading)heading.textContent=words[0];
-  var status=byId("askVoiceStatus");
-  if(status)status.textContent=detail||words[1];
-}
-
-// Stops the microphone without ending the call. Nothing in the conversation is
-// touched: the transcript, the result sets and the context all stand.
-function setVoiceMuted(muted){
-  voice.muted=!!muted;
-  if(voice.mic)voice.mic.getAudioTracks().forEach(function(track){track.enabled=!voice.muted});
-  setVoiceState(voice.state,voice.muted?"The microphone is off. Nothing is being heard.":"");
-}
-
-// Quiet chat or Voice. The transcript is the same either way: a spoken question
-// and a typed one are the same conversation, so switching does not clear it.
-function setAskMode(mode){
-  var voiceMode=mode==="voice";
-  var panel=byId("askVoicePanel");
-  if(panel)panel.hidden=!voiceMode;
-  var quietBtn=byId("askQuietMode"),voiceBtn=byId("askVoiceMode");
-  if(quietBtn)quietBtn.setAttribute("aria-pressed",String(!voiceMode));
-  if(voiceBtn)voiceBtn.setAttribute("aria-pressed",String(voiceMode));
-  var composer=byId("askForm");
-  if(composer)composer.hidden=voiceMode;
-  var suggestions=byId("askSuggestions");
-  if(suggestions)suggestions.hidden=voiceMode;
-  var hint=byId("askHint");
-  if(hint)hint.textContent=voiceMode
-    ?"Voice \u00b7 the microphone is used only while a call is running"
-    :"Quiet chat \u00b7 microphone off";
-  // Leaving voice ends the call rather than leaving it running out of sight.
-  if(!voiceMode&&voice.state!=="off")stopVoice("");
-}
-
-// Ends the reply being spoken without ending the call: the response is
-// cancelled and whatever is already buffered for playback is dropped, so it
-// stops when asked rather than finishing the sentence it had queued.
-function stopSpeaking(){
-  if(!voice.channel||voice.state!=="speaking")return;
-  try{
-    voice.channel.send(JSON.stringify({type:"response.cancel"}));
-    voice.channel.send(JSON.stringify({type:"output_audio_buffer.clear"}));
-  }catch(e){}
-  voice.responding=false;
-  // Only the audio stops. The question and the answer stay in the transcript
-  // and the records stay in the panel: this ends a sentence, not a turn.
-  setVoiceState("listening","Stopped. Ask something else when you are ready.");
-}
-
-function stopVoice(detail){
-  if(voice.channel){try{voice.channel.close()}catch(e){}}
-  if(voice.pc){try{voice.pc.close()}catch(e){}}
-  if(voice.mic){voice.mic.getTracks().forEach(function(track){try{track.stop()}catch(e){}})}
-  if(voice.audio){try{voice.audio.srcObject=null}catch(e){}}
-  voice.pc=null;voice.mic=null;voice.channel=null;voice.responding=false;voice.heard="";
-  voice.muted=false;
-  // The call ends; the conversation does not. askTurns, askSets and the context
-  // are untouched, so the transcript and the records are still there to read.
-  setVoiceState("off",detail||"");
-}
-
-// A spoken question is answered by the same endpoint a typed one is, and lands
-// in the same transcript, so the two are one conversation rather than two.
-async function voiceAskTracker(question){
-  // Show what was said, not the model's rewriting of it. Asked to "look up DN
-  // Suite Remodel", the model sent a question that also demanded status,
-  // schedule, budget, risk and turnover date, and that is what appeared on
-  // screen as the user's own words. The transcription is theirs; the tool
-  // argument is only the fallback when transcription is unavailable.
-  var spoken=voice.heard&&voice.heard.trim()?voice.heard.trim():question;
-  voice.heard="";
-  // The same path a typed question takes: same endpoint, same sealed context,
-  // same result set. A spoken follow-up therefore means what a typed one
-  // means, and the evidence panel follows the conversation either way.
-  var turn=await askEngine(spoken,{spoken:true});
-  if(turn.state==="error")return {ok:false,error:turn.message};
-  return turn.answer;
-}
-
-// What the model is given back. The rows are already on screen, so this is kept
-// short: a long list spoken aloud is worse than a count and a few names.
-// What the model is given back. It is handed the answer the worker already
-// wrote, not the rows, because the rows are on screen beside it and because
-// the spoken answer and the written one have to be the same answer. Asking the
-// model to compose its own from the data would give the listener a different
-// reply from the reader, and only one of the two would have been checked.
-function voiceToolResult(answer){
-  if(!answer||answer.ok===false)return {error:answer&&answer.error?answer.error:"The lookup failed."};
-  var text=answer.summary||answer.message||"Nothing matched that question.";
-  return {
-    answer:text,
-    // Enough to let it handle a short follow-up without another lookup, and
-    // no more. Never the records: reading a list aloud is worse than saying
-    // how many there are and letting the reader look.
-    matched:answer.total||0,
-    showing:answer.returned||0,
-    each_row_is:answer.entityLabel||"records",
-    truncated:!!answer.truncated
-  };
-}
-
-function channelClosedGuard(pc){
-  // If the data channel closes the model can no longer ask for data, so the call
-  // is over whatever the audio is doing.
-  if(!voice.channel)return;
-  voice.channel.addEventListener("close",function(){
-    if(voice.pc===pc&&voice.state!=="off")stopVoice("The voice session closed. Start it again to carry on.");
+WS_VIEWS.risk_list=function(d){
+  return wsListHtml(d.rows||[],function(p){
+    return '<span class="wsq">'+esc(wsText(p.budget_risk))+" / "+esc(wsText(p.schedule_risk))+'</span>';
   });
-}
+};
 
-function wireVoiceChannel(channel,session){
-  channel.addEventListener("open",function(){
-    // Nothing to configure here: the instructions and the ask_tracker tool are
-    // set on the session when the worker mints it, so there is no session.update
-    // round trip to get wrong.
-    setVoiceState("listening");
+WS_VIEWS.project_detail=function(d){
+  var p=d.project;
+  if(!p)return '<p class="wsnote">That project could not be opened.</p>';
+  var variance=wsNum(p.forecast_variance),slip=wsNum(p.duration_change_days);
+  var out='<div class="wsmets">'
+    +wsMetric("Approved budget",wsMoney(p.approved_budget))
+    +wsMetric("Anticipated final",wsMoney(p.anticipated_final_cost))
+    +wsMetric("Forecast variance",variance===null?"Not recorded":wsMoneySigned(variance),
+      variance===null?"no figures yet":null,variance===null?null:(variance>0?"rose":"good"))
+    +wsMetric("Turnover",wsDate(p.current_turnover_date),
+      slip===null?null:(slip===0?"on the original date":wsDays(slip)+" from original"),
+      slip!==null&&slip>0?"amber":null)
+    +'</div>';
+  out+='<div class="wsflds">'
+    +wsField("Business unit",wsText(p.business_unit))
+    +wsField("Venue",wsText(p.venue))
+    +wsField("Status",wsText(p.status))
+    +wsField("Phase",wsText(p.phase))
+    +wsField("Type",wsText(p.project_type))
+    +wsField(p.project_type==="Development"?"Initiative":"CAPP",
+      wsText(p.capp_number||p.initiative_number))
+    +wsField("Project manager",wsText(p.project_manager||p.development_lead))
+    +wsField("Budget risk",wsText(p.budget_risk))
+    +wsField("Schedule risk",wsText(p.schedule_risk))
+    +wsField("Original turnover",wsDate(p.original_turnover_date))
+    +wsField("Current start",wsDate(p.current_start_date))
+    +wsField("Last reported",wsDate(p.reporting_period))
+    +'</div>';
+  if(p.scope_description){
+    out+='<div class="wsprose"><span class="wsk">Scope</span><p>'+esc(p.scope_description)+'</p></div>';
+  }
+  if(p.current_update||p.previous_update){
+    out+='<div class="wsprose"><span class="wsk">Latest update</span><p>'
+      +esc(p.current_update||"Nothing written this period.")+'</p></div>';
+  }
+  return out;
+};
+
+WS_VIEWS.budget_variance=function(d){
+  var rows=d.rows||[],t=d.totals||{};
+  var peak=rows.reduce(function(a,p){return Math.max(a,Math.abs(wsNum(p.forecast_variance)||0))},0);
+  var out='<div class="wsmets">'
+    +wsMetric("Approved",wsMoney(t.approved),wsCount(t.approvedCount||0,"project","projects")+" recorded")
+    +wsMetric("Anticipated",wsMoney(t.forecast),wsCount(t.forecastCount||0,"project","projects")+" recorded")
+    +wsMetric("Variance",wsMoneySigned(t.variance),
+      "across "+wsCount(t.varianceCount||0,"project","projects")+" with both figures",
+      (t.variance||0)>0?"rose":"good")
+    +wsMetric("Over budget",String(t.overBudget||0),
+      (t.noFigures?t.noFigures+" with no figures":"of "+(t.count||0)))
+    +'</div>';
+  out+='<ul class="wslist">'+rows.map(function(p){
+    var v=wsNum(p.forecast_variance);
+    var fig=v===null?'<span class="wsq wsq-mute">no figures</span>'
+      :'<span class="wsq'+(v>0?" wsq-rose":"")+'">'+wsMoneySigned(v)+'</span>'
+        +wsBar(v,peak,v>0?"rose":"good");
+    return wsRowHtml(p,fig);
+  }).join("")+'</ul>';
+  return out;
+};
+
+WS_VIEWS.budget_summary=function(d){
+  return WS_VIEWS.budget_variance({rows:d.rows||[],totals:d.totals||{}});
+};
+
+WS_VIEWS.schedule=function(d){
+  var rows=d.rows||[],t=d.totals||{};
+  var peak=rows.reduce(function(a,p){return Math.max(a,Math.abs(wsNum(p.duration_change_days)||0))},0);
+  var out='<div class="wsmets">'
+    +wsMetric("Slipped",String(t.slipped||0),"of "+(t.count||0)+" projects",t.slipped?"amber":null)
+    +wsMetric("Holding",String(t.onPlan||0),"on the original date")
+    +wsMetric("No date",String(t.noDates||0),"turnover not recorded")
+    +wsMetric("Furthest out",t.worst===null||t.worst===undefined?"—":t.worst+" days",
+      t.from?"first handover "+wsDate(t.from):null,t.worst?"amber":null)
+    +'</div>';
+  out+='<ul class="wslist">'+rows.map(function(p){
+    var s=wsNum(p.duration_change_days);
+    var fig='<span class="wsq">'+wsDate(p.current_turnover_date)+'</span>'
+      +(s===null?'':'<span class="wsq '+(s>0?"wsq-amber":"wsq-mute")+'">'+wsDays(s)+'</span>'
+        +wsBar(s,peak,s>0?"amber":"good"));
+    return wsRowHtml(p,fig);
+  }).join("")+'</ul>';
+  return out;
+};
+
+WS_VIEWS.risk_summary=function(d){
+  var buckets=d.buckets||[],rows=d.rows||[];
+  var peak=buckets.reduce(function(a,b){return Math.max(a,b.budget,b.schedule)},0);
+  var out='<div class="wsrisk">'
+    +'<div class="wsrisk-head"><span></span><span>Budget</span><span>Schedule</span></div>'
+    +buckets.map(function(b){
+      var tone=b.label==="High"?"rose":b.label==="Medium"?"amber":null;
+      return '<div class="wsrisk-row"><span class="wsrisk-k">'+esc(b.label)+'</span>'
+        +'<span class="wsrisk-v">'+b.budget+wsBar(b.budget,peak,tone)+'</span>'
+        +'<span class="wsrisk-v">'+b.schedule+wsBar(b.schedule,peak,tone)+'</span></div>';
+    }).join("")+'</div>';
+  out+=wsListHtml(rows,function(p){
+    return '<span class="wsq">'+esc(wsText(p.budget_risk))+" / "+esc(wsText(p.schedule_risk))+'</span>';
   });
-  channel.addEventListener("message",async function(event){
-    var message;
-    try{message=JSON.parse(event.data)}catch(e){return}
-    if(message.type==="response.function_call_arguments.done"&&message.name==="ask_tracker"){
-      var args={};
-      try{args=JSON.parse(message.arguments||"{}")}catch(e){}
-      // The lookup has started. Between the speaker finishing and the answer
-      // being spoken there was no state at all, which read as the call having
-      // missed the question.
-      if(voice.state==="listening")setVoiceState("thinking");
-      var answer=await voiceAskTracker(String(args.question||"").trim()||"show me the projects");
-      channel.send(JSON.stringify({type:"conversation.item.create",item:{
-        type:"function_call_output",call_id:message.call_id,
-        output:JSON.stringify(voiceToolResult(answer))
-      }}));
-      // Only ask for a response when one is not already running. Sending this
-      // unconditionally produced "Conversation already has an active response
-      // in progress", because the service often starts one itself once the tool
-      // output arrives.
-      if(!voice.responding)channel.send(JSON.stringify({type:"response.create"}));
-    }
-    // The caller has started and stopped speaking. Shown so the bar reacts to
-    // them rather than sitting still until the answer arrives.
-    if(message.type==="input_audio_buffer.speech_started"&&voice.state==="listening"){
-      setVoiceState("listening","Hearing you.");
-    }
-    if(message.type==="input_audio_buffer.speech_stopped"&&voice.state==="listening"){
-      setVoiceState("thinking");
-    }
-    // Event names differ between realtime API revisions, so the orb follows the
-    // shape of the type rather than an exact string: anything that is audio
-    // arriving means speaking, and the end of a response means listening again.
-    if(/audio/.test(message.type||"")&&/delta|started/.test(message.type||"")
-      &&!/input_audio/.test(message.type||"")){
-      if(voice.state==="listening"||voice.state==="thinking")setVoiceState("speaking");
-    }
-    if(/^response\.(done|completed)$/.test(message.type||"")||/audio.*(done|stopped)/.test(message.type||"")){
-      // Listening resumes by itself. A call is a conversation, not a series of
-      // separate questions, so nothing has to be pressed between them.
-      if(voice.state==="speaking"||voice.state==="thinking")setVoiceState("listening");
-    }
-    // What the listener actually said, when the session is transcribing it.
-    if(/input_audio_transcription/.test(message.type||"")&&message.transcript){
-      // Only if it has words. A cough or a door transcribes to "" or ".", and
-      // letting that overwrite what was said put punctuation on screen as the
-      // listener's question.
-      var heard=String(message.transcript).trim();
-      if(/[a-z0-9]/i.test(heard))voice.heard=heard;
-    }
-    if(message.type==="response.created")voice.responding=true;
-    if(/^response\.(done|completed|cancelled|incomplete)$/.test(message.type||"")){
-      voice.responding=false;
-      if(voice.state==="speaking"||voice.state==="thinking")setVoiceState("listening");
-    }
+  return out;
+};
 
-    if(message.type==="error"){
-      // Say what actually went wrong. The first version swallowed the payload
-      // and reported "ended unexpectedly", which told the user nothing and left
-      // nothing to diagnose from.
-      var reason=(message.error&&(message.error.message||message.error.code))||"";
-      console.log("assistant voice error:",JSON.stringify(message));
-      // Not every error ends a call. A clash over who starts the next response
-      // means the answer is already coming, and tearing the session down for it
-      // lost a working conversation mid-sentence.
-      if(/active response|already has an active/i.test(reason)){
-        voice.responding=true;
-        return;
-      }
-      stopVoice(reason?"Voice stopped: "+reason:"The voice session stopped. Start it again to carry on.");
-    }
-  });
-}
-
-async function startVoice(){
-  if(voice.state!=="off")return stopVoice("Call ended.");
-  if(!navigator.mediaDevices||!window.RTCPeerConnection){
-    return setVoiceState("off","This browser cannot open a voice session. Typing still works.");
-  }
-  setVoiceState("connecting");
-  var session;
-  try{
-    session=await api("/api/assistant/voice-session",{method:"POST",body:"{}"});
-  }catch(error){
-    return setVoiceState("off",error&&error.message?error.message:"A voice session could not be started.");
-  }
-  try{
-    voice.mic=await navigator.mediaDevices.getUserMedia({audio:true});
-  }catch(e){
-    return setVoiceState("off","The microphone is not available. Check the browser's permission for this site.");
-  }
-  try{
-    var pc=new RTCPeerConnection();
-    voice.pc=pc;
-    var audio=byId("askVoiceAudio");
-    voice.audio=audio;
-    pc.ontrack=function(event){if(audio)audio.srcObject=event.streams[0]};
-    // A dropped connection has to show, or the orb keeps breathing at someone
-    // who is talking to nothing.
-    pc.onconnectionstatechange=function(){
-      if(voice.pc!==pc)return;
-      if(pc.connectionState==="failed")stopVoice("The connection dropped. Start the call again to carry on.");
-      if(pc.connectionState==="disconnected"&&voice.state!=="off")setVoiceState(voice.state,"Reconnecting…");
+WS_VIEWS.change_comparison=function(d){
+  var p=d.project,pairs=d.pairs||[],n=d.narrative||{};
+  if(!p)return '<p class="wsnote">There is nothing to compare.</p>';
+  var out='<div class="wspairs">'+pairs.map(function(pair){
+    var fmt=function(v){
+      if(v===null||v===undefined)return "—";
+      return pair.format==="money"?wsMoney(v):pair.format==="date"?wsDate(v):esc(String(v));
     };
-    channelClosedGuard(pc);
-    voice.mic.getTracks().forEach(function(track){pc.addTrack(track,voice.mic)});
-    var channel=pc.createDataChannel("oai-events");
-    voice.channel=channel;
-    wireVoiceChannel(channel,session);
-    var offer=await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    // The browser exchanges SDP with OpenAI directly, holding only the
-    // short-lived credential minted above.
-    var reply=await fetch("https://api.openai.com/v1/realtime/calls?model="+encodeURIComponent(session.model),{
-      method:"POST",
-      headers:{authorization:"Bearer "+session.clientSecret,"content-type":"application/sdp"},
-      body:offer.sdp
-    });
-    if(!reply.ok)throw new Error("The voice service refused the connection.");
-    await pc.setRemoteDescription({type:"answer",sdp:await reply.text()});
-  }catch(error){
-    stopVoice(error&&error.message?error.message:"The voice session could not be opened.");
+    var delta="";
+    if(pair.delta!==null&&pair.delta!==undefined){
+      var tone=pair.delta>0?(pair.deltaFormat==="money_signed"?"rose":"amber"):"good";
+      delta='<span class="wsdelta wsdelta-'+tone+'">'
+        +(pair.deltaFormat==="money_signed"?wsMoneySigned(pair.delta):wsDays(pair.delta))+'</span>';
+    }
+    return '<div class="wspair"><span class="wspair-k">'+esc(pair.label)+'</span>'
+      +'<span class="wspair-was"><em>'+esc(pair.previousLabel||"Previous")+'</em>'+fmt(pair.previous)+'</span>'
+      +'<span class="wspair-arrow" aria-hidden="true"></span>'
+      +'<span class="wspair-now"><em>'+esc(pair.currentLabel||"Current")+'</em>'+fmt(pair.current)+'</span>'
+      +delta+'</div>';
+  }).join("")+'</div>';
+  if(n.previous||n.current){
+    out+='<div class="wsnarr">'
+      +'<div><span class="wsk">Previous period</span><p>'+esc(n.previous||"Nothing written.")+'</p></div>'
+      +'<div><span class="wsk">This period</span><p>'+esc(n.current||"Nothing written.")+'</p></div>'
+      +'</div>';
   }
+  return out;
+};
+
+WS_VIEWS.project_comparison=function(d){
+  var projects=d.projects||[],fields=d.fields||[];
+  if(projects.length<2)return '<p class="wsnote">Two or more projects are needed to compare.</p>';
+  var cols="repeat("+projects.length+",minmax(0,1fr))";
+  var out='<div class="wscmp" style="grid-template-columns:150px '+cols+'">';
+  out+='<span class="wscmp-corner"></span>';
+  projects.forEach(function(p){
+    out+='<button type="button" class="wscmp-head" data-ws-open="'+esc(p.id)+'">'
+      +esc(p.name||"Untitled")+'<em>'+esc(wsText(p.venue))+'</em></button>';
+  });
+  fields.forEach(function(f){
+    out+='<span class="wscmp-k">'+esc(f.label)+'</span>';
+    projects.forEach(function(p){
+      var raw=p[f.key],cell;
+      if(f.format==="money")cell=wsMoney(raw);
+      else if(f.format==="money_signed")cell=wsMoneySigned(raw);
+      else if(f.format==="date")cell=wsDate(raw);
+      else if(f.format==="days_signed")cell=wsDays(raw);
+      else cell=wsText(raw);
+      var tone="";
+      if(f.format==="money_signed"&&wsNum(raw)>0)tone=" wscmp-rose";
+      if(f.format==="days_signed"&&wsNum(raw)>0)tone=" wscmp-amber";
+      out+='<span class="wscmp-v'+tone+'">'+esc(cell)+'</span>';
+    });
+  });
+  return out+'</div>';
+};
+
+WS_VIEWS.timeline=function(d){
+  var events=d.events||[];
+  if(!events.length)return '<p class="wsnote">No dates are recorded for this project.</p>';
+  return '<ol class="wstl">'+events.map(function(e){
+    return '<li class="wstl-'+esc(e.kind)+'"><span class="wstl-d">'+esc(wsDate(e.date))+'</span>'
+      +'<span class="wstl-l">'+esc(e.label)+'</span></li>';
+  }).join("")+'</ol>';
+};
+
+WS_VIEWS.figure=function(d){
+  var metrics=d.metrics||[];
+  return '<div class="wsbig">'+metrics.map(function(m){
+    var value=m.format==="money"?wsMoney(m.value)
+      :m.format==="number"?String(Math.round(m.value*100)/100):wsText(m.value);
+    return '<div class="wsbig-m"><span>'+esc(m.label)+'</span><strong>'+esc(value)+'</strong></div>';
+  }).join("")+'</div>';
+};
+
+WS_VIEWS.group=function(d){
+  var rows=d.rows||[],cols=d.columns||[];
+  if(!rows.length||cols.length<2)return '<p class="wsnote">Nothing to show.</p>';
+  var keyCol=cols[0],valCol=cols[cols.length-1];
+  var peak=rows.reduce(function(a,r){return Math.max(a,Math.abs(wsNum(r[valCol])||0))},0);
+  return '<div class="wsgroup">'+rows.map(function(r){
+    var v=wsNum(r[valCol]);
+    var shown=/budget|cost|variance|total|sum|avg/i.test(valCol)&&v!==null?wsMoney(v):wsText(r[valCol]);
+    return '<div class="wsgroup-row"><span class="wsgroup-k">'+esc(wsText(r[keyCol]))+'</span>'
+      +wsBar(v,peak)+'<span class="wsgroup-v">'+esc(shown)+'</span></div>';
+  }).join("")+'</div>';
+};
+
+WS_VIEWS.empty=function(){
+  return '<p class="wsnote">The search found no matching records. '
+    +'That is a result about the search, not about the portfolio — try removing a condition.</p>';
+};
+
+// --- The workspace shell -----------------------------------------------------
+
+function wsCurrent(){return ws.focus>=0&&ws.focus<ws.views.length?ws.views[ws.focus]:null}
+
+function wsPush(view,question,followUp){
+  if(!view)return null;
+  // A follow-up stays in the same thread, so the previous result collapses to a
+  // strip above rather than disappearing. A new subject opens a thread, and
+  // everything before it folds into one line.
+  if(!followUp)ws.thread+=1;
+  ws.seq+=1;
+  var stored={
+    id:ws.seq,thread:ws.thread,question:question||"",
+    kind:view.kind,title:view.title,subtitle:view.subtitle,
+    count:view.count,truncated:view.truncated,data:view.data
+  };
+  ws.views.push(stored);
+  ws.focus=ws.views.length-1;
+  return stored;
+}
+
+function wsShow(id){
+  for(var i=0;i<ws.views.length;i++){
+    if(ws.views[i].id===Number(id)){ws.focus=i;askSave();renderAsk();return}
+  }
+}
+
+function wsStripHtml(v){
+  return '<button type="button" class="wsstrip" data-ws-show="'+v.id+'">'
+    +'<span class="wsstrip-t">'+esc(v.title)+'</span>'
+    +(v.subtitle?'<span class="wsstrip-s">'+esc(v.subtitle)+'</span>':'')
+    +'</button>';
+}
+
+function wsSpaceHtml(){
+  var focus=wsCurrent();
+  if(!focus){
+    return '<div class="wsempty">'
+      +'<p class="wsempty-t">Ask about your projects.</p>'
+      +'<p class="wsempty-s">Whatever you ask appears here — the list, the figures, the comparison. '
+      +'The conversation stays short.</p>'
+      +'<div class="wsempty-q">'+WS_OPENERS.map(function(q){
+        return '<button type="button" data-ws-ask="'+esc(q)+'">'+esc(q)+'</button>';
+      }).join("")+'</div></div>';
+  }
+
+  var same=[],earlier=0;
+  ws.views.forEach(function(v,i){
+    if(i===ws.focus)return;
+    if(v.thread===focus.thread)same.push(v);else earlier+=1;
+  });
+  same.reverse();
+
+  var out="";
+  if(same.length){
+    out+='<div class="wstrail">'+same.map(wsStripHtml).join("")+'</div>';
+  }
+  if(earlier){
+    out+='<button type="button" class="wsearlier" data-ws-earlier="1">'
+      +wsCount(earlier,"earlier result","earlier results")+'</button>';
+  }
+
+  var render=WS_VIEWS[focus.kind]||WS_VIEWS.project_list;
+  var pinned=ws.pins.some(function(x){return x.viewId===focus.id});
+  out+='<article class="wscard" id="wsCard">'
+    +'<header class="wscard-head"><div><h3>'+esc(focus.title)+'</h3>'
+    +(focus.subtitle?'<p>'+esc(focus.subtitle)+'</p>':'')+'</div>'
+    +'<div class="wscard-acts">'
+    +'<button type="button" class="wsghost'+(pinned?" is-on":"")+'" data-ws-pin="'+focus.id+'">'
+    +(pinned?"Pinned":"Pin to briefing")+'</button>'
+    +'</div></header>'
+    +'<div class="wscard-body">'+render(focus.data||{})+'</div>'
+    +(focus.truncated?'<p class="wscard-note">Capped at '+(focus.data.rows?focus.data.rows.length:0)
+      +' of '+focus.count+' matching records.</p>':'')
+    +'</article>';
+  return out;
+}
+
+function wsBriefHtml(){
+  if(!ws.pins.length){
+    return '<div class="wsbrief" data-open="0"><button type="button" class="wsbrief-tab" data-ws-brief="1">'
+      +'Briefing<span>empty</span></button></div>';
+  }
+  var body="";
+  if(ws.briefOpen){
+    body='<div class="wsbrief-body">'+ws.pins.map(function(pin,i){
+      return '<div class="wsbrief-row"><span><strong>'+esc(pin.title)+'</strong>'
+        +(pin.sub?'<em>'+esc(pin.sub)+'</em>':'')+'</span>'
+        +'<button type="button" class="wsx" data-ws-unpin="'+i+'" aria-label="Remove">&times;</button></div>';
+    }).join("")
+      +'<div class="wsbrief-foot"><button type="button" class="wsbtn" data-ws-export="text">Download briefing</button>'
+      +'<button type="button" class="wsghost" data-ws-export="csv">Export records</button></div></div>';
+  }
+  return '<div class="wsbrief" data-open="'+(ws.briefOpen?1:0)+'">'
+    +'<button type="button" class="wsbrief-tab" data-ws-brief="1">Briefing<span>'
+    +wsCount(ws.pins.length,"item","items")+'</span></button>'+body+'</div>';
+}
+
+// --- The conversation --------------------------------------------------------
+// Light by design: no bubbles, no avatars, no cards. A question in medium
+// weight, the answer under it, and a hairline between turns.
+
+function wsTurnHtml(turn){
+  var out='<div class="wsturn'+(turn.spoken?" is-spoken":"")+'">'
+    +'<p class="wsq-text">'+esc(turn.question)+'</p>';
+  if(turn.state==="pending"){
+    out+='<p class="wsa"><span class="wsdots"><i></i><i></i><i></i></span></p>';
+  }else if(turn.state==="error"){
+    out+='<p class="wsa wsa-err">'+esc(turn.message||"That could not be answered.")+'</p>';
+  }else{
+    out+='<p class="wsa">'+esc(turn.answer||"")+'</p>';
+    if(turn.viewId){
+      out+='<button type="button" class="wsalink" data-ws-show="'+turn.viewId+'">'
+        +esc(turn.viewTitle||"Show on screen")+'</button>';
+    }
+  }
+  return out+'</div>';
+}
+
+function wsActivityHtml(){
+  if(!ws.activity.length)return "";
+  return '<div class="wsact">'+ws.activity.map(function(label){
+    return '<span class="wsact-i">'+esc(label)+'</span>';
+  }).join("")+'</div>';
 }
 
 function renderAsk(){
-  var thread=byId("askThread");
+  var thread=byId("wsThread");
   if(!thread)return;
-  thread.innerHTML=askTurns.length?askTurns.map(askTurnHtml).join("")
-    :askWelcomeHtml();
-  var toBottom=function(){
-    if(typeof thread.scrollTo==="function")thread.scrollTo({top:thread.scrollHeight,behavior:"auto"});
-    else thread.scrollTop=thread.scrollHeight;
-  };
-  toBottom();
-  if(typeof requestAnimationFrame==="function")requestAnimationFrame(toBottom);
-  renderAskSuggestions();
-  renderAskUnits();
-  renderEvidence();
+  thread.innerHTML=ws.turns.length
+    ? ws.turns.map(wsTurnHtml).join("")+wsActivityHtml()
+    : '<div class="wshello"><p>Ask anything about the projects you can see. '
+      +'Speak or type — the answer appears on the right.</p></div>'+wsActivityHtml();
+  var bottom=function(){thread.scrollTop=thread.scrollHeight};
+  bottom();
+  if(typeof requestAnimationFrame==="function")requestAnimationFrame(bottom);
+
+  var space=byId("wsSpace");
+  if(space)space.innerHTML=wsSpaceHtml();
+  var brief=byId("wsBriefSlot");
+  if(brief)brief.innerHTML=wsBriefHtml();
+
+  var subject=byId("wsSubject");
+  if(subject){
+    var focus=wsCurrent();
+    subject.textContent=ws.subject&&ws.subject.label?ws.subject.label
+      :(focus?focus.title:"Portfolio");
+  }
+  var send=byId("wsSend");
+  if(send)send.disabled=ws.busy;
+  renderWsUnits();
 }
 
-// The opening message. It states what is here and offers a first question,
-// because an empty box with a cursor in it tells a reader nothing about what
-// this will answer.
-function askWelcomeHtml(){
-  var rows=askUnitRows();
-  var updates=state.updates?state.updates.length:0;
-  return '<article class="ask-turn">'+askAiLabel()
-    +'<div class="ask-bubble">'
-    +'<h3>A conversation with<br>your project portfolio.</h3>'
-    +'<p>Ask about <strong>'+esc(String(rows.length))+' project'+(rows.length===1?"":"s")+'</strong>'
-      +(updates?' and <strong>'+esc(String(updates))+' saved updates</strong>':"")
-      +'. Narrow the results, open a record, or turn a set into a briefing.</p>'
-    +'<p>Try <strong>“Which projects have high schedule risk?”</strong></p>'
-    +'<div class="ask-note">This assistant reads the records you are entitled to see. '
-      +'It never changes a project, and every answer lists the conditions it applied.</div>'
-    +'</div></article>';
-}
-
-// Suggestions follow the conversation: openers before anything is asked, then
-// the moves a reader actually wants next once a set exists.
-function renderAskSuggestions(){
-  var chips=byId("askSuggestions");
-  if(!chips)return;
-  var items=activeSet()&&activeSet().rows.length?ASK_NEXT:ASK_SUGGESTIONS;
-  chips.innerHTML=items.map(function(item){
-    var q=item.q||item,label=item.label||item;
-    return '<button type="button" class="ask-suggestion" data-ask-ask="'+esc(q)+'">'+esc(label)+'</button>';
-  }).join("");
-}
-
-// The scope selector, from the units this reader can actually see.
-function renderAskUnits(){
-  var pick=byId("askUnitScope");
-  if(!pick||pick.dataset.filled==="true")return;
+function renderWsUnits(){
+  var pick=byId("wsScope");
+  if(!pick||pick.dataset.filled==="1")return;
   var units=[];
   state.projects.forEach(function(p){if(units.indexOf(p.business_unit)<0)units.push(p.business_unit)});
+  if(!units.length)return;
   pick.innerHTML='<option value="All">All business units</option>'
     +units.map(function(u){return '<option value="'+esc(u)+'">'+esc(u)+'</option>'}).join("");
-  pick.dataset.filled="true";
+  pick.dataset.filled="1";
 }
 
-// The conversation's context, which is not the result-set history. This
-// answers "what does 'those' mean?" - it is always the most recent answer that
-// found something, whatever the chevrons are showing. The history answers
-// "what did result set 2 contain?", and moving between sets does not change
-// what the next question follows on from.
-function askConversationContext(){
-  for(var i=askTurns.length-1;i>=0;i--){
-    var prior=askTurns[i];
-    if(prior.state==="done"&&prior.answer&&prior.answer.rows&&prior.answer.rows.length){
-      return {
-        ids:prior.answer.rows.map(function(row){return row.id}).filter(function(id){
-          return typeof id==="number"}),
-        total:prior.answer.total,
-        // The worker's sealed record of that turn. It carries the conditions
-        // that produced the answer, which is what "what about Corporate?"
-        // needs, and it is opaque here: the page stores it and hands it back
-        // without being able to read it.
-        token:prior.answer.token||null
-      };
-    }
-  }
-  return null;
+function wsUnit(){var p=byId("wsScope");return p&&p.value?p.value:"All"}
+
+// --- Asking ------------------------------------------------------------------
+
+function wsContext(){
+  if(!ws.subject||!ws.subject.ids||!ws.subject.ids.length)return null;
+  return {ids:ws.subject.ids,total:ws.subject.total,token:ws.subject.token||null};
 }
 
-function askConversationHistory(){
-  return askTurns.filter(function(prior){
-    return prior.state==="done"&&prior.answer;
-  }).slice(-6).map(function(prior){
-    return {
-      question:prior.question,
-      intent:prior.answer.intent,
-      total:typeof prior.answer.total==="number"?prior.answer.total:undefined,
-      token:prior.answer.token||undefined
-    };
+function wsHistory(){
+  return ws.turns.filter(function(t){return t.state==="done"}).slice(-6).map(function(t){
+    return {question:t.question,intent:t.intent,total:t.total,token:t.token||undefined};
   });
 }
 
-// One path for a question, whether it was typed or spoken. Both land in the
-// same transcript, carry the same context, and produce the same result set, so
-// the two modes are one conversation rather than two implementations.
+// One path for a typed question. The worker writes the SQL, checks it, runs it
+// under this reader's scope, and hands back both halves of the answer: the
+// sentence for the conversation and the View for the workspace.
 async function askEngine(text,options){
   var spoken=options&&options.spoken;
-  var turn={question:text,state:"pending",answer:null,spoken:!!spoken};
-  askTurns.push(turn);
+  var turn={question:text,state:"pending",spoken:!!spoken};
+  ws.turns.push(turn);
+  ws.busy=true;
   renderAsk();
   try{
     var payload={question:text};
-    var context=askConversationContext();
+    var context=wsContext();
     if(context)payload.context=context;
-    var history=askConversationHistory();
+    var history=wsHistory();
     if(history.length)payload.history=history;
+    var unit=wsUnit();
+    if(unit&&unit!=="All")payload.unit=unit;
+
     var answer=await api("/api/assistant/ask",{method:"POST",body:JSON.stringify(payload)});
-    turn.state="done";turn.answer=answer;
-    // A result set is made only when records came back. An answer that found
-    // nothing is still an answer and still belongs in the conversation, but it
-    // must not take the evidence panel with it: the records already on screen
-    // are usually what the next question is about.
-    if(answer.rows&&answer.rows.length){
-      recordSet(text,answer);
-      turn.setIndex=askSets.length-1;
+    turn.state="done";
+    turn.answer=answer.summary||answer.message||"";
+    turn.intent=answer.intent;
+    turn.total=answer.total;
+    turn.token=answer.token||null;
+
+    if(answer.view&&answer.view.kind&&answer.view.kind!=="empty"){
+      var stored=wsPush(answer.view,text,!!answer.followUp);
+      if(stored){turn.viewId=stored.id;turn.viewTitle=stored.title}
+      var ids=(answer.rows||[]).map(function(r){return r.id}).filter(function(id){
+        return typeof id==="number"});
+      ws.subject={
+        ids:ids,total:answer.total,token:answer.token||null,
+        label:answer.followUp&&ws.subject&&ws.subject.label
+          ?ws.subject.label+" · "+stored.title:stored.title
+      };
+    }else if(answer.view&&answer.view.kind==="empty"){
+      wsPush(answer.view,text,!!answer.followUp);
     }
   }catch(error){
-    // api() throws with the worker's own message, which already explains a
-    // refusal, a missing key or a rate limit in words a user can act on.
     turn.state="error";
     turn.message=error&&error.message?error.message:"That question could not be answered.";
   }
+  ws.busy=false;
   askSave();
   renderAsk();
   return turn;
@@ -1869,228 +1362,371 @@ async function askEngine(text,options){
 
 async function submitAsk(question){
   var text=String(question||"").trim();
-  if(!text)return;
-  var send=byId("askSubmit");
-  if(send)send.disabled=true;
+  if(!text||ws.busy)return;
   await askEngine(text,{spoken:false});
-  if(send)send.disabled=false;
 }
 
-// --- Briefing, CSV and printing ---------------------------------------------
-// All three read the active result set, so moving the rail back to an earlier
-// question changes what they produce. That is the whole point of keeping the
-// sets: a briefing belongs to a question, not to whatever was asked last.
-function briefingText(set){
-  var totals=askTotals(set.rows);
-  var periods=set.rows.map(function(p){return p.reporting_period}).filter(Boolean).sort();
-  var lines=[
-    "D&C PROJECT BRIEFING",
-    "Question: "+set.question,
-    "Scope: "+(set.filters.length?set.filters.join(" · "):"All available projects"),
-    "Business unit: "+(set.unit==="All"?"All business units":set.unit),
-    "Prepared: "+new Date().toISOString().slice(0,10),
-    "Reporting dates: "+(periods.length
-      ?periods[0]+(periods[periods.length-1]!==periods[0]?" to "+periods[periods.length-1]:"")
-      :"none recorded"),
-    "",
-    "Project count: "+totals.count+(set.truncated?" of "+set.total+" matched (answer capped at "+set.returned+")":""),
-    "Approved budgets: "+askMoney(totals.approved)+" ("+totals.approvedCount+" of "+totals.count+" recorded)",
-    "Forecast costs: "+askMoney(totals.forecast)+" ("+totals.forecastCount+" of "+totals.count+" recorded)",
-    "Matched-pair variance: "+askMoney(totals.pairedVariance)+" ("+totals.pairedCount+" with both figures)",
-    "High risk: "+totals.highRisk+"   Above budget: "+totals.overBudget+"   Turnover moved later: "+totals.delayed,
-    "",
-    "Totals cover different sets of projects where figures are missing.",
-    "The matched-pair variance is the only directly comparable number.",
-    "",
-    "----------------------------------------------------------------------"
-  ];
-  set.rows.forEach(function(p){
-    var days=askNum(p.duration_change_days);
-    lines.push(
-      (p.venue||p.section_name||p.business_unit||"")+" | "+p.name+" [Project "+p.id+"]",
-      (p.business_unit||"")+" · "+(p.status||"")+" · "+(p.project_manager||p.development_lead||"Manager not recorded"),
-      "Budget risk: "+(p.budget_risk||"Not Rated")+" | Schedule risk: "+(p.schedule_risk||"Not Rated"),
-      "Approved: "+askMoney(p.approved_budget)+" | Forecast: "+askMoney(p.anticipated_final_cost)
-        +" | Variance: "+askMoney(p.forecast_variance),
-      "Turnover: "+(p.original_turnover_date||"not recorded")+" → "+(p.current_turnover_date||"not recorded")
-        +(days===null?"":" ("+days+" days)"),
-      "Reporting period: "+(p.reporting_period||"not recorded"),
-      "Update: "+(p.current_update||"No activity update recorded."),
-      "----------------------------------------------------------------------");
+// --- Voice -------------------------------------------------------------------
+// One realtime session holding the data tools itself. The browser runs each
+// tool call against /api/assistant/tool and renders the View it gets back
+// before handing the model its one-line summary — so the screen is already
+// right while the sentence is still being spoken.
+
+var voice={state:"off",pc:null,channel:null,mic:null,audio:null,muted:false,
+  responding:false,heard:"",pending:0,speech:""};
+
+function setVoiceState(next,detail){
+  voice.state=next;
+  var dot=byId("wsPresence");
+  if(dot)dot.setAttribute("data-state",next);
+  var mic=byId("wsMic");
+  if(mic){
+    mic.setAttribute("aria-pressed",next==="off"?"false":"true");
+    mic.classList.toggle("is-live",next!=="off");
+    mic.title=next==="off"?"Start talking":"End the call";
+  }
+  var note=byId("wsVoiceNote");
+  if(note){
+    note.textContent=detail||(next==="off"?""
+      :next==="connecting"?"Connecting…"
+      :next==="listening"?"Listening"
+      :next==="thinking"?"Working"
+      :next==="speaking"?"Speaking":"");
+    note.hidden=!note.textContent;
+  }
+}
+
+function stopVoice(message){
+  if(voice.pc){try{voice.pc.close()}catch(e){}}
+  if(voice.mic){voice.mic.getTracks().forEach(function(t){try{t.stop()}catch(e){}})}
+  voice.pc=null;voice.channel=null;voice.mic=null;voice.responding=false;voice.pending=0;
+  ws.activity=[];
+  setVoiceState("off",message||"");
+  renderAsk();
+}
+
+function setVoiceMuted(muted){
+  voice.muted=!!muted;
+  if(voice.mic)voice.mic.getTracks().forEach(function(t){t.enabled=!voice.muted});
+}
+
+// A tool call from the realtime model. The result lands on screen first.
+async function voiceTool(name,args){
+  var label=null;
+  try{
+    var out=await api("/api/assistant/tool",{method:"POST",
+      body:JSON.stringify({name:name,arguments:args})});
+    label=out.label||null;
+    if(out.view){
+      // A tool call inside the same spoken turn refines what is already there;
+      // the first one of a turn starts a thread.
+      var stored=wsPush(out.view,voice.heard||"",voice.pending>1);
+      if(stored&&ws.turns.length){
+        var last=ws.turns[ws.turns.length-1];
+        if(last&&last.spoken&&last.state!=="error"){last.viewId=stored.id;last.viewTitle=stored.title}
+      }
+    }
+    if(out.subject){
+      ws.subject={ids:out.subject.ids||[],label:out.subject.label||"",total:out.view?out.view.count:0};
+    }
+    askSave();
+    renderAsk();
+    return {
+      result:out.speak||"Done.",
+      subject_ids:(out.subject&&out.subject.ids)||[],
+      matched:out.view?out.view.count:null
+    };
+  }catch(error){
+    return {error:error&&error.message?error.message:"That lookup failed."};
+  }finally{
+    if(label)ws.activity=ws.activity.filter(function(x){return x!==label});
+  }
+}
+
+function wireVoiceChannel(channel,session){
+  var labels=session.labels||{};
+  channel.addEventListener("open",function(){setVoiceState("listening")});
+  channel.addEventListener("message",async function(event){
+    var message;
+    try{message=JSON.parse(event.data)}catch(e){return}
+    var type=message.type||"";
+
+    if(type==="response.function_call_arguments.done"){
+      var args={};
+      try{args=JSON.parse(message.arguments||"{}")}catch(e){}
+      var label=labels[message.name]||"working";
+      ws.activity.push(label);
+      voice.pending+=1;
+      if(voice.state==="listening")setVoiceState("thinking");
+      renderAsk();
+      var out=await voiceTool(message.name,args);
+      channel.send(JSON.stringify({type:"conversation.item.create",item:{
+        type:"function_call_output",call_id:message.call_id,output:JSON.stringify(out)
+      }}));
+      // The service usually starts its own response once a tool result lands.
+      // Asking for a second one produces "already has an active response".
+      if(!voice.responding)channel.send(JSON.stringify({type:"response.create"}));
+      renderAsk();
+      return;
+    }
+
+    if(type==="input_audio_buffer.speech_started"){
+      voice.pending=0;
+      if(voice.state!=="off")setVoiceState("listening","Listening");
+    }
+    if(type==="input_audio_buffer.speech_stopped"&&voice.state==="listening"){
+      setVoiceState("thinking");
+    }
+    if(/input_audio_transcription/.test(type)&&message.transcript){
+      var heard=String(message.transcript).trim();
+      // A cough or a door transcribes to "" or ".". Letting that through put
+      // punctuation on screen as somebody's question.
+      if(/[a-z0-9]/i.test(heard)){
+        voice.heard=heard;
+        ws.turns.push({question:heard,state:"pending",spoken:true});
+        askSave();renderAsk();
+      }
+    }
+    if(type==="response.created"){voice.responding=true}
+    // The spoken answer, assembled as it arrives, so the conversation shows
+    // what was actually said rather than a paraphrase of it.
+    if(/transcript\\.delta$/.test(type)&&message.delta){voice.speech+=message.delta}
+    if(/audio/.test(type)&&/delta|started/.test(type)&&!/input_audio/.test(type)){
+      if(voice.state==="listening"||voice.state==="thinking")setVoiceState("speaking");
+    }
+    if(/^response\\.(done|completed|cancelled|incomplete)$/.test(type)){
+      voice.responding=false;
+      voice.pending=0;
+      ws.activity=[];
+      var said=voice.speech.trim();
+      voice.speech="";
+      for(var i=ws.turns.length-1;i>=0;i--){
+        if(ws.turns[i].spoken&&ws.turns[i].state==="pending"){
+          ws.turns[i].state="done";
+          ws.turns[i].answer=said||"(answered on screen)";
+          break;
+        }
+      }
+      if(voice.state==="speaking"||voice.state==="thinking")setVoiceState("listening");
+      askSave();renderAsk();
+    }
+    if(type==="error"){
+      var reason=(message.error&&(message.error.message||message.error.code))||"";
+      console.log("assistant voice error:",JSON.stringify(message));
+      if(/active response|already has an active/i.test(reason)){voice.responding=true;return}
+      stopVoice(reason?"Voice stopped: "+reason:"The call ended. Start it again to carry on.");
+    }
   });
-  lines.push("Read-only briefing. Figures are the saved values in the Tracker at the time of this export.");
+  channel.addEventListener("close",function(){
+    if(voice.state!=="off")stopVoice("The call ended.");
+  });
+}
+
+async function startVoice(){
+  if(voice.state!=="off")return stopVoice("");
+  if(!navigator.mediaDevices||!window.RTCPeerConnection){
+    return setVoiceState("off","This browser cannot open a call. Typing still works.");
+  }
+  setVoiceState("connecting");
+  var session;
+  try{
+    session=await api("/api/assistant/voice-session",{method:"POST",body:"{}"});
+  }catch(error){
+    return setVoiceState("off",error&&error.message?error.message:"A call could not be started.");
+  }
+  try{
+    voice.mic=await navigator.mediaDevices.getUserMedia({audio:true});
+  }catch(e){
+    return setVoiceState("off","The microphone is not available. Check this site's permission.");
+  }
+  try{
+    var pc=new RTCPeerConnection();
+    voice.pc=pc;
+    var audio=byId("wsAudio");
+    voice.audio=audio;
+    pc.ontrack=function(event){if(audio)audio.srcObject=event.streams[0]};
+    pc.onconnectionstatechange=function(){
+      if(voice.pc!==pc)return;
+      if(pc.connectionState==="failed")stopVoice("The connection dropped.");
+    };
+    voice.mic.getTracks().forEach(function(track){pc.addTrack(track,voice.mic)});
+    var channel=pc.createDataChannel("oai-events");
+    voice.channel=channel;
+    wireVoiceChannel(channel,session);
+    var offer=await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    var reply=await fetch("https://api.openai.com/v1/realtime/calls?model="
+      +encodeURIComponent(session.model),{
+      method:"POST",
+      headers:{authorization:"Bearer "+session.clientSecret,"content-type":"application/sdp"},
+      body:offer.sdp
+    });
+    if(!reply.ok)throw new Error("The voice service refused the connection.");
+    await pc.setRemoteDescription({type:"answer",sdp:await reply.text()});
+  }catch(error){
+    stopVoice(error&&error.message?error.message:"The call could not be opened.");
+  }
+}
+
+// --- Pinning and export ------------------------------------------------------
+
+function wsPin(id){
+  var view=null;
+  ws.views.forEach(function(v){if(v.id===Number(id))view=v});
+  if(!view)return;
+  var at=-1;
+  ws.pins.forEach(function(p,i){if(p.viewId===view.id)at=i});
+  if(at>=0)ws.pins.splice(at,1);
+  else ws.pins.push({viewId:view.id,title:view.title,sub:view.subtitle||"",
+    kind:view.kind,rows:(view.data&&view.data.rows)||[]});
+  askSave();renderAsk();
+}
+
+function wsDownload(name,text,type){
+  var blob=new Blob([text],{type:type});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement("a");
+  a.href=url;a.download=name;document.body.appendChild(a);a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){URL.revokeObjectURL(url)},1000);
+}
+
+function wsBriefText(){
+  var lines=["D&C PROJECT BRIEFING",
+    "Prepared: "+new Date().toISOString().slice(0,10),
+    "Business unit: "+(wsUnit()==="All"?"All business units":wsUnit()),""];
+  ws.pins.forEach(function(pin,i){
+    lines.push((i+1)+". "+pin.title);
+    if(pin.sub)lines.push("   "+pin.sub);
+    (pin.rows||[]).slice(0,25).forEach(function(p){
+      lines.push("   - "+(p.name||"")+"  ["+(p.venue||"")+" / "+(p.business_unit||"")+"]"
+        +"  budget "+wsMoney(p.approved_budget)
+        +"  variance "+wsMoneySigned(p.forecast_variance)
+        +"  turnover "+wsDate(p.current_turnover_date)+" ("+wsDays(p.duration_change_days)+")");
+    });
+    lines.push("");
+  });
+  lines.push("Read-only extract. Figures are as recorded in the Tracker on the date above.");
   return lines.join("\\n");
 }
 
-function csvText(rows){
-  var cols=["id","business_unit","venue","section_name","name","project_type","status","phase",
-    "project_manager","development_lead","approved_budget","anticipated_final_cost","forecast_variance",
-    "budget_risk","schedule_risk","original_turnover_date","current_turnover_date",
-    "duration_change_days","reporting_period"];
-  // A leading =, +, - or @ is prefixed with an apostrophe: a spreadsheet would
-  // otherwise read a project name as a formula.
-  var cell=function(value){
-    var text=value===null||value===undefined?"":String(value);
-    if(/^[=+\\-@\\t\\r]/.test(text))text="'"+text;
-    return '"'+text.replace(/"/g,'""')+'"';
+function wsBriefCsv(){
+  var head=["Pinned under","Project","Venue","Business unit","Status","Phase",
+    "Approved budget","Anticipated final","Forecast variance","Current turnover","Days moved"];
+  var out=[head.join(",")];
+  var cell=function(v){
+    var s=String(v==null?"":v);
+    return /[",\\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
   };
-  // The header is quoted like every other cell, so a reader opening the file
-  // in a text editor sees one consistent shape rather than two.
-  return [cols.map(cell).join(",")].concat(rows.map(function(p){
-    return cols.map(function(c){return cell(p[c])}).join(",");
-  })).join("\\r\\n");
+  ws.pins.forEach(function(pin){
+    (pin.rows||[]).forEach(function(p){
+      out.push([pin.title,p.name,p.venue,p.business_unit,p.status,p.phase,
+        p.approved_budget,p.anticipated_final_cost,p.forecast_variance,
+        p.current_turnover_date,p.duration_change_days].map(cell).join(","));
+    });
+  });
+  return out.join("\\n");
 }
 
-function askDownload(name,text,type){
-  var blob=new Blob([text],{type:type}),url=URL.createObjectURL(blob);
-  var link=document.createElement("a");
-  link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();
-  setTimeout(function(){URL.revokeObjectURL(url)},60000);
-}
-
-function askSlug(set){
-  var base=(set.unit==="All"?"portfolio":set.unit).replace(/[^A-Za-z0-9]+/g,"-").toLowerCase();
-  return base+"-"+new Date().toISOString().slice(0,10);
-}
-
-// Opens a record inside the evidence panel, the way the pilot does, and keeps
-// it as part of the set so the rail restores it with everything else.
-async function openAskPanelRecord(id){
-  var set=activeSet();
-  if(!set)return;
-  set.recordId=Number(id);
-  set.view="record";
-  set.history=null;
-  renderEvidence();
-  // The history endpoint applies the same business-unit scope as every other
-  // route: an out-of-scope id answers 404, so this cannot be used to probe.
+// Opening a project from any component is itself a question: it refines the
+// subject rather than leaving the workspace.
+async function wsOpen(id){
+  if(ws.busy)return;
+  ws.busy=true;renderAsk();
   try{
-    var data=await api("/api/projects/"+Number(id)+"/history");
-    set.history=data.history||[];
+    var out=await api("/api/assistant/tool",{method:"POST",
+      body:JSON.stringify({name:"project_detail",arguments:{project_id:Number(id)}})});
+    if(out.view){
+      var stored=wsPush(out.view,"",true);
+      if(out.subject)ws.subject={ids:out.subject.ids||[],label:out.subject.label||stored.title};
+    }
   }catch(error){
-    set.history=[];
+    toast(error&&error.message?error.message:"That project could not be opened.");
   }
-  if(activeSet()===set&&set.view==="record")renderEvidence();
+  ws.busy=false;askSave();renderAsk();
 }
 
-function askAction(action){
-  var set=activeSet();
-  if(action==="browse"){setView("projects");return}
-  if(action==="more"&&set){set.shown+=ASK_PAGE;renderEvidence();return}
-  if(action==="back"&&set){set.view="records";set.recordId=null;renderEvidence();return}
-  if(action==="briefing"&&set){set.view="briefing";renderEvidence();return}
-  if(action==="record-briefing"&&set&&set.recordId){
-    // A briefing for the one record, without disturbing the set it came from.
-    var one=set.rows.filter(function(p){return p.id===set.recordId});
-    if(!one.length)return;
-    askDownload("dn-dc-briefing-project-"+set.recordId+".txt",
-      briefingText(Object.assign({},set,{rows:one,total:one.length,returned:1,truncated:false,
-        question:"Project record "+one[0].name})),"text/plain;charset=utf-8");
-    toast("Project briefing downloaded.");
-    return;
-  }
-  if(!set||!set.rows.length){toast("Ask a question first, then a briefing can be built from the records it finds.");return}
-  if(action==="download"){
-    askDownload("dn-dc-briefing-"+askSlug(set)+".txt",briefingText(set),"text/plain;charset=utf-8");
-    toast("Briefing downloaded for result "+(askIndex+1)+" of "+askSets.length+".");
-    return;
-  }
-  if(action==="csv"){
-    askDownload("dn-dc-results-"+askSlug(set)+".csv",csvText(set.rows),"text/csv;charset=utf-8");
-    toast("CSV downloaded for "+set.rows.length+" record"+(set.rows.length===1?"":"s")+".");
-    return;
-  }
-  if(action==="print"){
-    set.view="briefing";
-    renderEvidence();
-    // The briefing has to be painted before the print dialog reads the page.
-    setTimeout(function(){window.print()},60);
-  }
-}
+// --- Wiring ------------------------------------------------------------------
 
 document.addEventListener("submit",function(event){
-  if(event.target&&event.target.id==="askForm"){
+  if(event.target&&event.target.id==="wsForm"){
     event.preventDefault();
-    var input=byId("askInput");
+    var input=byId("wsInput");
     var question=input.value;
     input.value="";
+    input.style.height="";
     submitAsk(question);
   }
 });
+
 document.addEventListener("keydown",function(event){
-  if(event.target&&event.target.id==="askInput"&&event.key==="Enter"&&!event.shiftKey){
+  if(event.target&&event.target.id==="wsInput"&&event.key==="Enter"&&!event.shiftKey){
     event.preventDefault();
     var value=event.target.value;
     event.target.value="";
+    event.target.style.height="";
     submitAsk(value);
   }
 });
-document.addEventListener("click",function(event){
-  // Clicking outside the record view closes it. dialog has padding:0, so a click
-  // whose target is the dialog element itself landed on the backdrop rather than
-  // on anything in it. Deliberately only this one: it shows a record and holds
-  // nothing, whereas the same gesture on an edit dialog would throw away typing.
-  if(event.target&&event.target.id==="askRecordDialog"){
-    event.target.close();
-    return;
+
+// The composer grows with what is typed, to a point. A fixed two-line box
+// hides the end of a long question while it is being written.
+document.addEventListener("input",function(event){
+  if(event.target&&event.target.id==="wsInput"){
+    event.target.style.height="auto";
+    event.target.style.height=Math.min(event.target.scrollHeight,132)+"px";
   }
+});
+
+document.addEventListener("click",function(event){
   var closest=function(selector){
     return event.target.closest?event.target.closest(selector):null;
   };
-  // A suggestion, a business-unit bar, or anything else that asks a question.
-  var asks=closest("[data-ask-ask]");
-  if(asks){submitAsk(asks.dataset.askAsk);return}
-  // Open a record inside the evidence panel, as the pilot does.
-  var open=closest("[data-ask-open]");
-  if(open){openAskPanelRecord(open.dataset.askOpen);return}
-  // The dialog is the full activity history, for when the panel's six entries
-  // are not enough.
-  var full=closest("[data-ask-record-full]");
-  if(full){openAskRecord(full.dataset.askRecordFull);return}
-  // Kept for anything still pointing at the old attribute.
-  var record=closest("[data-ask-record]");
-  if(record){openAskRecord(record.dataset.askRecord);return}
-  var action=closest("[data-ask-action]");
-  if(action){askAction(action.dataset.askAction);return}
-  var crumb=closest("[data-ask-crumb]");
-  if(crumb){
-    if(crumb.dataset.askCrumb==="browse"){setView("projects");return}
-    // Back to the conversation's own level: the records of the active set, or
-    // the portfolio when nothing has been asked.
-    var set=activeSet();
-    if(set){set.view="records";set.recordId=null}
-    renderEvidence();
+  var ask=closest("[data-ws-ask]");
+  if(ask){submitAsk(ask.dataset.wsAsk);return}
+  var open=closest("[data-ws-open]");
+  if(open){wsOpen(open.dataset.wsOpen);return}
+  var show=closest("[data-ws-show]");
+  if(show){wsShow(show.dataset.wsShow);return}
+  var pin=closest("[data-ws-pin]");
+  if(pin){wsPin(pin.dataset.wsPin);return}
+  var unpin=closest("[data-ws-unpin]");
+  if(unpin){ws.pins.splice(Number(unpin.dataset.wsUnpin),1);askSave();renderAsk();return}
+  if(closest("[data-ws-brief]")){ws.briefOpen=!ws.briefOpen;renderAsk();return}
+  var earlier=closest("[data-ws-earlier]");
+  if(earlier){
+    // Step back to the newest result of the previous thread.
+    var focus=wsCurrent();
+    for(var i=ws.views.length-1;i>=0;i--){
+      if(focus&&ws.views[i].thread<focus.thread){ws.focus=i;break}
+    }
+    askSave();renderAsk();return;
+  }
+  var exp=closest("[data-ws-export]");
+  if(exp){
+    if(!ws.pins.length){toast("Pin something first.");return}
+    if(exp.dataset.wsExport==="csv"){
+      wsDownload("dn-dc-briefing.csv",wsBriefCsv(),"text/csv;charset=utf-8");
+    }else{
+      wsDownload("dn-dc-briefing.txt",wsBriefText(),"text/plain;charset=utf-8");
+    }
     return;
   }
-  // Matched with closest, not by the target's own id. Each of these buttons
-  // holds an icon, and a click on the icon makes the svg the target - so the id
-  // never matched and only the few pixels of padding around the icon worked.
-  // That read as the control being unreliable rather than as a dead centre.
-  if(closest("#askBrowse")){setView("projects");return}
-  if(closest("#askOlder")){showSet(askIndex-1);return}
-  if(closest("#askNewer")){showSet(askIndex+1);return}
-  if(event.target&&event.target.id==="askClear"){
-    askTurns=[];askSets=[];askIndex=-1;askSave();renderAsk();return;
+  if(closest("#wsMic")){startVoice();return}
+  if(closest("#wsNew")){
+    ws.turns=[];ws.views=[];ws.focus=-1;ws.subject=null;ws.thread=0;ws.activity=[];
+    askSave();renderAsk();return;
   }
-  // One control starts and ends the call, and says which it will do.
-  var call=closest("#askVoiceBtn");
-  if(call){startVoice();return}
-  if(closest("#askStopBtn")){stopSpeaking();return}
-  var mute=closest("#askMuteBtn");
-  if(mute){setVoiceMuted(!voice.muted);return}
-  if(event.target&&event.target.id==="askQuietMode"){setAskMode("quiet");return}
-  if(event.target&&event.target.id==="askVoiceMode"){setAskMode("voice");return}
 });
 
-// Changing the scope starts a fresh line of questioning: the previous sets
+// Changing scope starts a fresh line of questioning: the results on screen
 // belonged to a different scope, and silently reinterpreting them under a new
-// one would answer questions nobody asked.
+// one would answer a question nobody asked.
 document.addEventListener("change",function(event){
-  if(event.target&&event.target.id==="askUnitScope"){
-    askSets=[];askIndex=-1;
-    renderAsk();
-    toast("Search scope is now "+(askUnit()==="All"?"all business units":askUnit())
-      +". Previous result sets were cleared.");
+  if(event.target&&event.target.id==="wsScope"){
+    ws.views=[];ws.focus=-1;ws.subject=null;ws.thread=0;
+    askSave();renderAsk();
+    toast("Scope is now "+(wsUnit()==="All"?"all business units":wsUnit())+".");
   }
 });
 

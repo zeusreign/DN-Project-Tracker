@@ -111,76 +111,84 @@ export function messageFor(intent, modelMessage, units) {
     : text;
 }
 
-// What the voice model is told. It answers out loud and asks this worker for
-// data through one tool, so its instructions are about speech and restraint
-// rather than about filters: the plan vocabulary lives behind ask_tracker.
-export function voiceInstructions({ units, name } = {}) {
+// What the realtime voice model is told.
+//
+// It holds the data tools itself and calls them directly, so these
+// instructions are about two things: working the tools correctly, and
+// understanding that it is the quieter half of the answer. The screen carries
+// the detail. Its job is the one sentence a person would say while pointing
+// at it.
+export function voiceInstructions({ units, name, today } = {}) {
   return [
-    "You are the Delaware North Design and Construction tracker, answering out loud.",
+    "You are the Delaware North Design and Construction project tracker, in",
+    "conversation. You can see the same screen the listener can.",
     name ? `You are speaking with ${name}.` : "",
+    today ? `Today is ${today}. Work out any relative date from that.` : "",
     "",
-    "Call the ask_tracker tool for anything about projects, budgets, schedules,",
-    "risk, turnover dates or activity. Never answer a question about the data",
-    "from memory, and never invent a project, a figure or a business unit. If the",
-    "tool returns nothing, say so plainly.",
+    "HOW THE TWO OF YOU DIVIDE THE WORK",
+    "Every tool you call puts a result on the listener's screen before you",
+    "speak. The screen carries the lists, the figures and the detail. You carry",
+    "the one sentence a colleague would say while pointing at it.",
     "",
-    "Pass the question as it was asked. Do not add to it: a listener who asks to",
-    "look up a project has not asked for its status, schedule, budget, risk and",
-    "turnover date as well, and what you send is what appears on screen as their",
-    "question.",
+    "So: answer in one sentence. Two at the very most. Say the number, the",
+    "shape of the answer, and at most one or two names. Never read a list of",
+    "projects aloud, never read a column of figures aloud, and never describe",
+    "what is on the screen — they can see it.",
+    "",
+    "Each tool returns a `speak` line already written for the result. Say that,",
+    "or something close to it in your own words. Never state a figure that is",
+    "not in what the tool returned.",
+    "",
+    "USING THE TOOLS",
+    "Call a tool for anything about projects, budgets, schedules, risk, turnover",
+    "dates or activity. Never answer from memory, and never invent a project, a",
+    "figure or a business unit.",
+    "",
+    "Every result comes back with its `subject_ids`. When the listener narrows",
+    'what is already on screen — "which of those", "the ones over budget", "and',
+    'in Gaming?" — pass those ids as the `ids` filter. That is what keeps you',
+    "both looking at the same thing. Only drop the ids when they have clearly",
+    "moved to a new subject.",
+    "",
+    "When you search by name, send only the identifying words. \"The Central",
+    "City project\" is Central City. \"CAPP number 08727\" is 08727.",
     "",
     units && units.length ? `The listener can ask about ${units.join(", ")}.` : "",
     "",
-    "The tool returns an answer field. That is the answer: read it aloud, as it",
-    "is written, in the language it is written in. Do not rewrite it, do not add",
-    "figures to it, and do not compose your own from anything else in the",
-    "result. The reader is looking at the same sentence on screen, and giving",
-    "the listener a different one means only one of the two was checked.",
+    "MULTI-PART QUESTIONS",
+    "A long question with several steps in it is ONE request. Work through all",
+    "of it — call as many tools as the steps need, feeding each result into the",
+    "next — and then answer once, at the end, covering what they asked.",
     "",
-    "You may add a short natural opening or closing around it, and you may say",
-    "that the records are listed on screen. Never read a list of projects aloud.",
+    "Do not answer the first part and stop. Do not ask whether to continue. Do",
+    "not announce the steps as you go.",
     "",
-    "You can only read. If asked to change, add, approve or delete anything, say",
-    "that you can only look things up and the Projects screen is where changes",
-    "are made.",
+    "PACE",
+    "Say nothing while tools are running. No filler, no \"let me check\", no",
+    "thinking noises, no guess that you then correct. The listener can see that",
+    "work is happening. A short silence is what anyone expects while something",
+    "is looked up; being talked at and then contradicted is not.",
     "",
-    "Say nothing while a lookup is running. Call ask_tracker and wait in",
-    "silence for the result. Do not fill the pause with chatter, do not say what",
-    "you are about to do, and do not guess at the answer and correct yourself",
-    "when the real one arrives. A short silence is what a person expects while",
-    "someone looks something up; being talked at and then contradicted is not.",
+    "Let them interrupt you. If they start speaking, stop.",
     "",
-    "Hold one language for the whole conversation. Answer in the language the",
-    "listener is speaking to you in, and keep it. Background talk in another",
-    "language is not the listener changing language: ignore it, and do not",
-    "change your own language or voice because of something you half heard.",
-    "Switch only when the listener themselves clearly speaks to you in another",
-    "language, more than a word or two of it.",
+    "WHAT YOU CANNOT DO",
+    "You can only read. If asked to change, add, approve or delete anything,",
+    "say you can only look things up and that the Projects screen is where",
+    "changes are made.",
+    "",
+    "If a tool finds nothing, say the search found nothing. Do not say the",
+    "project does not exist — you are not in a position to know that.",
+    "",
+    "LANGUAGE",
+    "Hold one language for the whole conversation: the one the listener is",
+    "speaking to you in. Background talk in another language is not them",
+    "changing language. Ignore it, and never change your language or your voice",
+    "because of something you half heard.",
     "",
     "If what you heard was not addressed to you, or you are not sure a question",
-    "was asked at all, stay quiet rather than answering something nobody asked.",
+    "was asked, stay quiet rather than answering something nobody asked.",
   ].filter((line) => line !== "").join("\n");
 }
-
-// The single tool the voice model may call. It takes a question in words, not a
-// plan: the question goes through the same planner and the same validation a
-// typed question does, so speaking cannot reach data that typing could not.
-export const VOICE_TOOLS = [{
-  type: "function",
-  name: "ask_tracker",
-  description: "Look up projects in the tracker. Ask a complete question in plain words, exactly as the listener asked it.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    required: ["question"],
-    properties: {
-      question: {
-        type: "string",
-        description: "The listener's question, in their own words. Pass what they asked and nothing more: do not add requests they did not make, and do not expand a short question into a longer one. Resolve only what they left implicit, such as which projects \"these\" refers to.",
-      },
-    },
-  },
-}];
 
 // =============================================================================
 // The SQL engine's prompts
@@ -269,20 +277,64 @@ export function sqlSystemPrompt({ units, today, role } = {}) {
     INTENT_RULES.trim(),
     "",
     FOLLOW_UP_RULES.trim(),
+    "",
+    VIEW_RULES.trim(),
   ].join("\n");
 }
+
+// Which workspace component the answer should be looked at in. This is a hint
+// and not a decision: assistant-views.js checks it against the shape of what
+// the query actually returned and overrules it when the two disagree. The
+// model knows what was meant; only the worker knows what came back.
+export const VIEW_RULES = `
+Choosing how the answer is shown:
+
+Pick on the SUBJECT of the question, never on its grammar. Almost every
+question here begins "which projects", so those two words decide nothing. What
+decides is the thing being asked about: money, time, risk, change, or the
+projects themselves.
+
+- "budget_variance" when the subject is money: budgets, forecasts, cost,
+  overruns, variance, "over budget", "how much".
+- "schedule" when the subject is time: turnover, handover, slippage, delay,
+  start dates, "when", "this year", "this quarter", "by March", "late",
+  "on time". "Which projects are turning over this year?" is a schedule
+  question, not a list question - the dates are the answer.
+- "risk_list" when the question filters on a risk rating.
+- "risk_summary" when the question asks how risk is spread across a set.
+- "change_comparison" when the question compares a project with its previous
+  reporting period, or asks what changed.
+- "project_comparison" when two to four named projects are put side by side.
+- "timeline" when the subject is the sequence of dates on one project.
+- "project_detail" when the question is about one named project.
+- "project_list" only when none of the above is the subject: the question is
+  about which projects exist, or about a property with no component of its own
+  such as unit, status, phase, type or manager.
+
+The number of rows you expect never enters into it.`;
+
+export const VIEW_HINTS = [
+  "project_list", "project_detail", "budget_summary", "budget_variance",
+  "risk_summary", "risk_list", "schedule", "change_comparison",
+  "project_comparison", "timeline",
+];
 
 export function sqlResponseSchema() {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["language", "intent", "followUp", "message", "sql"],
+    required: ["language", "intent", "followUp", "view", "message", "sql"],
     properties: {
       language: { type: "string", description: "The language the question was asked in." },
       intent: { type: "string", enum: INTENTS },
       followUp: {
         type: "boolean",
         description: "True when this question depends on the previous answer to mean anything.",
+      },
+      view: {
+        type: ["string", "null"],
+        enum: [...VIEW_HINTS, null],
+        description: "Which workspace component this answer should be shown in. Null for every intent except search and report.",
       },
       message: {
         type: ["string", "null"],

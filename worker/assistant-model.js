@@ -14,7 +14,7 @@
 
 // Voice and query generation are different models and must not be conflated:
 // this one speaks.
-export const DEFAULT_VOICE_MODEL = "gpt-realtime-2.1-mini";
+export const DEFAULT_VOICE_MODEL = "gpt-realtime-2.1";
 export const RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 // Ephemeral credentials for the browser. The real key never leaves the worker;
 // what the browser receives expires about a minute after it is issued, which is
@@ -88,28 +88,28 @@ export async function mintVoiceSession(env, { instructions, tools, model, fetchI
             }
             : {}),
 
-          // Turn detection, tuned for a room with other people in it.
+          // Turn detection: semantic rather than acoustic.
           //
-          // create_response is on, so a question is answered when the speaker
-          // stops: there is nothing to press. interrupt_response stays off, so
-          // a reply in progress is never cancelled by a noise - a figure read
-          // out half way is worse than waiting - and stopping it is a
-          // deliberate act served by the Stop button.
+          // A silence timer cannot tell "show me the Central City projects..."
+          // mid-thought from the end of a question, so it cut people off at
+          // every comma. Semantic detection waits for the SENSE of the
+          // sentence to be complete, which is what a long multi-part business
+          // question needs - and those are the questions this is for.
           //
-          // The thresholds are what keep a passing conversation from becoming a
-          // question. The defaults - 0.5 with 200ms of silence - take a turn
-          // from someone else's sentence across a desk. 0.8 needs speech
-          // addressed to the microphone; 1100ms of silence lets a speaker pause
-          // mid-thought, and also means a short burst of chatter has to carry
-          // on for over a second before it is treated as a finished question.
-          // The padding keeps the first syllable, which a high threshold clips.
+          // eagerness "low" means it waits longest before deciding the turn is
+          // over. That is the right end of the dial here: the cost of waiting
+          // half a second too long is nothing, and the cost of answering half
+          // a question is a wrong answer delivered confidently.
+          //
+          // interrupt_response is on, so a reply can be spoken over and stops.
+          // This reverses the earlier choice, where it was off to stop a figure
+          // being cut in half - natural interruption was asked for, and with
+          // answers now one sentence long there is much less to cut into.
           turn_detection: {
-            type: "server_vad",
+            type: env.ASSISTANT_VAD_TYPE || "semantic_vad",
+            eagerness: env.ASSISTANT_VAD_EAGERNESS || "low",
             create_response: true,
-            interrupt_response: false,
-            threshold: Number(env.ASSISTANT_VAD_THRESHOLD) || 0.8,
-            prefix_padding_ms: 300,
-            silence_duration_ms: Number(env.ASSISTANT_VAD_SILENCE_MS) || 1100,
+            interrupt_response: true,
           },
         },
         output: { voice: env.ASSISTANT_VOICE_NAME || "alloy" },
@@ -172,6 +172,7 @@ function readSqlOutput(parsed) {
   return {
     intent,
     followUp: parsed.followUp === true,
+    view: typeof parsed.view === "string" && parsed.view.trim() ? parsed.view.trim() : null,
     language: typeof parsed.language === "string" ? parsed.language.slice(0, 40) : "English",
     message: typeof parsed.message === "string" && parsed.message.trim() ? parsed.message.trim() : null,
     sql: typeof parsed.sql === "string" && parsed.sql.trim() ? parsed.sql.trim() : null,

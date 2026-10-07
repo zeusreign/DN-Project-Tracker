@@ -70,7 +70,7 @@ const CASES = [
   { n: 1, q: "Which projects are not Gaming?", total: count("b.name <> 'Gaming'") },
   { n: 2, q: "Show Gaming projects except Gaming Expansion.",
     total: count("b.name = 'Gaming' AND p.name NOT LIKE '%Gaming Expansion%'") },
-  { n: 3, q: "Which high risk projects are outside Gaming?",
+  { n: 3, view: ["risk_list", "project_detail"], q: "Which high risk projects are outside Gaming?",
     total: count("(p.budget_risk='High' OR p.schedule_risk='High') AND b.name <> 'Gaming'") },
   { n: 4, q: "Which projects have no turnover date?",
     total: count("p.current_turnover_date IS NULL OR trim(p.current_turnover_date) = ''") },
@@ -104,15 +104,15 @@ const CASES = [
     total: count(`${VAR} > 0 AND b.name='Gaming'`) },
 
   // 18: relative dates, resolved from the runtime's date.
-  { n: 18, q: "Which projects are turning over this year?",
+  { n: 18, view: "schedule", q: "Which projects are turning over this year?",
     total: count(`p.current_turnover_date BETWEEN '${year}-01-01' AND '${year}-12-31'`) },
   { n: 18.1, q: "Which projects have a turnover date after June this year?",
     total: count(`p.current_turnover_date > '${year}-06-30'`) },
 
   // 19: aggregation that is not a plain count.
-  { n: 19, q: "How many projects does each business unit have?",
+  { n: 19, view: "group", q: "How many projects does each business unit have?",
     groups: database.prepare(`SELECT b.name, COUNT(*) c ${J} GROUP BY b.name`).all().length },
-  { n: 19.1, q: "How many projects slipped more than 30 days?", figure: count(`${DAYS} > 30`) },
+  { n: 19.1, view: "figure", q: "How many projects slipped more than 30 days?", figure: count(`${DAYS} > 30`) },
 
   // 20: a question the database cannot answer. It must say so.
   { n: 20, q: "How many admins do we have for Gaming projects?", declines: true },
@@ -127,7 +127,8 @@ const CASES = [
   // Complex" - the place appears nowhere in the name, which is true of 63 of
   // the 74 live projects. Asking by name alone returned nothing and the answer
   // read as the project not existing.
-  { n: 23, q: "tell me about central city project", rowName: "New Construction Complex" },
+  { n: 23, q: "tell me about central city project", rowName: "New Construction Complex",
+    view: "project_detail" },
   { n: 23.1, q: "Show Central City", rowName: "New Construction Complex" },
   { n: 23.2, q: "What is happening at Central City?", rowName: "New Construction Complex" },
   { n: 23.3, q: "Tell me about New Construction Complex", rowName: "New Construction Complex" },
@@ -254,6 +255,16 @@ for (const testCase of CASES) {
     problems.push(`expected intent ${testCase.intent}, got ${answer.intent}`);
   }
   if (testCase.anyRefusal && answer.total) problems.push(`expected a refusal, got ${answer.total} rows`);
+  // Which workspace component the answer is shown in. The model proposes it and
+  // assistant-views.js decides, so this checks the pair of them against a real
+  // question rather than against a hint in isolation.
+  if (testCase.view !== undefined) {
+    const kind = answer.view ? answer.view.kind : null;
+    const wanted = Array.isArray(testCase.view) ? testCase.view : [testCase.view];
+    if (!wanted.includes(kind)) {
+      problems.push(`expected view ${wanted.join(" or ")}, got ${kind}`);
+    }
+  }
   if (testCase.noUnit) {
     const leaked = (answer.rows || []).some((r) => r.business_unit === testCase.noUnit);
     if (leaked) problems.push(`${testCase.noUnit} leaked into the answer`);

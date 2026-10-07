@@ -1,11 +1,11 @@
-// Phase 4: the query engine connected to the pane and to voice.
+// The tool layer and the view layer: the two things the workspace is built on.
 //
-// What this proves is the seam. The engine's correctness is covered by
-// scripts/assistant-sql-e2e.mjs and its safety by scripts/assistant-sql-test.mjs;
-// here the generator is a stub so that what varies is the UI's handling of
-// what it returns. The question asked throughout is whether the natural answer
-// reaches the conversation, the records reach the panel, and the two modes
-// stay one conversation.
+// The voice path does not write SQL. The realtime model picks named filters and
+// the worker builds the statement, so what has to be true here is different
+// from what assistant-sql-test checks: that a filter cannot reach outside the
+// reader's scope, that a bad view hint is overruled by the shape of the result,
+// and that nothing a tool returns carries a column or a query the reader was
+// never meant to see.
 //
 //   node scripts/ask-integration-test.mjs
 
@@ -16,416 +16,356 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { createBrowser } = await import(`${root}/scripts/browser-harness.mjs`);
 const database = new DatabaseSync(":memory:");
-for (const n of ["0000_dnc_project_hub.sql", "0001_workbook_structure_and_roles.sql",
-  "0002_user_directory.sql", "0003_development_pipeline_and_directory.sql",
-  "0004_pilot_authentication.sql", "0005_profile_photos.sql",
-  "0006_enhanced_media_and_revisions.sql", "0007_photo_details.sql"]) {
+for (const n of ["0000_dnc_project_hub.sql","0001_workbook_structure_and_roles.sql","0002_user_directory.sql","0003_development_pipeline_and_directory.sql","0004_pilot_authentication.sql","0005_profile_photos.sql","0006_enhanced_media_and_revisions.sql","0007_photo_details.sql"])
   database.exec(await readFile(`${root}/drizzle/${n}`, "utf8"));
-}
-const DB = {
-  prepare(q) {
-    const st = database.prepare(q);
-    const r = (b) => ({
-      all: async () => ({ results: st.all(...b) }),
-      first: async () => st.get(...b) ?? null,
-      run: async () => ({ success: true, meta: st.run(...b) }),
-    });
-    return { bind: (...b) => r(b), ...r([]) };
-  },
-  batch: async (p) => Promise.all(p.map((x) => x.run())),
-};
+const DB = { prepare(q){const st=database.prepare(q);const r=(b)=>({all:async()=>({results:st.all(...b)}),first:async()=>st.get(...b)??null,run:async()=>({success:true,meta:st.run(...b)})});return {bind:(...b)=>r(b),...r([])}}, batch:async(p)=>Promise.all(p.map(x=>x.run())) };
 const worker = (await import(`${root}/dist/server/index.js`)).default;
-const headers = {
-  "oai-authenticated-user-id": "i", "oai-authenticated-user-email": "i@example.invalid",
-  "oai-authenticated-user-full-name": "Int", "oai-authenticated-user-full-name-encoding": "percent-encoded-utf-8",
-  "content-type": "application/json",
-};
 
-const C = "id, name, business_unit, venue, section_name, status, phase, project_manager, "
-  + "development_lead, budget_risk, schedule_risk, approved_budget, anticipated_final_cost, "
-  + "forecast_variance, original_turnover_date, current_turnover_date, duration_change_days, "
-  + "scope_description, current_update, previous_update, reporting_period, project_type, capp_number";
+const { runTool, searchTerm, whereFrom, REALTIME_TOOLS, TOOL_NAMES, TOOL_LABELS, ToolError } =
+  await import(`${root}/worker/assistant-tools.js`);
+const { chooseView, buildView, budgetTotals, marksFor, periodPairs, VIEW_KINDS } =
+  await import(`${root}/worker/assistant-views.js`);
+const { FORBIDDEN_COLUMNS } = await import(`${root}/worker/assistant-schema.js`);
 
-// One stub for every acceptance case, keyed on the question. The context it is
-// handed is recorded, because half of what Phase 4 has to prove is that the
-// conversation's continuity survives the trip through the UI.
-const seen = [];
-const generator = {
-  async generate(question, options) {
-    seen.push({ question, context: options.context, history: options.history });
-    const q = String(question).toLowerCase();
-    const sql = (text) => ({ intent: "search", language: "English", message: null, sql: text, usage: { model: "stub" } });
-    if (q.includes("total budget")) return sql("SELECT SUM(approved_budget) AS total_approved_budget FROM projects WHERE business_unit = 'Gaming'");
-    if (q.includes("each business unit")) return sql("SELECT business_unit, COUNT(*) AS projects FROM projects GROUP BY business_unit");
-    if (q.includes("latest updates")) return sql("SELECT u.id, u.project_id, u.reporting_period, u.current_summary FROM project_updates u JOIN projects p ON p.id = u.project_id WHERE p.business_unit = 'Gaming'");
-    if (q.includes("largest budget")) return sql(`SELECT ${C} FROM projects WHERE business_unit = 'Gaming' AND approved_budget IS NOT NULL ORDER BY approved_budget DESC LIMIT 1`);
-    if (q.includes("nothing")) return sql(`SELECT ${C} FROM projects WHERE name LIKE '%zzzz-none%'`);
-    if (q.includes("not gaming")) return sql(`SELECT ${C} FROM projects WHERE business_unit <> 'Gaming'`);
-    if (q.includes("corporate")) return sql(`SELECT ${C} FROM projects WHERE business_unit = 'Corporate'`);
-    if (q.includes("turning over")) return sql(`SELECT ${C} FROM projects WHERE current_turnover_date >= '${options.today}'`);
-    if (q.includes("high risk")) return sql(`SELECT ${C} FROM projects WHERE budget_risk = 'High' OR schedule_risk = 'High'`);
-    if (q.includes("every project")) return sql(`SELECT ${C} FROM projects`);
-    if (q.includes("admins")) return { intent: "unsupported", language: "English", sql: null,
-      message: "The Tracker does not record who administers a project.", usage: { model: "stub" } };
-    return sql(`SELECT ${C} FROM projects WHERE business_unit = 'Gaming'`);
-  },
-};
-// Stands in for the answer call. It writes a sentence and nothing else, which
-// is what the real one is instructed to do.
-const answerer = {
-  async answer(question, result) {
-    if (result.aggregate) return { text: `The figure is ${Object.values(result.rows[0] || {})[0]}.`, usage: {} };
-    if (!result.total) return { text: "No records matched that question.", usage: {} };
-    return { text: `There are ${result.total} ${result.entityLabel}.`, usage: {} };
-  },
-};
+const headers = {"oai-authenticated-user-id":"i","oai-authenticated-user-email":"i@example.invalid","oai-authenticated-user-full-name":"I","oai-authenticated-user-full-name-encoding":"percent-encoded-utf-8","content-type":"application/json"};
+const env = { DB, ADMIN_EMAILS:"i@example.invalid", ALLOW_PLATFORM_AUTH:"true" };
+await worker.fetch(new Request("https://i/api/bootstrap",{headers}), env, {});
 
-const base = {
-  DB, ADMIN_EMAILS: "i@example.invalid", ALLOW_PLATFORM_AUTH: "true",
-  ASSISTANT_SQL: generator, ASSISTANT_ANSWERER: answerer,
-  ASSISTANT_CONTEXT_SECRET: "integration-secret",
-  // Off, deliberately: a normal user must never see SQL, and that is what the
-  // whole of this file runs as.
-  ASSISTANT_DEBUG: "false",
-};
-await worker.fetch(new Request("https://i/api/bootstrap", { headers }), base, {});
-
-// A Gaming-scoped viewer, so every case runs as a restricted user.
 const pw = "Zz9!" + crypto.randomUUID();
-await worker.fetch(new Request("https://i/api/admin/users", {
-  method: "POST", headers,
-  body: JSON.stringify({
-    first_name: "Int", last_name: "Viewer", username: "int@example.invalid",
-    user_email: "int@example.invalid", role: "viewer", business_unit_scope: "Gaming",
-    account_status: "active", site_access_status: "authorized",
-    temporary_password: pw, confirm_password: pw,
-  }),
-}), base, {});
-database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE lower(username)=?")
-  .run("int@example.invalid");
+await worker.fetch(new Request("https://i/api/admin/users",{method:"POST",headers,body:JSON.stringify({
+  first_name:"Tool",last_name:"Viewer",username:"tool@example.invalid",user_email:"tool@example.invalid",
+  role:"viewer",business_unit_scope:"Gaming",account_status:"active",site_access_status:"authorized",
+  temporary_password:pw,confirm_password:pw})}), env, {});
+database.prepare("UPDATE user_directory SET must_change_password=0 WHERE lower(username)=?")
+  .run("tool@example.invalid");
 
-const page = await (await worker.fetch(new Request("https://i/", { headers: { cookie: "" } }), base, {})).text();
-const browser = await createBrowser({ page, handler: (r) => worker.fetch(r, base, {}) }).start();
-browser.type("loginUsername", "int@example.invalid");
-browser.type("loginPassword", pw);
-await browser.fire("loginForm", "submit").results;
-await browser.settle();
-await browser.fire("askNav", "click").results;
-await browser.settle();
+// Two ways in, each for what it is good at. The route is exercised through the
+// platform-auth headers the other suites use, which is what proves the guards
+// and the audit row; the scope cases call runTool directly with an explicit
+// scope, because what they are about is the predicate, not the session.
+const callTool = (name, args) => worker.fetch(new Request("https://i/api/assistant/tool",{
+  method:"POST", headers, body: JSON.stringify({ name, arguments: args }) }), env, {});
+const scoped = (name, args) => runTool(DB, name, args, ["Gaming"]);
 
-const ok = [];
-const step = (n, label, fn) => {
-  try { fn(); ok.push(n); console.log(`  ${String(n).padStart(2)} ok   ${label}`); }
-  catch (e) { console.log(`  ${String(n).padStart(2)} FAIL ${label}\n       ${e.message}`); process.exitCode = 1; }
+let n = 0;
+const check = async (label, fn) => {
+  try { await fn(); n += 1; console.log(`  ok   ${label}`); }
+  catch (problem) { console.log(`  FAIL ${label}\n       ${problem.message}`); process.exitCode = 1; }
 };
-const type = async (q) => {
-  browser.type("askInput", q);
-  await browser.fire("askForm", "submit").results;
-  await browser.settle();
-};
-const cls = (id, c) => [...browser.byId(id).querySelectorAll(c)];
-const thread = () => browser.byId("askThread").textContent;
-const panel = () => browser.byId("askEvidence").textContent;
-const gaming = new Set(database.prepare(`
-  SELECT p.name FROM projects p JOIN business_units b ON b.id = p.business_unit_id
-  WHERE b.name = 'Gaming' AND p.archived_at IS NULL`).all().map((r) => r.name));
 
-// 1-2
-await type("Show me Gaming projects.");
-step(1, "a simple search: the answer is in the chat, the records are in the panel", () => {
-  assert.match(thread(), /There are \d+ projects\./, "a sentence, not a list");
-  assert.equal(cls("askThread", ".ask-record").length, 0, "no cards in the conversation");
-  assert.ok(cls("askEvidence", ".ask-record").length > 0, "cards in the panel");
-  assert.equal(browser.byId("askOlder").disabled, true, "one set: nothing older to reach");
-});
-await type("Which of those are high risk?");
-step(2, "Gaming and high risk, as a follow-up", () => {
-  assert.ok(seen.at(-1).context, "the second turn carried context");
-  assert.match(seen.at(-1).context.sql, /business_unit = 'Gaming'/,
-    "and the previous query, recovered from the sealed token");
-  assert.match(browser.text("askRailLabel"), /^2 of 2$/);
+const GAMING = database.prepare(`SELECT p.id, p.name FROM projects p
+  JOIN business_units b ON b.id=p.business_unit_id
+  WHERE b.name='Gaming' AND p.archived_at IS NULL`).all();
+const OUTSIDE = database.prepare(`SELECT p.id, p.name, b.name AS unit FROM projects p
+  JOIN business_units b ON b.id=p.business_unit_id
+  WHERE b.name<>'Gaming' AND p.archived_at IS NULL LIMIT 1`).get();
+
+// --- The route ---------------------------------------------------------------
+
+await check("an unauthenticated tool call is refused", async () => {
+  const reply = await worker.fetch(new Request("https://i/api/assistant/tool",{method:"POST",
+    headers:{"content-type":"application/json"}, body:JSON.stringify({name:"find_projects"})}), env, {});
+  assert.ok(reply.status === 401 || reply.status === 403, `got ${reply.status}`);
 });
 
-// 3 negation · 4 aggregation · 5 largest · 6 relative date
-await type("Which projects are not Gaming?");
-step(3, "negation returns only what the scope allows", () => {
-  const names = cls("askEvidence", ".ask-record").map((c) => c.querySelector(".ask-record-name").textContent);
-  for (const name of names) assert.ok(gaming.has(name), `${name} is outside the viewer's scope`);
-});
-await type("What is their total budget?");
-step(4, "an aggregate is shown as a figure, not as a project card", () => {
-  assert.equal(cls("askEvidence", ".ask-record").length, 0, "no project cards invented for a figure");
-  assert.ok(cls("askEvidence", ".ask-figure").length > 0, "a figure is shown as a figure");
-  assert.match(panel(), /Total Approved Budget/i, "named by what it is");
-  assert.match(thread(), /The figure is/, "and answered in words in the chat");
-  assert.equal(browser.byId("askToolbar").querySelector("[data-ask-action=csv]"), null,
-    "no CSV offered for a figure: the file would be empty");
-});
-await type("Which Gaming project has the largest budget?");
-step(5, "a single project still renders as a record", () => {
-  assert.equal(cls("askEvidence", ".ask-record").length, 1);
-});
-await type("Which projects are turning over from now on?");
-step(6, "a relative date is resolved by the worker, not the model's memory", () => {
-  assert.match(seen.at(-1).question, /turning over/);
-  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(seen.find((s) => s.question.includes("turning over")) ? "" : "") === false
-    || true, "the runtime date is supplied to the generator");
+await check("a GET is refused: a tool call is not a read of a page", async () => {
+  const reply = await worker.fetch(new Request("https://i/api/assistant/tool",{ headers }), env, {});
+  assert.ok(reply.status === 405 || reply.status === 403, `got ${reply.status}`);
 });
 
-// 7-8 follow-up and context switch
-await type("Show me the high risk projects.");
-const riskSet = browser.text("askRailLabel");
-await type("Now switch to Corporate.");
-step(7, "switching subject replaces the unit, and scope then decides what is left", () => {
-  // The switch was understood: the question became a Corporate one rather than
-  // a narrowing of the Gaming set before it.
-  assert.ok(!/business_unit = .Gaming./.test(seen.at(-1).context?.sql || "") === false
-    || true, "the previous conditions were available to the turn");
-  assert.match(thread(), /No records matched/i,
-    "and for a Gaming-only viewer Corporate is empty, which is the honest answer");
-  // The permission boundary, not the model, is what emptied it.
-  const names = cls("askEvidence", ".ask-record").map((c) => c.querySelector(".ask-record-name").textContent);
-  for (const name of names) assert.ok(gaming.has(name), "nothing outside the viewer's scope appeared");
-  assert.equal(browser.text("askRailLabel"), riskSet,
-    "an empty answer makes no result set, so the rail stays where it was");
-});
-step(8, "the conversation's context is not the result-set history", () => {
-  assert.ok(seen.at(-1).context, "the switch still carried the previous turn as context");
-  assert.ok(seen.at(-1).history.length > 1, "and the questions before it");
+await check("an unknown tool name is refused rather than guessed at", async () => {
+  const reply = await callTool("drop_everything", {});
+  assert.equal(reply.status, 400);
 });
 
-// 9 empty result
-const before = cls("askEvidence", ".ask-record").length;
-const railBefore = browser.text("askRailLabel");
-const titleBefore = browser.text("askEvidenceTitle");
-await type("Show me nothing at all.");
-step(9, "an empty answer speaks, and leaves the evidence standing", () => {
-  assert.match(thread(), /No records matched/i, "the answer is in the conversation");
-  assert.equal(cls("askEvidence", ".ask-record").length, before, "the records are still there");
-  assert.equal(browser.text("askEvidenceTitle"), titleBefore, "still labelled with their own question");
-  assert.equal(browser.text("askRailLabel"), railBefore, "and no empty result set was made");
+await check("find_projects answers with a view, a line to speak, and a subject", async () => {
+  const body = await (await callTool("find_projects", {})).json();
+  assert.equal(body.ok, true);
+  assert.ok(VIEW_KINDS.includes(body.view.kind), `unknown kind ${body.view.kind}`);
+  assert.ok(typeof body.speak === "string" && body.speak.length > 0, "something to say");
+  assert.ok(Array.isArray(body.subject.ids), "and what the answer is about");
+  assert.ok(body.label, "and what to show while it runs");
 });
 
-// 10-11 result-set history and the chevrons
-step(10, "every answer with records made a result set", () => {
-  assert.match(browser.text("askRailLabel"), /^\d+ of \d+$/, "the panel says which set it is showing");
-  assert.equal(browser.byId("askOlder").disabled, false, "and several are kept to step back through");
-});
-const atEnd = browser.text("askEvidenceTitle");
-await browser.fire("askOlder", "click").results; await browser.settle();
-const older = browser.text("askEvidenceTitle");
-step(11, "the older chevron restores the previous set without asking again", () => {
-  assert.notEqual(older, atEnd, "a different set is showing");
-  const calls = seen.length;
-  assert.ok(cls("askEvidence", ".ask-record").length >= 0);
-  assert.equal(seen.length, calls, "moving the rail runs no query");
-});
-await browser.fire("askNewer", "click").results; await browser.settle();
-step(12, "and the newer chevron restores the one after it", () => {
-  assert.equal(browser.text("askEvidenceTitle"), atEnd);
-});
+// --- The permission boundary -------------------------------------------------
 
-// 13-15 briefing, CSV, record
-const grabbed = [];
-const RealBlob = globalThis.Blob;
-globalThis.Blob = function (parts, opts) { grabbed.push(String(parts[0])); return new RealBlob(parts, opts); };
-const makeEl = browser.document.createElement.bind(browser.document);
-browser.document.createElement = function (tag) {
-  const el = makeEl(tag);
-  if (typeof el.click !== "function") el.click = function () {};
-  if (typeof el.remove !== "function") el.remove = function () {};
-  return el;
-};
-let printed = 0; browser.window.print = function () { printed++; };
-// Download briefing lives in the panel's toolbar, in the briefing view. The
-// rail that used to carry it is gone: the chevrons moved into the card header
-// beside the count they change.
-const downloadBriefing = async () => {
-  const brief = browser.byId("askToolbar").querySelector("[data-ask-action=briefing]");
-  if (brief) { await browser.fire(brief, "click").results; await browser.settle(); }
-  const dl = browser.byId("askToolbar").querySelector("[data-ask-action=download]");
-  await browser.fire(dl, "click").results; await browser.settle();
-};
-const briefingOffered = () =>
-  !!browser.byId("askToolbar").querySelector("[data-ask-action=briefing],[data-ask-action=download]");
-
-await browser.fire("askOlder", "click").results; await browser.settle();
-const activeTitle = browser.text("askEvidenceTitle");
-await downloadBriefing();
-step(13, "the briefing follows the active result set, not the newest", () => {
-  assert.ok(grabbed.length, "a briefing was produced");
-  assert.ok(grabbed[0].includes(activeTitle.slice(0, 20)),
-    "and it names the question of the set that is showing");
-});
-const csvBtn = browser.byId("askToolbar").querySelector("[data-ask-action=csv]");
-if (csvBtn) { await browser.fire(csvBtn, "click").results; await browser.settle(); }
-step(14, "CSV exports the active set", () => {
-  assert.ok(grabbed.length > 1, "a CSV was produced");
-  assert.match(grabbed[grabbed.length - 1].split("\r\n")[0], /^"id","business_unit"/);
-});
-const briefBtn = browser.byId("askToolbar").querySelector("[data-ask-action=briefing]");
-if (briefBtn) { await browser.fire(briefBtn, "click").results; await browser.settle(); }
-const printBtn = browser.byId("askToolbar").querySelector("[data-ask-action=print]");
-if (printBtn) { await browser.fire(printBtn, "click").results; await browser.settle(); }
-step(15, "Print/PDF shows the briefing and prints it", () => {
-  assert.equal(browser.text("askEvidenceTitle"), "Briefing preview");
-  assert.ok(printed >= 1);
-});
-const back = browser.byId("askToolbar").querySelector("[data-ask-action=back]");
-if (back) { await browser.fire(back, "click").results; await browser.settle(); }
-const record = browser.byId("askEvidence").querySelector(".ask-record-name");
-if (record) { await browser.fire(record, "click").results; await browser.settle(); }
-step(16, "a record opens with its detail and its history", () => {
-  assert.equal(browser.text("askEvidenceTitle"), "Project source record");
-  assert.ok(cls("askEvidence", ".ask-field-grid").length > 0);
-  assert.match(panel(), /Activity history/);
-});
-
-// 17 child records counted as themselves
-await type("What are their latest updates?");
-step(17, "activity updates are counted as updates, not as projects", () => {
-  assert.match(thread(), /There are \d+ activity updates\./,
-    "the conversation says what it counted");
-  assert.equal(cls("askEvidence", ".ask-record").length, 0, "not rendered as project cards");
-  assert.ok(cls("askEvidence", ".ask-history-entry").length > 0, "rendered as updates");
-  assert.match(panel(), /across \d+ projects?/, "and says how many projects they cover");
-});
-
-// 18 grouped
-await type("How many projects does each business unit have?");
-step(18, "grouped totals are shown as a comparison", () => {
-  assert.ok(cls("askEvidence", ".ask-unit-row").length > 0, "a bar per group");
-  assert.equal(cls("askEvidence", ".ask-record").length, 0, "not project cards");
-});
-
-// 19-20 the things a normal user must never see, and voice
-step(19, "nothing in the pane exposes SQL, the schema or the engine's internals", () => {
-  const everything = browser.document.body.textContent;
-  for (const leak of ["SELECT", "FROM projects", "WITH projects AS", "business_unit =",
-    "assistant-sql", "scopedViews", "LIMIT ?"]) {
-    assert.ok(!everything.includes(leak), `"${leak}" reached the page`);
+await check("a scoped reader sees only their own unit through a tool", async () => {
+  const body = await scoped("find_projects", { limit: 50 });
+  const names = GAMING.map((row) => row.name);
+  assert.ok(body.view.data.rows.length > 0, "something came back");
+  for (const row of body.view.data.rows) {
+    assert.ok(names.includes(row.name), `${row.name} is outside the reader's scope`);
   }
-  assert.equal(browser.byId("askEvidence").querySelector(".ask-debug"), null, "no debug panel with debug off");
-});
-step(20, "voice is one conversation with typing, not a second implementation", () => {
-  assert.equal(browser.byId("askVoicePanel").hidden, true, "the pane opens in quiet chat");
-  const beforeSwitch = thread();
-  return Promise.resolve().then(async () => {
-    await browser.fire("askVoiceMode", "click").results;
-    await browser.settle();
-    assert.equal(browser.byId("askVoicePanel").hidden, false);
-    assert.equal(thread(), beforeSwitch, "the transcript survives the switch");
-  });
-});
-await browser.fire("askVoiceMode", "click").results; await browser.settle();
-step(21, "the voice controls are the existing ones", () => {
-  for (const id of ["askOrb", "askVoiceBtn", "askStopBtn", "askVoiceStatus", "askVoiceAudio"]) {
-    assert.ok(browser.byId(id), `${id} is present`);
-  }
-  assert.equal(browser.byId("askStopBtn").hidden, true, "Stop is offered only while speaking");
-  assert.equal(browser.byId("askOrb").getAttribute("data-state"), "idle");
 });
 
-// 22 permissions, end to end
-step(22, "a restricted viewer saw nothing outside their scope, by any route", () => {
-  const everything = browser.document.body.textContent;
-  const outside = database.prepare(`
-    SELECT p.name FROM projects p JOIN business_units b ON b.id = p.business_unit_id
-    WHERE b.name <> 'Gaming' AND p.archived_at IS NULL`).all().map((r) => r.name);
-  for (const name of outside) {
-    if (name.length < 8) continue;
-    assert.ok(!everything.includes(name), `${name} reached a Gaming-only viewer`);
+await check("naming another unit returns nothing, not that unit", async () => {
+  const body = await scoped("find_projects", { unit: OUTSIDE.unit });
+  assert.equal(body.view.count, 0, `${OUTSIDE.unit} leaked through the unit filter`);
+});
+
+await check("an out-of-scope id in the ids filter reaches nothing", async () => {
+  const body = await scoped("find_projects", { ids: [OUTSIDE.id] });
+  assert.equal(body.view.count, 0, "a forged id must not widen what a reader sees");
+});
+
+await check("opening an out-of-scope project by id finds no project", async () => {
+  const body = await scoped("project_detail", { project_id: OUTSIDE.id });
+  assert.equal(body.view.kind, "empty");
+  assert.match(body.speak, /no project/i);
+});
+
+await check("and the refusal reads as a search result, never as a permission notice", async () => {
+  const body = await scoped("project_detail", { project_id: OUTSIDE.id });
+  assert.ok(!/permission|scope|not allowed|forbidden/i.test(body.speak),
+    "telling a reader a record exists but is hidden is itself a disclosure");
+});
+
+await check("a tool response never carries a query or a forbidden column", async () => {
+  const text = await (await callTool("find_projects", {})).text();
+  assert.ok(!/SELECT |FROM projects|WITH projects/i.test(text), "no SQL reaches the browser");
+  for (const column of FORBIDDEN_COLUMNS) {
+    assert.ok(!text.includes(`"${column}"`), `${column} reached the browser`);
   }
-  for (const text of grabbed) {
-    for (const name of outside) {
-      if (name.length < 8) continue;
-      assert.ok(!text.includes(name), `${name} escaped into an export`);
+});
+
+await check("the row cap holds whatever a tool asks for", async () => {
+  const body = await scoped("find_projects", { limit: 5000 });
+  assert.ok(body.view.data.rows.length <= 50, "50 is the cap, not a suggestion");
+});
+
+await check("a tool call is written to the audit log", async () => {
+  const before = database.prepare(
+    "SELECT COUNT(*) AS n FROM audit_log WHERE action='assistant_ask'").get().n;
+  await callTool("find_projects", {});
+  const after = database.prepare(
+    "SELECT COUNT(*) AS n FROM audit_log WHERE action='assistant_ask'").get().n;
+  assert.equal(after, before + 1);
+});
+
+// --- Finding a project by what someone called it ------------------------------
+
+await check("a named thing is searched for without the label around it", () => {
+  assert.equal(searchTerm("the Central City project"), "central city");
+  assert.equal(searchTerm("CAPP number 08727"), "08727");
+  assert.equal(searchTerm("initiative 44"), "44");
+  assert.equal(searchTerm("Central City"), "central city");
+});
+
+await check("stripping the label never leaves an empty search", () => {
+  // Every word was a label word. Falling through to the original text is better
+  // than searching for "" and matching the whole portfolio.
+  assert.ok(searchTerm("the project").length > 0);
+});
+
+await check("several matches to a name are an answer, not an ambiguity", async () => {
+  const body = await scoped("project_detail", { search: "a" });
+  if (body.view.count > 1) {
+    assert.equal(body.view.kind, "project_list");
+    assert.match(body.speak, /which one|match/i);
+  }
+});
+
+await check("one project opens as a detail panel", async () => {
+  const body = await scoped("project_detail", { project_id: GAMING[0].id });
+  assert.equal(body.view.kind, "project_detail");
+  assert.equal(body.view.data.project.name, GAMING[0].name);
+  assert.deepEqual(body.subject.ids, [GAMING[0].id]);
+});
+
+// --- Component selection ------------------------------------------------------
+
+await check("comparing a project with its previous period gives a comparison", async () => {
+  const body = await scoped("compare_periods", { project_id: GAMING[0].id });
+  assert.equal(body.view.kind, "change_comparison");
+  assert.ok(Array.isArray(body.view.data.pairs), "with the pairs drawn side by side");
+  assert.ok(Object.prototype.hasOwnProperty.call(body.view.data, "narrative"),
+    "and what was written each period");
+});
+
+await check("comparing fewer than two projects is refused rather than half-done", async () => {
+  const reply = await callTool("compare_projects", { ids: [GAMING[0].id] });
+  assert.equal(reply.status, 400);
+});
+
+await check("two projects come back side by side", async () => {
+  const body = await scoped("compare_projects", { ids: [GAMING[0].id, GAMING[1].id] });
+  assert.equal(body.view.kind, "project_comparison");
+  assert.equal(body.view.data.projects.length, 2);
+  assert.ok(body.view.data.fields.length > 4, "with the fields worth comparing");
+});
+
+await check("a budget question is shown as budget figures", async () => {
+  const body = await scoped("budget_analysis", {});
+  assert.equal(body.view.kind, "budget_variance");
+  assert.ok(body.view.data.totals, "with totals");
+});
+
+await check("a schedule question is shown as a schedule", async () => {
+  const body = await scoped("schedule_analysis", {});
+  assert.equal(body.view.kind, "schedule");
+  assert.ok(body.view.data.totals, "with the slip counted");
+});
+
+await check("a risk question is shown as a distribution", async () => {
+  const body = await scoped("risk_analysis", {});
+  assert.equal(body.view.kind, "risk_summary");
+  assert.ok(Array.isArray(body.view.data.buckets));
+});
+
+// --- The view layer overrules a hint that does not fit ------------------------
+
+const oneRow = { aggregate:false, total:1, returned:1, truncated:false, rows:[{ id:1, name:"X" }] };
+const manyRows = { aggregate:false, total:3, returned:3, truncated:false,
+  rows:[{id:1,name:"A"},{id:2,name:"B"},{id:3,name:"C"}] };
+const figure = { aggregate:true, total:1, returned:1, truncated:false, rows:[{ total_budget: 12 }] };
+const grouped = { aggregate:true, total:3, returned:3, truncated:false,
+  rows:[{unit:"A",n:1},{unit:"B",n:2},{unit:"C",n:3}] };
+
+await check("a single figure is never rendered as a comparison, whatever was asked for", () =>
+  assert.equal(chooseView("project_comparison", { result: figure, records: [] }), "figure"));
+
+await check("a grouped result is never rendered as openable projects", () =>
+  assert.equal(chooseView("project_list", { result: grouped, records: [] }), "group"));
+
+await check("one project is a detail panel even when a list was asked for", () =>
+  assert.equal(chooseView("project_list", { result: oneRow, records: [] }), "project_detail"));
+
+await check("a budget hint is refused when the result carries no budget column", () =>
+  assert.equal(chooseView("budget_variance", { result: manyRows, records: [] }), "project_list"));
+
+await check("and honoured when it does", () => {
+  const withBudget = { ...manyRows, rows: manyRows.rows.map((r) => ({ ...r, forecast_variance: 1 })) };
+  assert.equal(chooseView("budget_variance", { result: withBudget, records: [] }), "budget_variance");
+});
+
+await check("an unknown hint falls back rather than rendering nothing", () =>
+  assert.equal(chooseView("spreadsheet", { result: manyRows, records: [] }), "project_list"));
+
+await check("no rows at all is its own component", () =>
+  assert.equal(chooseView("project_list",
+    { result: { ...manyRows, total:0, returned:0, rows:[] }, records: [] }), "empty"));
+
+// --- The figures the components are built from --------------------------------
+
+await check("a total says how many projects it is computed over, not how many exist", () => {
+  const totals = budgetTotals([
+    { approved_budget: 100, anticipated_final_cost: 120, forecast_variance: 20 },
+    { approved_budget: null, anticipated_final_cost: null, forecast_variance: null },
+    { approved_budget: 50, anticipated_final_cost: 40, forecast_variance: -10 },
+  ]);
+  assert.equal(totals.count, 3, "three projects");
+  assert.equal(totals.approvedCount, 2, "but only two have an approved budget");
+  assert.equal(totals.approved, 150);
+  assert.equal(totals.variance, 10);
+  assert.equal(totals.overBudget, 1);
+  assert.equal(totals.underBudget, 1);
+  assert.equal(totals.noFigures, 1, "and one is in neither camp");
+});
+
+await check("a missing figure is never counted as being on budget", () => {
+  const totals = budgetTotals([{ approved_budget: null, anticipated_final_cost: null, forecast_variance: null }]);
+  assert.equal(totals.overBudget, 0);
+  assert.equal(totals.underBudget, 0);
+  assert.equal(totals.noFigures, 1);
+});
+
+await check("a row carries at most the three state marks, and no others", () => {
+  const marks = marksFor({ forecast_variance: 5, duration_change_days: 9, budget_risk: "High" });
+  assert.deepEqual(marks, ["over_budget", "slipped", "high_risk"]);
+  assert.deepEqual(marksFor({ forecast_variance: null, duration_change_days: null }), []);
+  assert.deepEqual(marksFor({ forecast_variance: -5, duration_change_days: 0 }), []);
+});
+
+await check("a period pair with nothing on either side is left out rather than drawn empty", () => {
+  const pairs = periodPairs({ original_turnover_date:null, current_turnover_date:null,
+    original_start_date:null, current_start_date:null,
+    approved_budget: 10, anticipated_final_cost: 12, forecast_variance: 2 });
+  assert.equal(pairs.length, 1, "only the pair that has values");
+  assert.equal(pairs[0].label, "Cost");
+});
+
+await check("the largest variance is a project that has one, never a missing value", async () => {
+  const body = await scoped("find_projects", { order: "variance", limit: 1 });
+  if (body.view.count > 0) {
+    const row = body.view.data.rows ? body.view.data.rows[0] : body.view.data.project;
+    const anyRecorded = database.prepare(`SELECT COUNT(*) AS n FROM projects p
+      JOIN business_units b ON b.id=p.business_unit_id
+      WHERE b.name='Gaming' AND p.archived_at IS NULL
+        AND p.approved_budget IS NOT NULL AND p.anticipated_final_cost IS NOT NULL`).get().n;
+    if (anyRecorded > 0) {
+      assert.notEqual(row.forecast_variance, null,
+        "SQLite sorts NULL first descending-last, so this has to be ordered explicitly");
     }
   }
 });
 
-// --- The full chain, unrestricted, where Corporate actually has records -----
-// The scoped viewer above proves the boundary holds; this proves the
-// conversation itself behaves, with the chat, the panel and the rail staying
-// in step across a narrowing, an aggregate, a child query and a subject switch.
-const widePw = "Yy8!" + crypto.randomUUID();
-await worker.fetch(new Request("https://i/api/admin/users", {
-  method: "POST", headers,
-  body: JSON.stringify({
-    first_name: "Wide", last_name: "Reader", username: "wide@example.invalid",
-    user_email: "wide@example.invalid", role: "viewer", business_unit_scope: "All",
-    account_status: "active", site_access_status: "authorized",
-    temporary_password: widePw, confirm_password: widePw,
-  }),
-}), base, {});
-database.prepare("UPDATE user_directory SET must_change_password = 0 WHERE lower(username)=?")
-  .run("wide@example.invalid");
+// --- The tool catalogue the realtime model is given ---------------------------
 
-const adminPage = await (await worker.fetch(new Request("https://i/", { headers: { cookie: "" } }), base, {})).text();
-const admin = await createBrowser({ page: adminPage, handler: (r) => worker.fetch(r, base, {}) }).start();
-admin.type("loginUsername", "wide@example.invalid");
-admin.type("loginPassword", widePw);
-await admin.fire("loginForm", "submit").results;
-await admin.settle();
-assert.equal(admin.byId("workspace").hidden, false, "the unrestricted reader signs in");
-await admin.fire("askNav", "click").results;
-await admin.settle();
-const adminType = async (q) => {
-  admin.type("askInput", q);
-  await admin.fire("askForm", "submit").results;
-  await admin.settle();
-};
-const adminCards = () => [...admin.byId("askEvidence").querySelectorAll(".ask-record")]
-  .map((c) => c.querySelector(".ask-record-name").textContent);
+await check("every tool is well formed for the realtime API", () => {
+  for (const tool of REALTIME_TOOLS) {
+    assert.equal(tool.type, "function", `${tool.name} is not a function tool`);
+    assert.ok(tool.name && /^[a-z_]+$/.test(tool.name), `${tool.name} is not a usable name`);
+    assert.ok(tool.description && tool.description.length > 20, `${tool.name} is not described`);
+    assert.equal(tool.parameters.type, "object", `${tool.name} takes no object`);
+    assert.ok(tool.parameters.properties, `${tool.name} declares no parameters`);
+  }
+});
 
-await adminType("Show high risk projects.");
-const highRiskTitle = admin.text("askEvidenceTitle");
-await adminType("Which of those are Gaming?");
-await adminType("Which has the largest budget?");
-await adminType("What are their latest updates?");
-step(23, "a four-turn chain keeps its thread, and each turn is its own set", () => {
-  assert.match(admin.text("askRailLabel"), /^4 of 4$/, "four result sets, one per answer");
-  assert.ok(seen.at(-1).history.length >= 3, "the questions before it travelled with it");
-  assert.ok(seen.at(-1).context && seen.at(-1).context.sql,
-    "and so did the previous query, sealed");
-  assert.match(admin.byId("askThread").textContent, /There are \d+ activity updates\./,
-    "the last answer counts updates as updates");
+await check("every tool has a line to show while it runs", () => {
+  for (const name of TOOL_NAMES) {
+    assert.ok(TOOL_LABELS[name], `${name} has nothing to show`);
+    assert.equal(TOOL_LABELS[name], TOOL_LABELS[name].toLowerCase(),
+      "the activity line is about the work, not shouted");
+  }
 });
-await adminType("Now switch to Corporate.");
-step(24, "the switch replaces the subject rather than narrowing the previous one", () => {
-  const corporate = database.prepare(`
-    SELECT p.name FROM projects p JOIN business_units b ON b.id = p.business_unit_id
-    WHERE b.name = 'Corporate' AND p.archived_at IS NULL`).all().map((r) => r.name);
-  const shown = adminCards();
-  assert.ok(shown.length > 0, "Corporate has records for an unrestricted reader");
-  for (const name of shown) assert.ok(corporate.includes(name), `${name} is not Corporate`);
-  assert.match(admin.text("askRailLabel"), /^5 of 5$/, "and it is its own result set");
+
+await check("the filters a tool accepts are a closed set, never free text SQL", () => {
+  for (const tool of REALTIME_TOOLS) {
+    const keys = Object.keys(tool.parameters.properties);
+    for (const key of keys) {
+      assert.ok(!/sql|query|statement|where|select/i.test(key),
+        `${tool.name} accepts ${key}, which is a way back to model-written SQL`);
+    }
+  }
 });
-await adminType("Which of those are high risk?");
-step(25, "and the turn after a switch follows the new subject, not the old one", () => {
-  assert.match(seen.at(-1).context.sql, /Corporate/,
-    "the context handed on is the Corporate query, not the Gaming one");
-  assert.ok(!/business_unit = 'Gaming'/.test(seen.at(-1).context.sql),
-    "the previous unit did not survive the switch");
+
+await check("a filter builder binds every value rather than interpolating it", () => {
+  const built = whereFrom({ unit: "Gaming'; DROP TABLE projects; --", search: "x", budget_min: 5 });
+  assert.ok(!built.sql.includes("DROP"), "nothing from the model is in the statement text");
+  assert.ok(built.bindings.includes("Gaming'; DROP TABLE projects; --"),
+    "it is a bound value, where it can do nothing");
+  assert.equal((built.sql.match(/\?/g) || []).length, built.bindings.length,
+    "one placeholder per binding");
 });
-// Awaited out here: step() is synchronous, so an async body would be recorded
-// as passing before it had asserted anything.
-const callsBeforeStepping = seen.length;
-let guard = 0;
-while (!admin.byId("askOlder").disabled && guard++ < 20) {
-  await admin.fire("askOlder", "click").results;
-  await admin.settle();
+
+await check("an empty filter set produces no WHERE clause rather than a broken one", () => {
+  assert.equal(whereFrom({}).sql, "");
+  assert.deepEqual(whereFrom({}).bindings, []);
+});
+
+await check("runTool refuses a name that is not in the catalogue", async () => {
+  await assert.rejects(() => runTool(DB, "exec", {}, null), (e) => e instanceof ToolError);
+});
+
+// --- The View contract --------------------------------------------------------
+
+await check("every view carries what the workspace needs to render a header", () => {
+  const view = buildView("project_list", { result: manyRows, records: manyRows.rows });
+  assert.ok(view.kind && view.title, "a kind and a title");
+  assert.ok(Object.prototype.hasOwnProperty.call(view, "subtitle"));
+  assert.ok(Object.prototype.hasOwnProperty.call(view, "count"));
+  assert.ok(view.data, "and the data its renderer reads");
+});
+
+await check("a truncated result says so in the view rather than hiding it", () => {
+  const view = buildView("project_list",
+    { result: { ...manyRows, total: 90, returned: 3, truncated: true }, records: manyRows.rows });
+  assert.equal(view.truncated, true);
+  assert.match(view.subtitle, /90 matched/);
+});
+
+console.log(`\n${n} checks passed.`);
+if (!process.exitCode) {
+  console.log("Tool and view layers: scope, filters, component selection, figures and catalogue covered.");
 }
-const steppedTitle = admin.text("askEvidenceTitle");
-const steppedLabel = admin.text("askRailLabel");
-const callsAfterStepping = seen.length;
-step(26, "the chevrons can still reach the first set, unchanged, without re-querying", () => {
-  assert.equal(steppedTitle, highRiskTitle, "back at the first question");
-  assert.match(steppedLabel, /^1 of \d+$/);
-  assert.equal(callsAfterStepping, callsBeforeStepping, "and nothing was asked again to get there");
-});
-
-if (ok.length !== 26) throw new Error(`Ask integration: only ${ok.length} of 26 steps passed`);
-console.log(`Ask the Tracker integration: ${ok.length}/26 steps — natural answer in chat, records in the panel, figures and groups presented as themselves, sealed follow-ups, result-set history, briefing/CSV/print, voice controls, and scope held throughout.`);

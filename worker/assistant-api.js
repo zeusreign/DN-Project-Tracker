@@ -14,7 +14,9 @@
 
 import { availableUnits } from "./assistant-schema.js";
 import { mintVoiceSession, PlannerError, sqlGeneratorFor, answererFor } from "./assistant-model.js";
-import { voiceInstructions, VOICE_TOOLS, messageFor } from "./assistant-prompt.js";
+import { voiceInstructions, messageFor } from "./assistant-prompt.js";
+import { REALTIME_TOOLS, TOOL_LABELS, runTool, ToolError } from "./assistant-tools.js";
+import { chooseView, buildView } from "./assistant-views.js";
 import { runSql, hydrateProjects, SqlRejected } from "./assistant-sql.js";
 import { sealTurn, openTurn } from "./assistant-context.js";
 import { legacyPlanRoutes } from "./legacy/assistant-plan-route.js";
@@ -153,10 +155,14 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
     const units = await availableUnits(env.DB, scope);
     try {
       const session = await mintVoiceSession(env, {
-        instructions: voiceInstructions({ units, name: user.name || user.email }),
-        tools: VOICE_TOOLS,
+        instructions: voiceInstructions({
+          units,
+          name: user.name || user.email,
+          today: new Date().toISOString().slice(0, 10),
+        }),
+        tools: REALTIME_TOOLS,
       });
-      return json({ ...session, tools: VOICE_TOOLS, units });
+      return json({ ...session, tools: REALTIME_TOOLS, labels: TOOL_LABELS, units });
     } catch (problem) {
       if (problem instanceof PlannerError) return error(problem.message, problem.status);
       throw problem;
@@ -165,6 +171,33 @@ export async function assistantApi(request, env, user, role, scope, helpers) {
 
   if (url.pathname === "/api/assistant/ask") {
     return askWithSql(request, env, user, role, scope, helpers);
+  }
+
+  // One data tool, run on behalf of the realtime voice model.
+  //
+  // The browser executes the tool call the model asked for and posts it here.
+  // That is deliberate: the client then holds the result - and its View - before
+  // the model has said a word, so the screen is already right while the sentence
+  // is still being spoken.
+  //
+  // Nothing about the model's request widens what this reader may see. The tool
+  // takes named filters, never SQL, and every statement it builds runs against
+  // this session's scoped views. A forged id in `ids` reaches a row the reader
+  // could already open or it reaches nothing.
+  if (url.pathname === "/api/assistant/tool") {
+    if (request.method !== "POST") return error("Method not allowed.", 405);
+    const body = await request.json().catch(() => null);
+    const name = typeof body?.name === "string" ? body.name : "";
+    try {
+      const outcome = await runTool(env.DB, name, body?.arguments, scope);
+      await recordAsk(env, user, { intent: `tool:${name}`, language: "n/a", sql: null },
+        { total: outcome.view.count ?? 0, returned: 0, truncated: false }, scope);
+      return json({ ok: true, ...outcome, label: TOOL_LABELS[name] || "working" });
+    } catch (problem) {
+      if (problem instanceof ToolError) return error(problem.message, 400);
+      console.log(`assistant tool ${name} failed: ${problem && problem.message}`);
+      return error("That lookup could not be completed.", 502);
+    }
   }
 
   // The planner's own routes, for as long as it is switched on. It is not the
@@ -347,9 +380,17 @@ async function askWithSql(request, env, user, role, scope, helpers) {
     ids: records.length ? records.map((row) => row.id) : result.rows.map((row) => row.id),
   }, user);
 
+  // The same result, looked at two ways: one or two sentences for the
+  // conversation, and one workspace component for everything else. The model
+  // proposed which component; chooseView checks that against what actually came
+  // back and overrules it when they disagree.
+  const kind = chooseView(outcome.view, { result, records });
+  const view = buildView(kind, { result, records });
+
   // Two separate things: the sentence for the conversation, and the records for
   // the evidence panel. A list of rows does not belong in the sentence.
   return json({
+    view,
     ok: true,
     intent: outcome.intent,
     language: outcome.language,
