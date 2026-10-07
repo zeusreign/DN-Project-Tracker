@@ -70,5 +70,12 @@ bucket_name = "dnc-tracker-assets-dev"
 # that value must never be carried onto a reachable deployment, including this one.
 ALLOW_PLATFORM_AUTH = "false"
 
+# Asserted by scripts/check-deploy-target.sh for both targets, and absent here
+# until now, which meant `npm run deploy:test` aborted before it built
+# anything. The worker defaults to off for both, so this changes no behaviour;
+# it states the setting rather than relying on the default.
+ASSISTANT_DEBUG = "false"
+ASSISTANT_LEGACY_PLANNER = "false"
+
 # Empty, as in production. Does not create a login account.
 ADMIN_EMAILS = ""
