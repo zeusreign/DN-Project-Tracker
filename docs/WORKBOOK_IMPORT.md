@@ -123,8 +123,34 @@ had ever held.
 break. Four projects share the name *Via Napoli* and differ only by scope description; a matcher
 that picked a favourite would be wrong three times in four and look confident doing it.
 
-**The import writes activity only.** It never updates a project's name, PM, budget or dates. That is
-what makes "preserve user edits" structural rather than a promise.
+**The import writes activity AND the structured columns the workbook owns** — costs, risk ratings,
+dates and PM. It does NOT write name or capp_number: those are identity, and a wrong match that
+rewrites them is far harder to spot and undo than a wrong figure, so identity changes go through the
+config instead.
+
+This replaces the original rule, which was "activity only". That rule made "preserve user edits"
+structural, but it also meant no cost or risk change ever reached the tracker: every figure sat at
+whatever the first seed loaded, drifting one fortnight at a time. Measured on 2026-10-08, five
+projects were carrying August figures and the portfolio's Total Approved Budget was understated by
+$19,062,689.
+
+Three rules replace it, all confirmed by the client:
+
+- **A blank cell means no change.** An empty cell asserts nothing, so it never clears a tracker
+  value. The parser drops empty cells, so an absent key *is* a blank cell. This is what stops a
+  sheet that has not filled in a risk column from wiping a rating someone set in the app.
+- **A project absent from the workbook means no update, not finished.** Nothing is touched, and
+  status stays an administrator's job in the app.
+- **Total Approved Budget is taken, never derived.** It is `=SUM(I:K)` on most rows and a typed
+  number on others, and the two disagree: Gaming Expansion states 145,000,000 against CAPP columns
+  totalling 19,578,167 — the first is what was approved, the second what has been drawn down. The
+  application stopped re-deriving it for the same reason; see `worker/index.js`, the guarded
+  recompute in the project-fields route.
+
+Field updates are audited in exactly the shape `fieldAuditStatement()` emits for a person editing
+the same columns, because `auditRowHtml()` renders from `details.changes` and drops any entry whose
+field it has no label for. A differently shaped row still appears, but reads "Before-and-after
+values were not recorded for this entry."
 
 **Re-running is safe.** Deterministic keys on the `UNIQUE` `project_updates.source_key` column,
 guarded `UPDATE`s, hash-guarded audit rows, and an `app_meta` run marker per report date. Verified

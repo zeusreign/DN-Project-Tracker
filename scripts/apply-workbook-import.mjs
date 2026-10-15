@@ -51,7 +51,7 @@ export function buildStatements(report) {
   const statements = [];
   const summary = {
     history_previous: 0, history_current: 0, project_current_updates: 0,
-    new_projects: 0, status_changes: 0, audit_rows: 0,
+    new_projects: 0, status_changes: 0, audit_rows: 0, field_updates: 0,
   };
 
   const runMarker = "workbook_import:" + report.report_date;
@@ -151,6 +151,68 @@ export function buildStatements(report) {
     }
 
     auditOnce("activity_update", id, { reportingPeriod: plan.date, source: report.workbook }, plan.source_key);
+  }
+
+  // --- 2b. Structured columns the workbook owns ------------------------------
+  // Costs, risk ratings, dates and PM. The reconcile step already decided what
+  // moves; nothing is compared again here.
+  //
+  // Each column is written with `IS NOT`, not `<>`, so a NULL on either side
+  // compares correctly and a second run writes nothing. `<>` is unknown when
+  // either operand is NULL, which would make every NULL-to-value change look
+  // like a no-op and silently skip it.
+  //
+  // approved_budget is written as it stands. It is NOT re-derived from the
+  // three CAPP columns: on some rows the workbook states a total that its own
+  // columns do not add up to, and that figure is the one the client reports.
+  for (const entry of report.matched) {
+    const changes = entry.planned_fields || [];
+    if (!changes.length) continue;
+    const id = entry.tracker.id;
+
+    for (const change of changes) {
+      add(
+        `UPDATE projects SET ${change.field} = ${sqlLiteral(change.after)}, updated_at = datetime('now')\n` +
+        `  WHERE id = ${id} AND ${change.field} IS NOT ${sqlLiteral(change.after)};`,
+        `${change.field} on project ${id}`,
+      );
+      summary.field_updates++;
+    }
+
+    // Recomputed only when the turnover dates actually moved, and with the
+    // application's own expression, so the Days column cannot drift from the
+    // dates printed beside it.
+    if (changes.some((c) => c.field === "original_turnover_date" || c.field === "current_turnover_date")) {
+      add(
+        `UPDATE projects SET duration_change_days = CASE\n` +
+        `    WHEN original_turnover_date IS NULL OR current_turnover_date IS NULL\n` +
+        `      OR trim(original_turnover_date) = '' OR trim(current_turnover_date) = ''\n` +
+        `      OR julianday(original_turnover_date) IS NULL OR julianday(current_turnover_date) IS NULL\n` +
+        `    THEN NULL\n` +
+        `    ELSE CAST(julianday(current_turnover_date) - julianday(original_turnover_date) AS INTEGER)\n` +
+        `  END WHERE id = ${id};`,
+        `recompute duration change on project ${id}`,
+      );
+    }
+
+    // Written in exactly the shape worker/index.js:fieldAuditStatement emits for
+    // a person editing the same fields, because auditRowHtml() in
+    // worker/client.js renders from `details.changes` and drops any entry whose
+    // field it does not recognise. A differently shaped row still appears in the
+    // audit list, but reads "Before-and-after values were not recorded" — which
+    // is exactly the history the client would need and not have.
+    auditOnce(
+      "field_update",
+      id,
+      {
+        version: 1,
+        projectName: entry.tracker.name,
+        changes: changes.map((c) => ({ field: c.field, before: c.before ?? null, after: c.after })),
+        reportingPeriod: report.report_date,
+        source: report.workbook,
+      },
+      `workbook-fields:${report.report_date}:${entry.tracker.source_key}`,
+    );
   }
 
   // --- 3. Approved new projects ----------------------------------------------
@@ -307,6 +369,7 @@ function main() {
   console.log("  previous-week history rows   " + String(summary.history_previous).padStart(4));
   console.log("  current history rows         " + String(summary.history_current).padStart(4));
   console.log("  projects whose current moves " + String(summary.project_current_updates).padStart(4));
+  console.log("  field updates                " + String(summary.field_updates).padStart(4));
   console.log("  new projects created         " + String(summary.new_projects).padStart(4));
   console.log("  status changes               " + String(summary.status_changes).padStart(4));
   console.log("  audit rows                   " + String(summary.audit_rows).padStart(4));
