@@ -226,16 +226,29 @@ export function buildStatements(report) {
     // Deterministic, traceable, and unique — so a re-run inserts nothing.
     const sourceKey = `workbook:${report.report_date}:new:${entry.workbook.sheet}:${entry.workbook.row}`;
     const isDevelopment = proposed.project_type === "Development";
+    // Absent keys mean the workbook cell was blank; NULL is the correct column
+    // value for that, and is not the same as zero.
+    const costs = proposed.costs || {};
+    const dates = proposed.dates || {};
+    const risk = proposed.risk || { budget_risk: "Not Rated", schedule_risk: "Not Rated" };
 
     add(
       `INSERT OR IGNORE INTO business_units (name, sort_order) VALUES (${sqlLiteral(proposed.business_unit)}, 99);`,
       `ensure business unit ${proposed.business_unit}`,
     );
     add(
+      // Costs, dates and risk travel with the row. They used to be left out
+      // entirely, so an imported project arrived as an empty shell: CAPP 08740
+      // was created in September carrying none of its 82,289, and had to be
+      // corrected by hand weeks later. approved_budget is taken from the sheet,
+      // never summed from the CAPP columns, for the same reason it is elsewhere.
       `INSERT OR IGNORE INTO projects (\n` +
       `  source_key, business_unit_id, venue, project_type, name, capp_number, initiative_number,\n` +
       `  project_manager, development_lead, status, phase, scope_description, current_update,\n` +
-      `  budget_risk, schedule_risk, reporting_period, source_sort_order, section_name, source_sheet, updated_at\n` +
+      `  budget_risk, schedule_risk, reporting_period, source_sort_order, section_name, source_sheet,\n` +
+      `  precon_capp, construction_capp, add_capp, approved_budget, anticipated_final_cost,\n` +
+      `  original_start_date, current_start_date, original_turnover_date, current_turnover_date,\n` +
+      `  updated_at\n` +
       `) VALUES (\n` +
       `  ${sqlLiteral(sourceKey)}, (SELECT id FROM business_units WHERE name = ${sqlLiteral(proposed.business_unit)}),\n` +
       `  ${sqlLiteral(isDevelopment ? "Development Pipeline" : proposed.venue)}, ${sqlLiteral(proposed.project_type)},\n` +
@@ -246,12 +259,32 @@ export function buildStatements(report) {
       `  ${sqlLiteral(isDevelopment ? proposed.lead : null)},\n` +
       `  ${sqlLiteral(isDevelopment ? "Active" : "Active")}, ${sqlLiteral(isDevelopment ? null : "Planning")},\n` +
       `  ${sqlLiteral(proposed.scope_description)}, ${sqlLiteral(entry.workbook.current_update)},\n` +
-      `  'Not Rated', 'Not Rated', ${sqlLiteral(report.report_date)},\n` +
+      `  ${sqlLiteral(risk.budget_risk)}, ${sqlLiteral(risk.schedule_risk)}, ${sqlLiteral(report.report_date)},\n` +
       `  (SELECT COALESCE(MAX(source_sort_order), 9998) + 1 FROM projects),\n` +
-      `  ${sqlLiteral(proposed.section_name)}, ${sqlLiteral(entry.workbook.sheet)}, datetime('now')\n` +
+      `  ${sqlLiteral(proposed.section_name)}, ${sqlLiteral(entry.workbook.sheet)},\n` +
+      `  ${sqlLiteral(costs.precon_capp)}, ${sqlLiteral(costs.construction_capp)}, ${sqlLiteral(costs.add_capp)},\n` +
+      `  ${sqlLiteral(costs.approved_budget)}, ${sqlLiteral(costs.anticipated_final_cost)},\n` +
+      `  ${sqlLiteral(dates.original_start_date)}, ${sqlLiteral(dates.current_start_date)},\n` +
+      `  ${sqlLiteral(dates.original_turnover_date)}, ${sqlLiteral(dates.current_turnover_date)},\n` +
+      `  datetime('now')\n` +
       `);`,
       `create project "${proposed.name}" (${entry.workbook.sheet} r${entry.workbook.row})`,
     );
+
+    // Derived from the dates just written, with the application's expression, so
+    // a new project's Days column agrees with the dates printed beside it.
+    if (dates.original_turnover_date || dates.current_turnover_date) {
+      add(
+        `UPDATE projects SET duration_change_days = CASE\n` +
+        `    WHEN original_turnover_date IS NULL OR current_turnover_date IS NULL\n` +
+        `      OR trim(original_turnover_date) = '' OR trim(current_turnover_date) = ''\n` +
+        `      OR julianday(original_turnover_date) IS NULL OR julianday(current_turnover_date) IS NULL\n` +
+        `    THEN NULL\n` +
+        `    ELSE CAST(julianday(current_turnover_date) - julianday(original_turnover_date) AS INTEGER)\n` +
+        `  END WHERE source_key = ${sqlLiteral(sourceKey)};`,
+        `duration change for new project "${proposed.name}"`,
+      );
+    }
 
     if (entry.workbook.current_update) {
       add(
