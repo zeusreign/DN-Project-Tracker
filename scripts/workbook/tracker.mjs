@@ -20,7 +20,12 @@ const PROJECTS_SQL = `
   SELECT p.id, p.source_key, b.name AS business_unit, p.venue, p.section_name,
          p.source_sheet, p.project_type, p.name, p.capp_number, p.initiative_number,
          p.project_manager, p.development_lead, p.status, p.scope_description,
-         p.current_update, p.previous_update, p.reporting_period, p.archived_at
+         p.current_update, p.previous_update, p.reporting_period, p.archived_at,
+         p.budget_risk, p.schedule_risk,
+         p.precon_capp, p.construction_capp, p.add_capp, p.approved_budget,
+         p.anticipated_final_cost,
+         p.original_start_date, p.current_start_date,
+         p.original_turnover_date, p.current_turnover_date
   FROM projects p
   JOIN business_units b ON b.id = p.business_unit_id
 `.trim().replace(/\s+/g, " ");

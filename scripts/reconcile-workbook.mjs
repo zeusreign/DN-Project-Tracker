@@ -97,6 +97,63 @@ function planUpdate({ text, date, project, sourceKey }) {
   return { date, action: "insert", reason: "new_text", source_key: key };
 }
 
+// --- Structured columns the workbook owns ------------------------------------
+//
+// The workbook is the source of truth for these. Three rules decide what moves,
+// and all three came from the client:
+//
+//   BLANK MEANS NO CHANGE. A cell the workbook leaves empty asserts nothing, so
+//   it never clears a tracker value. The parser already drops empty cells, so an
+//   absent key IS a blank cell and is skipped here without special handling.
+//   This is what protects a risk rating set in the app against a sheet that
+//   simply has not filled that column in.
+//
+//   THE TOTAL IS TAKEN, NEVER DERIVED. Total Approved Budget is =SUM(I:K) on
+//   most rows and a typed number on others, and the two disagree: Gaming
+//   Expansion states 145,000,000 against CAPP columns totalling 19,578,167.
+//   Whatever the sheet shows is what the tracker shows.
+//
+//   ABSENT FROM THE WORKBOOK IS NOT A CHANGE EITHER. A project with no row this
+//   fortnight simply has no update; it is never touched. That is handled by
+//   classification, not here.
+//
+// name and capp_number are deliberately NOT in this list. Those are identity,
+// and a wrong match that rewrites a project's name and number is far harder to
+// notice and undo than a wrong figure. Identity changes go through the config.
+const SYNCED_FIELDS = [
+  "project_manager", "budget_risk", "schedule_risk",
+  "precon_capp", "construction_capp", "add_capp", "approved_budget",
+  "anticipated_final_cost",
+  "original_start_date", "current_start_date",
+  "original_turnover_date", "current_turnover_date",
+];
+
+const MONEY_COLUMNS = new Set([
+  "precon_capp", "construction_capp", "add_capp", "approved_budget", "anticipated_final_cost",
+]);
+
+// Same value or not, compared the way the column is actually stored: money to
+// two decimals, text case- and space-insensitively, dates on the day.
+function sameValue(field, before, after) {
+  if (before === null || before === undefined) return after === null || after === undefined;
+  if (MONEY_COLUMNS.has(field)) return Math.round(Number(before) * 100) === Math.round(Number(after) * 100);
+  if (field.endsWith("_date")) return String(before).slice(0, 10) === String(after).slice(0, 10);
+  return comparableText(before) === comparableText(after);
+}
+
+function plannedFields(row, project) {
+  const changes = [];
+  for (const field of SYNCED_FIELDS) {
+    if (!Object.hasOwn(row.fields, field)) continue;      // blank cell: no change
+    const after = row.fields[field];
+    if (after === null || after === undefined) continue;  // unparseable: no change
+    const before = project[field] ?? null;
+    if (sameValue(field, before, after)) continue;
+    changes.push({ field, before, after });
+  }
+  return changes;
+}
+
 // --- Classify every workbook row ---------------------------------------------
 
 const approved = new Map(
@@ -194,8 +251,10 @@ for (const sheet of workbook.sheets) {
           // step to fill previous_summary exactly as the activity route does.
           tracker_current_update: cleanText(project.current_update),
           would_become_current: !project.reporting_period || project.reporting_period <= config.report_date,
-          note: "The import writes activity only. No other project field is modified.",
         },
+        // The structured columns the workbook is authoritative for. Empty when
+        // the workbook agrees with the tracker, which is the common case.
+        planned_fields: plannedFields(row, project),
       });
       continue;
     }
@@ -322,6 +381,12 @@ const report = {
     matched_by_confidence: confidenceBuckets,
     planned_history_inserts: plannedInserts,
     planned_history_skips: skipReasons,
+    planned_field_updates: matched.reduce((n, e) => n + e.planned_fields.length, 0),
+    planned_field_projects: matched.filter((e) => e.planned_fields.length).length,
+    planned_fields_by_column: matched.reduce((acc, e) => {
+      for (const change of e.planned_fields) acc[change.field] = (acc[change.field] || 0) + 1;
+      return acc;
+    }, {}),
   },
   matched,
   proposed_new: proposedNew,
@@ -367,6 +432,12 @@ console.log("");
 console.log("  planned history inserts " + pad(plannedInserts, 4));
 for (const [reason, count] of Object.entries(skipReasons).sort((a, b) => b[1] - a[1])) {
   console.log("      skip: " + reason.padEnd(32) + pad(count, 4));
+}
+console.log("");
+console.log("  planned field updates   " + pad(report.totals.planned_field_updates, 4)
+  + "   across " + report.totals.planned_field_projects + " projects");
+for (const [field, count] of Object.entries(report.totals.planned_fields_by_column).sort((a, b) => b[1] - a[1])) {
+  console.log("      " + field.padEnd(32) + pad(count, 4));
 }
 
 if (unresolvedRows.length) {

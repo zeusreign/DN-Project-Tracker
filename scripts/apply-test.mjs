@@ -68,7 +68,8 @@ function report() {
         current_update: "September 11 text from the workbook.",
         previous_update: "September 4 text from the workbook.",
       },
-      tracker: { id: 9, name: "Two Kings Casino" },
+      tracker: { id: 9, name: "Two Kings Casino", source_key: "Gaming:TWO KINGS:Two Kings Casino:08312" },
+      planned_fields: [],
       planned_history: {
         current: { date: "2026-09-11", action: "insert", reason: "new_text", source_key: "workbook:2026-09-11:Gaming:TWO KINGS:Two Kings Casino:08312" },
         previous: { date: "2026-09-04", action: "insert", reason: "new_text", source_key: "workbook:2026-09-04:Gaming:TWO KINGS:Two Kings Casino:08312" },
@@ -336,6 +337,74 @@ assert.equal(sqlLiteral(42), "42");
     "apostrophes survive the round trip intact",
   );
   console.log("SQL escaping: OK");
+}
+
+// --- The structured columns the workbook owns --------------------------------
+// Costs, risk and dates now travel with the import. Three things have to hold:
+// the figure the workbook states is written verbatim, re-running writes nothing,
+// and the audit row renders in the UI rather than saying "not recorded".
+{
+  const db = freshDatabase();
+  seed(db);
+  db.exec("UPDATE projects SET precon_capp = 291650, construction_capp = 19286517, "
+    + "add_capp = 0, approved_budget = 19578167, budget_risk = 'High' WHERE id = 9;");
+
+  const shaped = report();
+  shaped.matched[0].planned_fields = [
+    // The headline case: a total the sheet states that its own columns do not
+    // add up to. 145,000,000 must land untouched.
+    { field: "approved_budget", before: 19578167, after: 145000000 },
+    { field: "budget_risk", before: "High", after: "Low" },
+    { field: "current_turnover_date", before: null, after: "2027-10-01" },
+  ];
+  shaped.proposed_new = [];
+  shaped.tracker_only = [];
+
+  const built = buildStatements(shaped);
+  for (const statement of built.statements) db.exec(statement.sql);
+
+  const after = db.prepare("SELECT approved_budget, budget_risk, current_turnover_date, "
+    + "precon_capp, construction_capp FROM projects WHERE id = 9").get();
+  assert.equal(after.approved_budget, 145000000,
+    "a stated total must be written as it stands, never re-derived from the CAPP columns");
+  assert.equal(after.budget_risk, "Low");
+  assert.equal(after.current_turnover_date, "2027-10-01");
+  assert.equal(after.precon_capp, 291650, "columns the workbook did not change stay put");
+
+  // Blank cells never reach planned_fields, so a column the sheet left empty is
+  // untouched. schedule_risk was never seeded or planned.
+  assert.equal(db.prepare("SELECT schedule_risk FROM projects WHERE id = 9").get().schedule_risk,
+    "Not Rated", "a column absent from the workbook must not be cleared");
+
+  const auditCount = () => db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action = 'field_update'").get().n;
+  const first = auditCount();
+  assert.equal(first, 1, "one field_update row per project, not one per column");
+
+  // The shape the UI reads. auditRowHtml() filters details.changes to fields it
+  // has a label for, so a row naming an unlabelled field renders as
+  // "Before-and-after values were not recorded for this entry."
+  const details = JSON.parse(db.prepare(
+    "SELECT details FROM audit_log WHERE action = 'field_update' LIMIT 1").get().details);
+  assert.equal(details.version, 1);
+  assert.equal(details.projectName, "Two Kings Casino");
+  assert.equal(details.actorName, "Workbook Import");
+  const labelled = new Set(["project_manager", "budget_risk", "schedule_risk", "precon_capp",
+    "construction_capp", "add_capp", "approved_budget", "anticipated_final_cost",
+    "original_start_date", "current_start_date", "original_turnover_date", "current_turnover_date"]);
+  for (const change of details.changes) {
+    assert.ok(labelled.has(change.field),
+      `${change.field} must have a label in auditFieldLabels or the audit entry renders blank`);
+    assert.ok(Object.hasOwn(change, "before") && Object.hasOwn(change, "after"),
+      "the UI drops a change missing before/after");
+  }
+
+  // Re-running changes nothing: the guards use IS NOT, so NULL compares properly.
+  for (const statement of built.statements) db.exec(statement.sql);
+  const again = db.prepare("SELECT approved_budget, budget_risk, current_turnover_date FROM projects WHERE id = 9").get();
+  assert.deepEqual({ ...again }, { approved_budget: 145000000, budget_risk: "Low", current_turnover_date: "2027-10-01" });
+  assert.equal(auditCount(), first, "a second run must not grow the audit trail");
+
+  console.log("Workbook-owned columns: OK");
 }
 
 console.log("Apply engine tests passed.");
