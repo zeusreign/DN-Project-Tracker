@@ -258,6 +258,7 @@ const STATUS_VALUES = {
 const RISK_VALUES = ["High", "Medium", "Low", "Not Rated"];
 const COST_FIELDS = new Set([
   "precon_capp", "construction_capp", "add_capp", "anticipated_final_cost",
+  "approved_budget",
   "subsidiary_expense_total", "original_estimate", "current_estimate",
 ]);
 
@@ -1436,9 +1437,15 @@ async function handleApi(request, env, url) {
     const precon = asNumber(body.precon_capp);
     const construction = asNumber(body.construction_capp);
     const addCapp = asNumber(body.add_capp);
-    const approved = [precon, construction, addCapp].some((value) => value !== null)
-      ? (precon || 0) + (construction || 0) + (addCapp || 0)
-      : asNumber(body.approved_budget);
+    // A stated total wins over the sum of the parts, because the two are not
+    // the same fact: the parts are what has been drawn down, the total is what
+    // was approved. Derive only when nothing was stated.
+    const statedTotal = asNumber(body.approved_budget);
+    const approved = statedTotal !== null
+      ? statedTotal
+      : ([precon, construction, addCapp].some((value) => value !== null)
+        ? (precon || 0) + (construction || 0) + (addCapp || 0)
+        : null);
     const statements = [
       env.DB.prepare("INSERT OR IGNORE INTO business_units (name, sort_order) VALUES (?, 99)").bind(businessUnit),
       env.DB.prepare(`
@@ -1662,7 +1669,13 @@ async function handleApi(request, env, url) {
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return error("Invalid project fields.");
     if (!await projectInScope(env.DB, projectId, scope)) return error("Project not found.", 404);
-    const project = await env.DB.prepare("SELECT id, project_type FROM projects WHERE id = ?").bind(projectId).first();
+    // The cost columns come back too, because deciding whether to re-derive
+    // approved_budget needs to know what it was BEFORE this edit. See the
+    // guarded recompute below.
+    const project = await env.DB.prepare(`
+      SELECT id, project_type, precon_capp, construction_capp, add_capp, approved_budget
+      FROM projects WHERE id = ?
+    `).bind(projectId).first();
     if (!project) return error("Project not found.", 404);
     // Checked against the whole body before a single statement is prepared, so a
     // payload mixing valid and invalid fields writes nothing at all.
@@ -1674,12 +1687,21 @@ async function handleApi(request, env, url) {
       "current_start_date", "original_turnover_date", "current_turnover_date",
       "scope_description", "section_name",
     ]);
-    const numberFields = new Set(["precon_capp", "construction_capp", "add_capp", "anticipated_final_cost"]);
+    // approved_budget is editable in its own right, not only derived. The
+    // workbook treats Total Approved Budget as an entered figure: on most rows
+    // it is =SUM(I:K), but on some it is a number typed over that formula, and
+    // those two disagree by millions. Gaming Expansion reads 145,000,000 while
+    // its three CAPP columns add up to 19,578,167 — the first is what has been
+    // approved, the second is what has been drawn down so far.
+    const numberFields = new Set([
+      "precon_capp", "construction_capp", "add_capp", "anticipated_final_cost", "approved_budget",
+    ]);
     const sets = [];
     const values = [];
     const fields = [];
     let costChanged = false;
     let turnoverChanged = false;
+    let totalSupplied = false;
     for (const [key, value] of Object.entries(body)) {
       if (textFields.has(key)) {
         sets.push(key + " = ?");
@@ -1690,7 +1712,8 @@ async function handleApi(request, env, url) {
         sets.push(key + " = ?");
         values.push(asNumber(value));
         fields.push(key);
-        if (key !== "anticipated_final_cost") costChanged = true;
+        if (key === "precon_capp" || key === "construction_capp" || key === "add_capp") costChanged = true;
+        if (key === "approved_budget") totalSupplied = true;
       }
     }
     if (!sets.length) return error("No editable fields were supplied.");
@@ -1700,7 +1723,18 @@ async function handleApi(request, env, url) {
       env.DB.prepare("UPDATE projects SET " + sets.join(", ") + " WHERE id = ?")
         .bind(...values, projectId),
     ];
-    if (costChanged) statements.push(env.DB.prepare(`
+    // Re-derive the total ONLY when it was already the sum of its parts, or was
+    // never set. A total that differs from its components is an entered figure,
+    // and overwriting it destroys real data: this recompute used to run
+    // unconditionally and silently cut Gaming Expansion from 145,000,000 to
+    // 19,578,167 — no warning, nothing in the audit trail, and the project is
+    // the largest in the portfolio.
+    //
+    // An edit that states approved_budget outright always wins; there is
+    // nothing to derive.
+    const previousSum = (project.precon_capp || 0) + (project.construction_capp || 0) + (project.add_capp || 0);
+    const wasDerived = project.approved_budget === null || Number(project.approved_budget) === previousSum;
+    if (costChanged && !totalSupplied && wasDerived) statements.push(env.DB.prepare(`
       UPDATE projects SET approved_budget = COALESCE(precon_capp, 0) + COALESCE(construction_capp, 0) + COALESCE(add_capp, 0)
       WHERE id = ?
     `).bind(projectId));

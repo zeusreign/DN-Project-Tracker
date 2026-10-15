@@ -1,0 +1,41 @@
+{
+  "workbook": "2026_0925 D&C Bi-Weekly Report Data.xlsx",
+  "report_date": "2026-09-25",
+  "previous_report_date": "2026-09-11",
+  "_dates": [
+    "Both dates are stated, never derived, per WORKBOOK_IMPORT.md \u00a74. The",
+    "previous date is the 11 September report, which is the state the tracker",
+    "was reconciled to on 8 October."
+  ],
+  "excluded_sheets": [
+    "DEAD DEVELOPMENT PROJECTS",
+    "CLOSED PROJECTS",
+    "DASHBOARD",
+    "Sheet1",
+    "THS Openings Chart"
+  ],
+  "_approved_new": [
+    "Rows approved for creation as new projects, keyed by the exact cell they",
+    "came from. Both were verified absent from the 2026-08-28 AND 2026-09-11",
+    "workbooks before approval: they appear for the first time in this one, so",
+    "they are genuinely new rows rather than a matching failure."
+  ],
+  "approved_new": [
+    {
+      "sheet": "Design & Development",
+      "row": 9,
+      "name": "Tenaya Cottages",
+      "note": "Parks & Resorts. Absent from the 0828 and 0911 workbooks; first appears 0925. No identifier - the row carries no initiative number. TENAYA LODGE on PARKS r14 is a venue heading, not this project."
+    },
+    {
+      "sheet": "Design & Development",
+      "row": 16,
+      "name": "Banners- Blades & Boards",
+      "note": "Patina. Absent from the 0828 and 0911 workbooks; first appears 0925. No identifier. RJ Millwork scope, pre-CAPP."
+    }
+  ],
+  "_tracker_only": [
+    "A project absent from the workbook does NOT mean it is finished."
+  ],
+  "tracker_only_decisions": []
+}

@@ -951,7 +951,22 @@ assert.equal(history.history.length, 2);
 assert.equal(history.history[0].reporting_period, "2026-08-28");
 assert.equal(history.history[1].reporting_period, "2026-08-21");
 
+// Total Approved Budget is an ENTERED figure, not always a derived one.
+//
+// The workbook computes it as =SUM(I:K) on most rows but carries a typed
+// number on others, and the two disagree by millions: Gaming Expansion reads
+// 145,000,000 against CAPP columns totalling 19,578,167. This project is the
+// same shape in miniature — 72,000 stated against 73,360 of components.
+//
+// Editing a cost column must NOT overwrite a stated total. An earlier version
+// re-derived it unconditionally and silently destroyed the client's figure.
 const capital = bootstrap.projects.find((project) => project.project_type === "Capital");
+assert.notEqual(
+  capital.approved_budget,
+  (capital.precon_capp || 0) + (capital.construction_capp || 0) + (capital.add_capp || 0),
+  "this fixture must carry a stated total that differs from its parts",
+);
+const statedTotal = capital.approved_budget;
 const costResponse = await call(`/api/projects/${capital.id}/fields`, {
   method: "PATCH",
   headers: { "content-type": "application/json" },
@@ -960,8 +975,8 @@ const costResponse = await call(`/api/projects/${capital.id}/fields`, {
 assert.equal(costResponse.status, 200);
 const afterCost = await (await call("/api/projects")).json();
 const updatedCapital = afterCost.projects.find((project) => project.id === capital.id);
-assert.equal(updatedCapital.approved_budget, 350);
-assert.equal(updatedCapital.forecast_variance, 50);
+assert.equal(updatedCapital.approved_budget, statedTotal);
+assert.equal(updatedCapital.forecast_variance, 400 - statedTotal);
 
 const costAudit = database.prepare("SELECT * FROM audit_log WHERE action = 'field_update' ORDER BY id DESC LIMIT 1").get();
 const costDetails = JSON.parse(costAudit.details);
@@ -969,6 +984,38 @@ assert.equal(costDetails.projectName, capital.name);
 assert.equal(costDetails.actorName, "Pilot Owner");
 assert.equal(costAudit.actor_email, "owner@example.com");
 assert.deepEqual(costDetails.changes.find(change => change.field === "precon_capp"), {field:"precon_capp",before:capital.precon_capp,after:100});
+
+// Stating the total outright wins, and re-derives nothing.
+assert.equal((await call(`/api/projects/${capital.id}/fields`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ approved_budget: 1234 }),
+})).status, 200);
+const afterStated = await (await call("/api/projects")).json();
+assert.equal(afterStated.projects.find((p) => p.id === capital.id).approved_budget, 1234);
+
+// The other half: once the total IS the sum of its parts, it tracks them
+// again. Setting it to 350 matches the components written above, so the next
+// cost edit is free to re-derive.
+assert.equal((await call(`/api/projects/${capital.id}/fields`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ approved_budget: 350 }),
+})).status, 200);
+assert.equal((await call(`/api/projects/${capital.id}/fields`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ construction_capp: 900 }),
+})).status, 200);
+const afterDerive = await (await call("/api/projects")).json();
+assert.equal(afterDerive.projects.find((p) => p.id === capital.id).approved_budget, 1050);
+
+// Put the fixture back so the assertions that follow see what they expect.
+assert.equal((await call(`/api/projects/${capital.id}/fields`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ construction_capp: 200, approved_budget: statedTotal }),
+})).status, 200);
 
 // Days column: duration_change_days is derived from the two turnover dates and
 // must be recomputed whenever either one moves. It used to be a stored value the
