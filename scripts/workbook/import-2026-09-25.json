@@ -15,27 +15,57 @@
     "THS Openings Chart"
   ],
   "_approved_new": [
-    "Rows approved for creation as new projects, keyed by the exact cell they",
-    "came from. Both were verified absent from the 2026-08-28 AND 2026-09-11",
-    "workbooks before approval: they appear for the first time in this one, so",
-    "they are genuinely new rows rather than a matching failure."
+    "Verified absent from the 0828 and 0911 workbooks before approval.",
+    "",
+    "Banners- Blades & Boards is created HERE even though it is gone again by the",
+    "9 October workbook. It appeared in a report the client sent, so by rule B its",
+    "later absence is 'no update', not 'never existed'. Skipping it would make the",
+    "tracker's contents depend on which workbooks we happened to process, which is",
+    "the opposite of what rule B is for."
   ],
   "approved_new": [
     {
       "sheet": "Design & Development",
       "row": 9,
       "name": "Tenaya Cottages",
-      "note": "Parks & Resorts. Absent from the 0828 and 0911 workbooks; first appears 0925. No identifier - the row carries no initiative number. TENAYA LODGE on PARKS r14 is a venue heading, not this project."
+      "note": "Parks & Resorts. Absent from 0828 and 0911; first appears here. No initiative number."
     },
     {
       "sheet": "Design & Development",
       "row": 16,
       "name": "Banners- Blades & Boards",
-      "note": "Patina. Absent from the 0828 and 0911 workbooks; first appears 0925. No identifier. RJ Millwork scope, pre-CAPP."
+      "note": "Patina. Absent from 0828 and 0911; appears here only. RJ Millwork scope, pre-CAPP."
+    },
+    {
+      "sheet": "PARKS",
+      "row": 13,
+      "identifier": "08743",
+      "name": "Phase III of the IHG PIP",
+      "note": "Squire Resort, CAPP 08743. Client decision: not an existing project."
     }
   ],
   "_tracker_only": [
-    "A project absent from the workbook does NOT mean it is finished."
+    "Empty BY DECISION, per rule B."
   ],
-  "tracker_only_decisions": []
+  "tracker_only_decisions": [],
+  "_client_rules": [
+    "A. A blank workbook cell means NO CHANGE.",
+    "B. A project absent from the workbook means NO UPDATE, not finished.",
+    "C. Total Approved Budget is taken as it stands, never re-derived."
+  ],
+  "_renames": [
+    "Waybound: PARKS row 3 has carried this project in every workbook. Its previous-update",
+    "text here is word-for-word the 0911 current text, which is word-for-word what the",
+    "tracker holds. Renamed and renumbered in this cycle."
+  ],
+  "renames": [
+    {
+      "tracker_id": 38,
+      "sheet": "PARKS",
+      "row": 3,
+      "identifier": "08742",
+      "name": "Waybound #08705A",
+      "note": "Was 'Waybound Phase I' / 08705A. Confirmed by the client 2026-10-15."
+    }
+  ]
 }

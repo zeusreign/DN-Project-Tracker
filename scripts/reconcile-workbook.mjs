@@ -340,6 +340,23 @@ for (const sheet of workbook.sheets) {
           identifier: row.match.capp_raw,
           lead: cleanText(row.fields.development_lead || row.fields.project_manager),
           scope_description: cleanText(row.fields.scope_description),
+          // A new project arrives with its figures, not as an empty shell.
+          // Without this the create path wrote name, lead and update text only:
+          // CAPP 08740 was created by the September import carrying none of its
+          // 82,289, and three of the four rows approved for this cycle hold
+          // costs or dates that would have gone the same way.
+          risk: {
+            budget_risk: row.fields.budget_risk || "Not Rated",
+            schedule_risk: row.fields.schedule_risk || "Not Rated",
+          },
+          costs: Object.fromEntries(["precon_capp", "construction_capp", "add_capp",
+            "approved_budget", "anticipated_final_cost"]
+            .filter((field) => Object.hasOwn(row.fields, field) && row.fields[field] !== null)
+            .map((field) => [field, row.fields[field]])),
+          dates: Object.fromEntries(["original_start_date", "current_start_date",
+            "original_turnover_date", "current_turnover_date"]
+            .filter((field) => Object.hasOwn(row.fields, field) && row.fields[field] !== null)
+            .map((field) => [field, row.fields[field]])),
         },
       });
       continue;
