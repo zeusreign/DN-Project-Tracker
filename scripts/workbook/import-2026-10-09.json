@@ -1,0 +1,88 @@
+{
+  "workbook": "2026_1009 D&C Bi-Weekly Report Data.xlsx",
+  "report_date": "2026-10-09",
+  "previous_report_date": "2026-09-25",
+  "_dates": [
+    "Both dates are stated, never derived. The tracker's structured columns were",
+    "reconciled to the 25 September workbook on 8-9 October, so that is the",
+    "previous state this run moves on from."
+  ],
+  "excluded_sheets": [
+    "DEAD DEVELOPMENT PROJECTS",
+    "CLOSED PROJECTS",
+    "DASHBOARD",
+    "Sheet1",
+    "THS Openings Chart"
+  ],
+  "_client_rules": [
+    "Decisions confirmed by the client, applied by the pipeline rather than by hand:",
+    "A. A blank workbook cell means NO CHANGE. It never clears a tracker value.",
+    "B. A project absent from the workbook means NO UPDATE, not finished. Status",
+    "   stays an administrator's job in the app, so tracker_only_decisions is empty",
+    "   by policy and not merely because nothing was decided.",
+    "C. Total Approved Budget is taken from the sheet as it stands and never",
+    "   re-derived from the three CAPP columns."
+  ],
+  "_approved_new": [
+    "Verified absent from BOTH the 0828 and 0911 workbooks before approval, so",
+    "these are genuinely new rows rather than a matching failure.",
+    "",
+    "Banners- Blades & Boards was approved against the 0925 workbook and has been",
+    "DROPPED here: it appears only in 0925 and is gone again by 1009, so creating",
+    "it would add a project that has already disappeared."
+  ],
+  "approved_new": [
+    {
+      "sheet": "Design & Development",
+      "row": 9,
+      "name": "Tenaya Cottages",
+      "note": "Parks & Resorts. Absent from 0828 and 0911; present in both 0925 and 1009. No initiative number."
+    },
+    {
+      "sheet": "PARKS",
+      "row": 13,
+      "identifier": "08743",
+      "name": "Phase III of the IHG PIP",
+      "note": "Squire Resort. New row in 0925, still present in 1009, CAPP 08743. Client decision: not an existing project. Holiday Inn PIP #08563 is a different venue (Estes Park Ridgeline) and Squire Resort is a Development-pipeline record, so neither is this."
+    },
+    {
+      "sheet": "PATINA",
+      "row": 9,
+      "identifier": "64024",
+      "name": "Upgrade - adding a Coat Closet & Service Station",
+      "note": "Absent from 0828, 0911 and 0925; first appears 1009. Nothing resembling it in the tracker."
+    },
+    {
+      "sheet": "PATINA",
+      "row": 11,
+      "identifier": "63397",
+      "name": "Enlarging Kitchen Door Opening from a 3' to 5'",
+      "note": "Absent from 0828, 0911 and 0925; first appears 1009. Nothing resembling it in the tracker."
+    }
+  ],
+  "_renames": [
+    "Identity changes confirmed by the client. A project renamed AND renumbered",
+    "in the same cycle matches nothing, because the matcher works from CAPP and",
+    "name and both moved. Never inferred - each entry is a decision.",
+    "",
+    "Waybound: PARKS row 3 has carried this project in every workbook. Its",
+    "'previous update' text in 0925 is word-for-word the 0911 current text, which",
+    "is word-for-word what the tracker holds, so the chain is unbroken. The old",
+    "CAPP 08705A now appears inside the new name."
+  ],
+  "renames": [
+    {
+      "tracker_id": 38,
+      "sheet": "PARKS",
+      "row": 3,
+      "identifier": "08742",
+      "name": "Waybound #08705A",
+      "note": "Was 'Waybound Phase I' / 08705A. Same row, same project, renamed and renumbered between 0911 and 0925. Confirmed by the client 2026-10-15."
+    }
+  ],
+  "_tracker_only": [
+    "Empty BY DECISION, per rule B above. Ten tracker projects have no row in this",
+    "workbook; none is marked complete here."
+  ],
+  "tracker_only_decisions": []
+}

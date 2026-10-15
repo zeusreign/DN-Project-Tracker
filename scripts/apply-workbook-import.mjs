@@ -211,7 +211,12 @@ export function buildStatements(report) {
         reportingPeriod: report.report_date,
         source: report.workbook,
       },
-      `workbook-fields:${report.report_date}:${entry.tracker.source_key}`,
+      // Keyed on the tracker id, which is always present and unique. An earlier
+      // version used tracker.source_key, which the reconcile report does not
+      // carry: every project produced the key "...:undefined", hashed to one
+      // import_id, and the guard below then suppressed every field audit row
+      // after the first.
+      `workbook-fields:${report.report_date}:project:${entry.tracker.id}`,
     );
   }
 

@@ -61,6 +61,32 @@ if (snapshotPath) {
   if (snapshotOut) writeJson(projectRoot, snapshotOut, tracker);
 }
 
+// --- Identity changes the client has confirmed -------------------------------
+//
+// A project that is renamed AND renumbered in the same cycle matches nothing:
+// the matcher works from CAPP and name, and both moved. Waybound Phase I /
+// 08705A became Waybound #08705A / 08742 between 25 September and 9 October.
+//
+// This is NOT inferred. Each entry is a decision recorded in the config, and
+// the pre-applied values below are only what the matcher indexes on — the
+// tracker's real values are kept so the audit row can show before -> after.
+// Identity is the one thing a bad match corrupts invisibly, so it never moves
+// automatically the way a cost or a risk rating does.
+const renames = new Map();
+for (const rename of config.renames || []) {
+  const project = tracker.projects.find((candidate) => candidate.id === rename.tracker_id);
+  if (!project) {
+    console.error(`ERROR: renames names tracker project ${rename.tracker_id}, which does not exist.`);
+    process.exit(1);
+  }
+  renames.set(`${rename.sheet}:${rename.row}`, {
+    ...rename,
+    before: { name: project.name, capp_number: project.capp_number },
+  });
+  if (rename.name) project.name = rename.name;
+  if (rename.identifier) project.capp_number = rename.identifier;
+}
+
 const index = buildIndex(tracker.projects);
 
 // --- Existing history, for duplicate detection -------------------------------
@@ -141,12 +167,36 @@ function sameValue(field, before, after) {
   return comparableText(before) === comparableText(after);
 }
 
+// The name and number a confirmed rename moves, as before -> after pairs. The
+// matcher has already been pointed at the right project; this is what makes the
+// change visible in the audit trail instead of silent.
+function identityChanges(rename) {
+  if (!rename) return [];
+  const changes = [];
+  if (rename.name && rename.before.name !== rename.name) {
+    changes.push({ field: "name", before: rename.before.name, after: rename.name });
+  }
+  if (rename.identifier && rename.before.capp_number !== rename.identifier) {
+    changes.push({ field: "capp_number", before: rename.before.capp_number, after: rename.identifier });
+  }
+  return changes;
+}
+
 function plannedFields(row, project) {
   const changes = [];
   for (const field of SYNCED_FIELDS) {
     if (!Object.hasOwn(row.fields, field)) continue;      // blank cell: no change
     const after = row.fields[field];
     if (after === null || after === undefined) continue;  // unparseable: no change
+    // normaliseRisk() answers "Not Rated" for a cell that is blank, "N/A", or a
+    // word it does not know — so unlike every other column, a missing risk cell
+    // arrives as a VALUE rather than as an absent key, and "blank means no
+    // change" would not catch it. Project 40 is the live case: its risk cells
+    // are empty in the workbook while the tracker holds Low/Low, set in the app
+    // on 2026-09-29. Writing the default over that is exactly the data loss the
+    // blank-cell rule exists to prevent, and the workbook has no vocabulary for
+    // deliberately rating something "Not Rated".
+    if ((field === "budget_risk" || field === "schedule_risk") && after === "Not Rated") continue;
     const before = project[field] ?? null;
     if (sameValue(field, before, after)) continue;
     changes.push({ field, before, after });
@@ -254,7 +304,10 @@ for (const sheet of workbook.sheets) {
         },
         // The structured columns the workbook is authoritative for. Empty when
         // the workbook agrees with the tracker, which is the common case.
-        planned_fields: plannedFields(row, project),
+        planned_fields: [
+          ...identityChanges(renames.get(`${row.source.sheet}:${row.source.row}`)),
+          ...plannedFields(row, project),
+        ],
       });
       continue;
     }
