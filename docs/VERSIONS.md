@@ -1,3 +1,5 @@
+> **30 October 2026 review release:** Start with ../START_HERE_2026_10_30.md. Deployment references below are historical; this review build has not been deployed.
+
 # Live versus test version record
 
 What is deployed where, which commit each deployment serves, and how to verify both without

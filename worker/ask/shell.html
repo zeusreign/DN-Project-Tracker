@@ -1,0 +1,33 @@
+<div id="startupNotice" class="dnc-startup" role="status"><strong>Loading your project workspace…</strong> If this message remains, refresh this page.</div>
+<div id="dnc-assistant" class="dnc-app">
+  <aside class="dnc-sidebar">
+    <div class="dnc-brand"><span class="dnc-brand-mark">D&C</span><span>PROJECT<br>TRACKER</span></div>
+    <div class="dnc-space-label">ENHANCED WORKSPACE</div>
+    <nav aria-label="Workspace"><button class="dnc-nav active" data-nav="ask"><span>✦</span> Ask the Tracker</button><button class="dnc-nav" data-nav="projects"><span>▤</span> Project records</button><button class="dnc-nav" data-nav="reports"><span>▥</span> Briefing report</button></nav>
+    <div class="dnc-sidebar-bottom"><span class="dnc-version">COMMUNICATION PRIVATE WORKSPACE</span><p>Your records.<br>A new way to ask.</p><button id="dataInfo" class="dnc-side-link">About this data</button></div>
+  </aside>
+  <main class="dnc-main">
+    <header class="dnc-topbar"><div><span class="dnc-kicker">DESIGN & CONSTRUCTION</span><div class="dnc-breadcrumb">Enhanced Beta <span>/</span> Ask the Tracker</div></div><div class="dnc-top-right"><span class="dnc-snapshot-tag">Current private records</span><button class="dnc-avatar" id="aboutButton" aria-label="About this review">TL</button></div></header>
+    <div class="dnc-review-bar"><span><strong>Integrated Project Tracker</strong> · Current saved records</span><span id="connectionStatus">Guided mode · local searches</span></div>
+    <section class="dnc-heading"><div><h1>Ask the Tracker</h1><p>Ask in your own words. Refine the answer. Create your report.</p></div><div class="dnc-connection-controls"><label>Answer mode <select id="engineSelect" disabled><option value="guided">Guided</option><option value="ai">OpenAI</option></select></label><button id="connectionButton" class="dnc-btn">About this preview</button><button id="newConversation" class="dnc-btn">New conversation</button></div></section>
+    <p class="dnc-budget-basis">Approved budget uses the saved Total Approved field in Cost Control. A&amp;E / Pre-Con is a separate component. Variance is anticipated cost minus total approved; a large difference may reflect partial approvals. This is the private preview database.</p>
+    <div class="dnc-workspace">
+      <section class="dnc-conversation" aria-label="Conversation">
+        <div class="dnc-chat-controls"><div class="dnc-modes" role="group" aria-label="Communication mode"><button id="quietMode" aria-pressed="true">Quiet chat</button><button id="voiceMode" aria-pressed="false">Voice</button></div><label class="dnc-scope">Search in <select id="unitScope" aria-label="Search business unit"><option>All business units</option></select></label></div>
+        <div class="dnc-voice-panel" id="voicePanel" hidden>
+          <div class="dnc-voice-heading"><div class="dnc-voice-orb" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div><div><h2>Talk with Ask the Tracker</h2><p id="voiceStatus" role="status">Start a conversation, then speak naturally.</p></div><span id="voiceElapsed" class="dnc-voice-time" aria-label="Conversation duration"></span></div>
+          <div class="dnc-voice-actions"><button id="voiceStart" class="dnc-btn dnc-btn-primary">Start conversation</button><button id="voiceMute" class="dnc-btn" aria-pressed="false" hidden>Mute microphone</button><button id="voiceInterrupt" class="dnc-btn" hidden>Stop speaking</button><button id="voiceEnd" class="dnc-btn dnc-voice-end" hidden>End conversation</button><button id="voicePlayback" class="dnc-btn" hidden>Enable sound</button></div>
+          <p class="dnc-voice-note">AI-generated voice · Audio and selected answers go to OpenAI while connected, using your API credit. 60-minute voice sessions · Saved conversations can be resumed.</p>
+        </div>
+        <div class="dnc-history-controls"><details class="dnc-history-picker" id="historyPicker"><summary>History</summary><div class="dnc-history-menu"><label class="dnc-sr-only" for="savedConversation">Saved conversations</label><select id="savedConversation"><option value="">Saved conversations</option></select><button id="historyRefresh" class="dnc-btn" aria-label="Refresh saved conversations">Refresh</button></div></details><button id="historyExport" class="dnc-btn">Export conversation</button><button id="historyRetry" class="dnc-btn" hidden>Retry save</button><span id="historyStatus" role="status">Loading conversations…</span></div>
+        <div class="dnc-messages" id="messages" role="log" aria-live="polite" aria-label="Conversation messages"></div>
+        <div class="dnc-suggestions" id="suggestions"></div>
+        <form id="chatForm" class="dnc-composer"><label for="queryInput" class="dnc-sr-only">Ask about your projects</label><textarea id="queryInput" rows="2" maxlength="4000" placeholder="Describe the information or report you want…"></textarea><div class="dnc-compose-footer"><span id="composerHint">Quiet mode · microphone and audio off</span><button type="submit" id="sendButton" class="dnc-send" aria-label="Send question">Send</button></div></form>
+      </section>
+      <aside class="dnc-evidence" aria-label="Supporting project records"><div class="dnc-evidence-header"><div><span class="dnc-kicker">YOUR SOURCE RECORDS</span><h2 id="evidenceTitle">Portfolio at a glance</h2></div><span class="dnc-count" id="evidenceCount">76</span></div><div class="dnc-evidence-toolbar" id="evidenceToolbar"></div><div id="evidenceBody" class="dnc-evidence-body"></div></aside>
+    </div>
+    <footer class="dnc-footer"><span id="snapshotFooter"></span><span>Read-only assistant · Private Tracker</span></footer>
+  </main>
+  <dialog id="infoDialog" class="dnc-dialog"><div class="dnc-dialog-top"><h2>About this review</h2><button id="closeInfo" class="dnc-btn">Close</button></div><div id="infoContent"></div></dialog>
+</div>
+

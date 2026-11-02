@@ -1,128 +1,72 @@
-# Delaware North D&C Project Management Tracker
+# DNC Enhanced Tracker - private review
 
-A web application for tracking Delaware North Design & Construction projects. It covers capital
-projects, a development pipeline, costs, schedule and risk, with per-project activity history and an
-audit trail. It replaces a spreadsheet-based reporting workbook.
+**Current external deployment handoff:** [Faheem deployment guide, 2 November 2026](docs/FAHEEM_DEPLOYMENT_2026-11-02.md). Use `node scripts/bundle.mjs --production` for external hosting; `npm run build` remains the private review build. Older entries below are chronological notes and may describe superseded integration states.
 
-**Live application:** https://dnc.lagospm.com
+Private ChatGPT Sites workspace for TJ's weekend testing. This is separate from dnc.lagospm.com and the Ask the Tracker pilot.
 
----
+## Source and data
 
-## What it is
+Derived from the complete 30 October Info / Workbook / Archive review release, based on Faheem's shared b62e462 handoff. The core modules are retained, with isolated preview adaptations:
 
-A **single Cloudflare Worker**, deployed as a Cloudflare Pages Function. There is no separate
-frontend build, no framework and no server to maintain.
+- Enhanced is the default view.
+- New Site-owned D1 and R2 bindings; no live database, account credentials, resource IDs or photo bucket are connected.
+- 72 copied records from the supplied `2026_1023 D&C Bi-Weekly Report Data.xlsx`: 50 capital and 22 development.
+- Source narratives and available amounts/dates retained. Blank source financial cells stay blank; capital statuses default to Active because that workbook has no capital status column. Development statuses come from the workbook. Flags and excluded tabs are documented in `docs/PREVIEW_DATA_NOTES.json`.
+- Workbook and Excel share the reference column labels/order and colored section subheadings. Capital sheets have 19 columns; Design & Development has 17. Activity is ten Excel character units wider than each original sheet; other columns are tightened. Hidden Count and unused Column1 are omitted.
+- Historical source reports: Aug 28, Sep 11, Sep 25 and Oct 9, 2026. 291 source rows reconciled: 262 exact identities (3 without notes), yielding 259 historical entries. Matching requires project type, business unit and exact normalized name, plus unique CAPP/initiative or corroborated scope/venue. No fuzzy joins or project creation. 29 rows across 14 identities remain in each period's Import review tab, including original notes. Archived/closed source tabs are excluded as in the existing parser, not imported as active projects.
+- The append-only `ensureWorkbookHistory` backfill runs after authentication; each import entry has a stable source key. It is resumable and duplicate-safe, including same-project/date/text checks. Completion is marked in `app_meta`; project rows, user edits, current costs/status and archive flags are never updated. Existing seed version stays unchanged. Publication installs the backfill; the first authorized API request applies it.
+- Previous Week Update gives the selected source report's supplied previous note precedence (e.g. Oct 23's previous week can differ from the Oct 9 fortnight). Its own date is unknown. Otherwise prior-fortnight dated notes appear. Undated notes stay with their source report. Repeated text across DIFFERENT source report dates remains as evidence of each report; repeat import of the same entry does not add history.
+- Source colors are extracted by `scripts/extract-workbook-colors.py` into `worker/workbook-colors.js`: exact RGB/theme tints, per-row fills and section colors. Browser and Excel consume the same style metadata. Risk labels override source shading with green/yellow/red and readable black text. Blank source risk cells retain their shading and remain Not Rated. Variances/delays are recalculated from current values and colored red if positive, dark green otherwise; duplicated/conflicting source conditional rules and broken #REF! expressions are intentionally not copied. CSV/TSV cannot contain colors.
+- Current project membership/financials/schedule remain current even when historical activity is selected. Historical reports are not financial snapshots. No missing live records/photos or undated previous notes are claimed as restored.
+- Original live photo files are not copied. Supplied bundled reference images remain; new test uploads are stored in this Site's R2.
+- Edits and uploads persist in this Site. Rebuilds do not reseed over existing rows. Do not change the seed version to reset data without an explicit reset request.
 
-| Part | Role |
-|---|---|
-| `worker/index.js` | API routes, authentication, permissions, calculations, audit logging |
-| `worker/client.js`, `page.js`, `styles.js` | The browser interface, served as one HTML page |
-| `worker/seed.js` | The 74 project records loaded into an empty database on first run |
-| `drizzle/*.sql` | Database migrations |
-| `scripts/` | Build, bundle and test scripts |
+## Sign-in
 
-### Cloudflare resources
+Sites enforces owner-private access. Runtime `ALLOW_PLATFORM_AUTH=true` and `SITES_OWNER_PREVIEW=true` enable the inherited platform identity support. The first admitted owner identity is bound in D1; later different identities are denied even if the Site audience is accidentally widened. No shared preview password or credential is embedded. Anonymous callers cannot read or write the API.
 
-| Resource | Name | Purpose |
-|---|---|---|
-| Pages project | `dnc-tracker-pilot` | Hosts the application |
-| D1 database | `dnc-tracker-pilot` | Projects, activity history, users, audit log |
-| R2 bucket | `dnc-tracker-assets` | Profile photograph files (private) |
+Do not deploy this preview-specific identity configuration to the public live Tracker. Production retains its own account and deployment process. The private review is not a test of production password login, current live permissions or data reconciliation.
 
-Deployment uses **Wrangler 4.129.1**. Configuration lives in `wrangler.toml` in the repository root.
+## Work and checks
 
-### Screens
+- `npm test`: in-memory API + served-client checks for this copy, owner access, saved edits, Archive/Restore, exports and Enhanced default.
+- `node scripts/reporting-archive-test.mjs`: additional reporting/permissions/photo preservation checks.
+- `node scripts/workbook-reference-test.mjs [reference.xlsx]`: checks all sheet values, matching columns, subheadings, widths, 49 previous notes, and date boundaries; optional input compares headings and Activity +10 directly against the reference.
+- `node scripts/workbook-history-test.mjs`: validates every historical entry, counts, current-row preservation, retry behavior and scoped review.
+- `node scripts/export-integrity-test.mjs`: independent Excel/CSV format validation (Python openpyxl, read-only).
+- `npm run build` and `npm run validate`: bundle the Worker with embedded assets and SQL migrations.
+- `scripts/sites-local-preview.mjs`: local QA only, uses synthetic identity and an in-memory database. It is never bundled or deployed.
 
-Portfolio · Projects · Development Pipeline · Cost Control · Risk Register · Admin ·
-Help (with an embedded PDF guide)
+OpenAI Sites is the publication path for this review. The native Sites source repository is the durable development copy. Use the same Site for further changes; preserve owner-private audience, D1/R2 bindings, project ID and existing review data.
 
----
+Desktop browser review verified Projects, module Info and the loaded Workbook layout through the managed preview. Application tests also verified download and archive behavior. iPad/device acceptance and user-side hosted sign-in remain to be checked.
 
-## Running it locally
+## Review refinements - 30 October 2026
 
-Requires **Node.js 22.5 or newer** (the test database uses the built-in `node:sqlite` module).
+- The top Workbook shortcut appears only in Portfolio (opens all projects). Projects/Development retain the lower shortcut in both Classic and Enhanced. Info is an icon with an Info tooltip.
+- PM/development lead, both risks and both variance columns are centered in the shared browser/Excel style metadata. Browser section labels span the three frozen identity columns and remain fixed during horizontal scrolling.
+- Activity History uses one request and one renderer per dialog open. Current and supplied previous-week narratives are both visible; no artificial reporting date is assigned. Compare Past Activities includes source previous notes. Stale responses cannot populate a closed dialog or another account/project.
+- The already-authorized owner in this private Site can use the copied Tom Lagos profile: `tom@lagospm.com` maps to `tlagos@delawarenorth.com` only under `SITES_OWNER_PREVIEW` after the existing owner identity check. This restores his existing portrait and profile controls; it creates no account, changes no credentials or permissions, and does not affect the live Tracker.
+- Verified browser: portrait loaded; first identity column and section label both remain at x=259 after 2,084px horizontal scrolling; requested alignments center; both weekly notes visible in History at 13px. API/served-client tests verify one history request, source notes, shortcut visibility, owner-only profile mapping and portrait retrieval.
 
-### Tests
+## Interaction refinements - 31 October 2026
 
-```sh
-npm install
-npm test
-```
+- Inline Activity Save appears only while the field is focused (or the button has keyboard focus). Existing save-on-blur remains; a per-field in-flight guard prevents a simultaneous button/blur from posting twice.
+- Activity dialog uses a scrollable body and fixed-height header/footer so Save update remains visible. Edit permissions still govern the control.
+- Double-clicking a Card's body opens its Record view; buttons keep their normal single-click action. Search uses a larger accessible magnifier button that focuses the existing live-filter input. Sort Order is centered above its select.
+- A 6 pt, grey italic/cursive developer signature appears only over a 13 px band at the bottom-right of the sidebar (also available by keyboard focus).
+- Ask the Tracker remains a separate pilot using its October 2 snapshot. Recommended next work: connect its validated query/export pipeline to this Tracker's current authorized records and history, then integrate voice. This release does not add an AI connection or change credentials.
 
-`npm test` builds the Worker, validates the bundle and runs the test suite against an in-memory
-database. It needs no Cloudflare access and touches nothing real. Start here.
+## Activity layout follow-up - 31 October 2026
 
-### Preview in a browser
+- Activity dialog Save update sits on the far right of the Complete project history heading, directly below the editor. This heading remains sticky while history scrolls.
+- Project Update and Previous Week Update have identical widths on every capital worksheet and in the shared browser layout. The existing current-update width remains unchanged.
+- A small dot to the left reveals the signature, keeping the pointer clear of the lettering. The 6 pt grey signature uses bundled Z003 calligraphic italic with a heavier synthesized weight. The original font and license are included under assets/fonts and served at /signature-font.otf and /signature-font-license.txt.
+- Ask the Tracker integration requested: the existing pilot has a protected API key that cannot be retrieved. No key is configured on this preview; secure credential setup is needed before integration work proceeds.
 
-```sh
-cp .env.example .env      # set PREVIEW_ADMIN_EMAIL and PREVIEW_ADMIN_PASSWORD
-npm run dev               # http://localhost:5173
-```
+## Narrower names and fixed financial/risk headers - 31 October 2026
 
-The preview uses a throwaway in-memory database that resets on every restart. The application ships
-with no built-in credentials, so those two variables create a single administrator for the preview
-only. See [docs/TESTING.md](docs/TESTING.md) for what the preview can and cannot prove.
-
----
-
-## Documentation
-
-Operational guides live in `docs/`. Each topic is documented in one place.
-
-| Guide | Use it to |
-|---|---|
-| [docs/VERSIONS.md](docs/VERSIONS.md) | See which commit production and the test environment each serve, and verify it |
-| [docs/DEPLOY.md](docs/DEPLOY.md) | Deploy a code change, or roll a release back |
-| [docs/BACKUP_AND_RESTORE.md](docs/BACKUP_AND_RESTORE.md) | Back up and restore the database and files, and verify a restore |
-| [docs/DATABASE.md](docs/DATABASE.md) | Understand the schema, migrations, seed data and known data behaviours |
-| [docs/WORKBOOK_IMPORT.md](docs/WORKBOOK_IMPORT.md) | Import a bi-weekly D&C workbook — the fortnightly reconciliation procedure |
-| [docs/USER_ADMINISTRATION.md](docs/USER_ADMINISTRATION.md) | Create, activate, suspend or remove a user |
-| [docs/PERMISSIONS.md](docs/PERMISSIONS.md) | Understand roles and business-unit access |
-| [docs/STORAGE.md](docs/STORAGE.md) | Understand how profile photographs are stored in R2 |
-| [docs/TESTING.md](docs/TESTING.md) | Run tests, and verify production after a change |
-| [docs/COST_AND_LIMITS.md](docs/COST_AND_LIMITS.md) | Understand Cloudflare usage limits, cost risk, and the monthly check |
-
-`IMPLEMENTATION_NOTES.md`, `AUDIT_CHANGE_HANDOFF.md`, `VALIDATION_REPORT.md` and
-`START_HERE_FAHEEM.md` in the repository root are retained as historical reference. **The guides in
-`docs/` are the current source of instructions.** Where the two disagree, `docs/` is correct.
-
----
-
-## Things not to do
-
-1. **Do not re-run the database migrations.** They have been applied and are not repeatable — several
-   use `ALTER TABLE … ADD COLUMN` and fail on a second run.
-   See [docs/DATABASE.md](docs/DATABASE.md).
-2. **Do not set `ALLOW_PLATFORM_AUTH` to `"true"` in production.** It makes the application trust
-   request headers for identity, which would let any caller act as an administrator.
-   See [docs/DEPLOY.md](docs/DEPLOY.md).
-3. **Do not make the R2 bucket public.** Photograph access is authorised by the application; a public
-   bucket bypasses those checks. See [docs/STORAGE.md](docs/STORAGE.md).
-4. **Do not commit a database export.** Exports contain password hashes, session tokens and staff
-   email addresses. Keep them outside the repository.
-5. **Do not rely on a deployment URL other than the live domain.** Every past deployment stays
-   reachable at its own `<hash>.dnc-tracker-pilot.pages.dev` address and permanently keeps the
-   bindings it was deployed with, so it can behave differently from production. Use
-   `https://dnc.lagospm.com`.
-6. **Do not assume a database write succeeded because no error appeared.** `wrangler d1 execute` can
-   time out and print nothing. Always re-read the row afterwards.
-
----
-
-## Security notes
-
-- No passwords, API tokens or secrets are stored in this repository. None are required at runtime.
-- A deployment replaces code only. It never reads, writes or migrates the database.
-- The database holds real staff details and real project budgets. Keep the repository private and
-  treat exports as confidential.
-
----
-
-## Running costs
-
-The application runs within Cloudflare's free allowances, and current usage is a small fraction of
-every limit. Most services simply stop serving if an allowance is exceeded rather than generating a
-charge; R2 storage is the exception, which is why it is worth a brief monthly look.
-
-[docs/COST_AND_LIMITS.md](docs/COST_AND_LIMITS.md) has the measured figures, what could realistically
-cost money, and a five-minute monthly checklist.
+- Project Name is reduced by exactly 10 Excel character units in every Capital and Development sheet, through the shared browser/export widths. Narrative widths remain equal.
+- Cost Control and Risk Register now use the same fixed-height workspace and sticky column headings as Projects. The record table scrolls beneath the headings in Classic and Enhanced. Risk summary cards remain above the table.
+- Browser QA: Cost Control header stayed at y=403 after 1,872 px vertical scroll; Risk Register header stayed at y=402 after 1,872 px.
+- User authorized a new OpenAI API key for Ask the Tracker. Key creation is blocked in this session: the Codex secure setup tool and the OpenAI Developers local key helper are unavailable, although the plugin is installed/enabled. No key was created and AI integration remains pending; do not repeat the creation-permission question.

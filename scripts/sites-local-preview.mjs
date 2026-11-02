@@ -1,0 +1,12 @@
+// Local QA bridge only; never bundled. Hosted deployment uses real Sites identity and D1/R2.
+import http from 'node:http';
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync,readdirSync,existsSync} from 'node:fs';
+import worker from '../dist/server/index.js';
+const db=new DatabaseSync(':memory:');for(const n of readdirSync('drizzle').filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync('drizzle/'+n,'utf8'));
+class S{constructor(sql){this.s=db.prepare(sql);this.v=[]}bind(...v){this.v=v;return this}async first(){return this.s.get(...this.v)||null}async all(){return{results:this.s.all(...this.v)}}async run(){return this.s.run(...this.v)}}
+const DB={prepare:s=>new S(s),async batch(ss){db.exec('BEGIN');try{const r=[];for(const s of ss)r.push(await s.run());db.exec('COMMIT');return r}catch(e){db.exec('ROLLBACK');throw e}}};
+const aiConfig=existsSync('.ask-preview.json')?JSON.parse(readFileSync('.ask-preview.json','utf8')):{};
+const objects=new Map(),env={DB,SITES_LOCAL_QA:true,IDLE_SECONDS_OVERRIDE:process.env.IDLE_SECONDS_OVERRIDE,DNC_AI_SERVICE_URL:process.env.DNC_AI_SERVICE_URL||aiConfig.url,DNC_AI_SERVICE_TOKEN:process.env.DNC_AI_SERVICE_TOKEN||aiConfig.token,ALLOW_PLATFORM_AUTH:'true',SITES_OWNER_PREVIEW:'true',BUCKET:{async put(k,v){objects.set(k,v)},async get(k){return objects.has(k)?{body:objects.get(k)}:null},async delete(k){objects.delete(k)}}};
+const arg=name=>process.argv[process.argv.indexOf(name)+1],port=Number(process.argv.includes('--port')?arg('--port'):process.env.PORT||4173);
+http.createServer(async(req,res)=>{try{if(req.url.startsWith('/signout-with-chatgpt')){res.writeHead(302,{Location:'/', 'Set-Cookie':'dnc_preview_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});res.end();return;}const chunks=[];for await(const c of req)chunks.push(c);const headers={...req.headers,'oai-authenticated-user-id':'local-preview','oai-authenticated-user-email':'tom@lagospm.com','oai-authenticated-user-full-name':'TJ%20Lagos','oai-authenticated-user-full-name-encoding':'percent-encoded-utf-8'};const r=await worker.fetch(new Request((headers['x-forwarded-proto']||'http')+'://'+headers.host+req.url,{method:req.method,headers,body:chunks.length?Buffer.concat(chunks):undefined}),env,{});res.writeHead(r.status,Object.fromEntries(r.headers));res.end(Buffer.from(await r.arrayBuffer()))}catch(e){console.error(e);res.writeHead(500);res.end('Preview error')}}).listen(port,'0.0.0.0',()=>console.log('Review server ready on port '+port));

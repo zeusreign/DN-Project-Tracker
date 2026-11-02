@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync,readdirSync,writeFileSync} from 'node:fs';
+import worker from '../dist/server/index.js';
+const db=new DatabaseSync(':memory:');for(const n of readdirSync('drizzle').filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync('drizzle/'+n,'utf8'));
+class S{constructor(sql){this.s=db.prepare(sql);this.v=[]}bind(...v){this.v=v;return this}async first(){return this.s.get(...this.v)||null}async all(){return{results:this.s.all(...this.v)}}async run(){return this.s.run(...this.v)}}
+const DB={prepare:s=>new S(s),async batch(ss){const r=[];for(const s of ss)r.push(await s.run());return r;}};
+const env={DB,ALLOW_PLATFORM_AUTH:'true',SITES_OWNER_PREVIEW:'true',DNC_AI_SERVICE_URL:'https://dnc-ask-the-tracker.tom33714.chatgpt.site/api/tracker-service',DNC_AI_SERVICE_TOKEN:'test-service-token-not-a-real-secret'};
+const headers={'oai-authenticated-user-id':'owner-test','oai-authenticated-user-email':'tom@lagospm.com','oai-authenticated-user-full-name':'TJ Review','content-type':'application/json',origin:'https://review.example','x-dnc-csrf':'test-csrf'};
+let cookie='';const call=async(path,opts={})=>{const r=await worker.fetch(new Request('https://review.example'+path,{...opts,headers:{...headers,cookie,...opts.headers}}),env,{});if(r.headers.get('set-cookie'))cookie=r.headers.get('set-cookie').split(';')[0];return r;};
+let payload,requests=0;globalThis.fetch=async(url,opts)=>{assert.equal(url,env.DNC_AI_SERVICE_URL);assert.equal(opts.redirect,'manual');assert.equal(opts.headers['OAI-Sites-Authorization'],'Bearer '+env.DNC_AI_SERVICE_TOKEN);payload=JSON.parse(opts.body);requests++;return Response.json(payload.operation==='bootstrap'?{configured:true,csrf:'test-csrf',conversation:'test'}:{result:{rows:payload.data?.projects||[]},conversation:'next'})};
+assert.equal((await worker.fetch(new Request('https://review.example/api/ask/workspace'),env,{})).status,401);
+assert.equal((await worker.fetch(new Request('https://review.example/api/ask/service-health',{method:'POST'}),env,{})).status,401);
+assert.equal(requests,0);
+await call('/api/bootstrap');
+assert.equal((await call('/api/ask/workspace',{headers:{'oai-authenticated-user-id':'other','oai-authenticated-user-email':'other@example.invalid'}})).status,403);
+const html=await(await call('/api/ask/workspace')).text();assert.match(html,/Ask the Tracker/);assert.match(html,/trackerCsrf/);assert.doesNotMatch(html,/test-service-token-not-a-real-secret/);assert.doesNotMatch(html,/October 2|September 11/);
+const before=requests;
+assert.equal((await call('/api/assistant/query',{method:'POST',headers:{origin:'https://untrusted.example'},body:'{}'})).status,403);assert.equal(requests,before);
+const query={method:'POST',body:JSON.stringify({question:'List projects',unit:'All',conversation:'test',owner:'forged',data:{projects:[]},authorizedUnits:['forged']})};
+let result=await(await call('/api/assistant/query',query)).json();assert.equal(result.data.projects.length,72);assert.match(payload.owner,/^enhanced:[a-f0-9]{64}$/);assert.notEqual(payload.owner,'forged');assert.equal(payload.data.projects.length,72);assert.ok(!payload.authorizedUnits.includes('forged'));assert.ok(!JSON.stringify(payload.data).includes('author_email'));
+const costControl=(await(await call('/api/bootstrap')).json()).projects;
+for(const p of result.data.projects){const source=costControl.find(x=>x.id===p.id);assert.equal(p.approved_budget,source.approved_budget);assert.equal(p.anticipated_final_cost,source.anticipated_final_cost);assert.equal(p.approved_budget==null||p.anticipated_final_cost==null?null:p.anticipated_final_cost-p.approved_budget,source.forecast_variance);}
+const canyon=result.data.projects.find(p=>p.name==='Canyon New Dorm');assert.equal(canyon.precon_capp,500000);assert.equal(canyon.approved_budget,16872100);assert.equal(canyon.anticipated_final_cost-canyon.approved_budget,0);assert.equal(result.data.projects.filter(p=>p.approved_budget!=null&&p.approved_budget<1000000).some(p=>p.id===canyon.id),false);
+console.log('PASS: every assistant budget, forecast and variance matches Cost Control; Canyon New Dorm uses $16,872,100 approved and $0 variance, and is excluded from approved-budget-under-$1m.');
+const owner=payload.owner,id=payload.data.projects[0].id;
+db.prepare('UPDATE projects SET current_update=? WHERE id=?').run('New saved update for freshness test',id);
+result=await(await call('/api/assistant/query',query)).json();assert.equal(result.data.projects.find(p=>p.id===id).current_update,'New saved update for freshness test');assert.equal(payload.owner,owner);
+db.prepare('UPDATE projects SET archived_at=? WHERE id=?').run('2026-10-31',id);
+result=await(await call('/api/assistant/query',query)).json();assert.equal(result.data.projects.length,71);assert.ok(!result.data.history.some(p=>p.project_id===id));assert.notEqual(payload.owner,owner);
+db.prepare('UPDATE projects SET archived_at=NULL WHERE id=?').run(id);
+await call('/api/assistant/query',query);
+if(process.env.ASK_QA_SNAPSHOT)writeFileSync(process.env.ASK_QA_SNAPSHOT,JSON.stringify({data:payload.data,owner:payload.owner,authorizedUnits:payload.authorizedUnits}));
+assert.equal((await call('/api/ask/assets/vendor/pdf-lib.min.js')).status,200);
+console.log('PASS: assistant rejects anonymous, other-user and cross-origin access; server overrides forged scope/data; fresh edits reflected; archive excludes history and changes conversation scope; secrets absent from page.');

@@ -1,0 +1,1041 @@
+{
+  "workbook": "2026_1023 D&C Bi-Weekly Report Data.xlsx",
+  "report_date": "2026-10-23",
+  "previous_report_date": null,
+  "capital": 50,
+  "development": 22,
+  "flags": [
+    {
+      "source": {
+        "sheet": "PATINA",
+        "row": 3
+      },
+      "name": "Stairwell replacement in the back of house",
+      "flags": [
+        {
+          "field": "precon_capp",
+          "issue": "non_numeric",
+          "raw": "N/A"
+        },
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "N/A"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "PATINA",
+        "row": 7
+      },
+      "name": "Tacos Mejor (conversion of Taqueria & Cussers)",
+      "flags": [
+        {
+          "field": "precon_capp",
+          "issue": "non_numeric",
+          "raw": "N/A"
+        },
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "tbd"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "PATINA",
+        "row": 9
+      },
+      "name": "Upgrade - adding a Coat Closet & Service Stations",
+      "flags": [
+        {
+          "field": "precon_capp",
+          "issue": "non_numeric",
+          "raw": "N/A"
+        },
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "N/A"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "PATINA",
+        "row": 11
+      },
+      "name": "Enlarging Kitchen Door Opening from a 3' to 5' wide.",
+      "flags": [
+        {
+          "field": "precon_capp",
+          "issue": "non_numeric",
+          "raw": "N/A"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "PATINA",
+        "row": 13
+      },
+      "name": "New restaurant concept (takeover)",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "210 days after takeover"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 5
+      },
+      "name": "Hotel renovation and Laundry Room #08487",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "Rooms - 3/11/2025\r\nLobby - 11/12/2025"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "Rooms - 3/26/2025\r\nLobby - 11/12/2025"
+        },
+        {
+          "field": "duration_change_days",
+          "issue": "formula_error",
+          "raw": "#VALUE!"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 6
+      },
+      "name": "Mardi Gras Sports Bar Renovation",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "duration_change_days",
+          "issue": "formula_error",
+          "raw": "#VALUE!"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 7
+      },
+      "name": "Mardi Gras Cafe Renovation",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "duration_change_days",
+          "issue": "formula_error",
+          "raw": "#VALUE!"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 8
+      },
+      "name": "Mardi Gras Steakhouse Renovation",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "duration_change_days",
+          "issue": "formula_error",
+          "raw": "#VALUE!"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 12
+      },
+      "name": "Exterior Lighting & Emerg. Gen. Relocation",
+      "flags": [
+        {
+          "field": "anticipated_final_cost",
+          "issue": "non_numeric",
+          "raw": "TBD"
+        },
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 13
+      },
+      "name": "Electrical Switchgear Replacement",
+      "flags": [
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 19
+      },
+      "name": "Elevator Modernization",
+      "flags": [
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "duration_change_days",
+          "issue": "formula_error",
+          "raw": "#VALUE!"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 21
+      },
+      "name": "Rewards Signage Change Out",
+      "flags": [
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 22
+      },
+      "name": "Ember Brand Standards",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": "TBD",
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 25
+      },
+      "name": "Casino Carpet",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 27
+      },
+      "name": "Expansion Master Planning",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 28
+      },
+      "name": "Ignite Steak House Refresh",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": "TBD",
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 29
+      },
+      "name": "High Limits/Destinations Refresh",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": "TBD",
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 30
+      },
+      "name": "Charred Oak Bourbon Bar Refresh",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": "TBD",
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 31
+      },
+      "name": "The Grind/Seasons Cafe Refresh",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": "TBD",
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 32
+      },
+      "name": "Hotel FF&E & Low Voltage",
+      "flags": [
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": "TBD",
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "GAMING",
+        "row": 34
+      },
+      "name": "New Construction Complex",
+      "flags": [
+        {
+          "field": "precon_capp",
+          "issue": "non_numeric",
+          "raw": "N/A"
+        },
+        {
+          "field": "construction_capp",
+          "issue": "non_numeric",
+          "raw": "N/A"
+        },
+        {
+          "field": "add_capp",
+          "issue": "non_numeric",
+          "raw": "N/A"
+        },
+        {
+          "field": "approved_budget",
+          "issue": "non_numeric",
+          "raw": "N/A"
+        },
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": "Non-Capital",
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "PARKS",
+        "row": 3
+      },
+      "name": "Waybound #08705A",
+      "flags": [
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "duration_change_days",
+          "issue": "formula_error",
+          "raw": "#VALUE!"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "PARKS",
+        "row": 9
+      },
+      "name": "Rooms Renovation / FFE",
+      "flags": [
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": "NON CAPP",
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "PARKS",
+        "row": 11
+      },
+      "name": "Explorer Cabins",
+      "flags": [
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "duration_change_days",
+          "issue": "formula_error",
+          "raw": "#VALUE!"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "PARKS",
+        "row": 15
+      },
+      "name": "Cottages FFE Renovation",
+      "flags": [
+        {
+          "field": "original_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_start_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "original_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "duration_change_days",
+          "issue": "formula_error",
+          "raw": "#VALUE!"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "PARKS",
+        "row": 25
+      },
+      "name": "Canyon New Dorm",
+      "flags": [
+        {
+          "field": "current_turnover_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "duration_change_days",
+          "issue": "formula_error",
+          "raw": "#VALUE!"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 3
+      },
+      "name": "Kansas City Royals",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        },
+        {
+          "field": "current_update",
+          "issue": "empty"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 4
+      },
+      "name": "Comerica",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 5
+      },
+      "name": "San Diego Baseball - Market Conversion",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 6
+      },
+      "name": "Stadium of the Future (Jacksonville)",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 8
+      },
+      "name": "Yellowstone",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 9
+      },
+      "name": "Camp Hale / Nova Guides",
+      "flags": [
+        {
+          "field": "deliverable_due_date",
+          "issue": "unparsed_date",
+          "raw": "TBD"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 10
+      },
+      "name": "Kalaloch RFP",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 12
+      },
+      "name": "RV Park at West Yellowstone",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 13
+      },
+      "name": "Mammoth General Store / Mammoth Warehouse Rehab",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 15
+      },
+      "name": "Surveillance Expansion",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 18
+      },
+      "name": "Hencraft - Add Exterior Awning",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 19
+      },
+      "name": "Hundredfold BPV - Exterior Entry Enclosure",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 20
+      },
+      "name": "Tutto",
+      "flags": [
+        {
+          "field": "deliverable_due_date",
+          "issue": "unparsed_date",
+          "raw": "tbd"
+        },
+        {
+          "field": "original_estimate_date",
+          "issue": "unparsed_date",
+          "raw": "2026"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 21
+      },
+      "name": "Via Napoli",
+      "flags": [
+        {
+          "field": "original_estimate_date",
+          "issue": "unparsed_date",
+          "raw": "2026"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 22
+      },
+      "name": "Via Napoli",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 23
+      },
+      "name": "Via Napoli",
+      "flags": [
+        {
+          "field": "original_estimate_date",
+          "issue": "unparsed_date",
+          "raw": "2026"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 25
+      },
+      "name": "Via Napoli",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        },
+        {
+          "field": "current_update",
+          "issue": "empty"
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 26
+      },
+      "name": "Lincoln Ristorante - East Dining Room/Bar & Lounge",
+      "flags": [
+        {
+          "field": "original_estimate_date",
+          "issue": "unparsed_date",
+          "raw": "2026"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 27
+      },
+      "name": "DTD Naples & Napolini",
+      "flags": [
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    },
+    {
+      "source": {
+        "sheet": "Design & Development",
+        "row": 28
+      },
+      "name": "Nick & Stef's - NYC",
+      "flags": [
+        {
+          "field": "deliverable_due_date",
+          "issue": "unparsed_date",
+          "raw": "tbd"
+        },
+        {
+          "field": "current_estimate_date",
+          "issue": "unparsed_date",
+          "raw": "Summer 2027"
+        },
+        {
+          "field": "capp_number",
+          "issue": "no_identifier",
+          "raw": null,
+          "note": "Matching must fall back to sheet + name, and then scope description."
+        }
+      ]
+    }
+  ],
+  "excluded": [
+    {
+      "sheet": "Sheet1",
+      "reason": "Derived summary view; the tracker computes its own.",
+      "approximate_rows": 6
+    },
+    {
+      "sheet": "THS Openings Chart",
+      "reason": "PivotTable with refresh instructions; no project rows.",
+      "approximate_rows": 32
+    },
+    {
+      "sheet": "DEAD DEVELOPMENT PROJECTS",
+      "reason": "Dead development projects are out of scope for the tracker.",
+      "approximate_rows": 47
+    },
+    {
+      "sheet": "CLOSED PROJECTS",
+      "reason": "Closed projects tab; empty in this workbook.",
+      "approximate_rows": 2
+    }
+  ]
+}

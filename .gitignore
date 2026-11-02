@@ -62,3 +62,14 @@ r2-keys.txt
 # the drop is client material and the manifest is reproducible from it.
 /CentralCity_Transfer/
 .central-city-import/
+
+# Added by the 2026-11-02 Enhanced package. Their .gitignore omits every data
+# protection above, so it is NOT taken wholesale: these are the entries of theirs
+# that are genuinely new, appended to ours.
+.ask-preview.json
+*credentials-private*
+preview-source/
+production-dist/
+__pycache__/
+site.tar.gz
+wrangler.toml
