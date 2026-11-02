@@ -81,7 +81,11 @@ for (const rename of config.renames || []) {
   }
   renames.set(`${rename.sheet}:${rename.row}`, {
     ...rename,
-    before: { name: project.name, capp_number: project.capp_number },
+    before: {
+      name: project.name, capp_number: project.capp_number,
+      venue: project.venue, section_name: project.section_name,
+      source_sheet: project.source_sheet, project_type: project.project_type,
+    },
   });
   if (rename.name) project.name = rename.name;
   if (rename.identifier) project.capp_number = rename.identifier;
@@ -170,6 +174,14 @@ function sameValue(field, before, after) {
 // The name and number a confirmed rename moves, as before -> after pairs. The
 // matcher has already been pointed at the right project; this is what makes the
 // change visible in the audit trail instead of silent.
+// Columns that place a project rather than describe it. A project funded out of
+// the development pipeline onto a capital sheet keeps its id and its history and
+// changes all four: Tenaya Cottages became PARKS / TENAYA / Capital when CAPP
+// 08745 was raised against it. Nothing infers this. It moves only where the
+// config declares a `relocate` block, for the same reason a rename does — a
+// wrong move is invisible once made, and the project's history moves with it.
+const RELOCATION_FIELDS = ["venue", "section_name", "source_sheet", "project_type"];
+
 function identityChanges(rename) {
   if (!rename) return [];
   const changes = [];
@@ -178,6 +190,13 @@ function identityChanges(rename) {
   }
   if (rename.identifier && rename.before.capp_number !== rename.identifier) {
     changes.push({ field: "capp_number", before: rename.before.capp_number, after: rename.identifier });
+  }
+  for (const field of RELOCATION_FIELDS) {
+    const after = (rename.relocate || {})[field];
+    if (after === undefined) continue;
+    const before = rename.before[field] ?? null;
+    if (before === after) continue;                 // already moved: a re-run writes nothing
+    changes.push({ field, before, after });
   }
   return changes;
 }

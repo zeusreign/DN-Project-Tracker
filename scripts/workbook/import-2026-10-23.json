@@ -1,0 +1,109 @@
+{
+  "workbook": "2026_1023 D&C Bi-Weekly Report Data.xlsx",
+  "report_date": "2026-10-23",
+  "previous_report_date": "2026-10-09",
+  "_dates": [
+    "Both dates are stated, never derived. Production was reconciled to the",
+    "9 October workbook on 15 October, so that is the previous state this run",
+    "moves on from."
+  ],
+  "excluded_sheets": [
+    "DEAD DEVELOPMENT PROJECTS",
+    "CLOSED PROJECTS",
+    "DASHBOARD",
+    "Sheet1",
+    "THS Openings Chart"
+  ],
+  "_client_rules": [
+    "Decisions confirmed by the client, applied by the pipeline rather than by hand:",
+    "A. A blank workbook cell means NO CHANGE. It never clears a tracker value.",
+    "B. A project absent from the workbook means NO UPDATE, not finished. Status",
+    "   stays an administrator's job in the app, so tracker_only_decisions is empty",
+    "   by policy and not merely because nothing was decided.",
+    "C. Total Approved Budget is taken from the sheet as it stands and never",
+    "   re-derived from the three CAPP columns."
+  ],
+  "_approved_new": [
+    "Rows that genuinely first appear in THIS workbook. Both are absent from the",
+    "0828, 0911, 0925 and 1009 workbooks and match nothing in the tracker on name",
+    "or identifier, so they are new development-pipeline entries rather than",
+    "anything renamed.",
+    "",
+    "Cottages FFE Renovation (PARKS r15) is deliberately NOT here. It is the same",
+    "project as tracker 78, and is merged by the renames block below instead of",
+    "being created a second time."
+  ],
+  "approved_new": [
+    {
+      "sheet": "Design & Development",
+      "row": 3,
+      "identifier": null,
+      "name": "Kansas City Royals",
+      "note": "Absent from 0828, 0911, 0925 and 1009; first appears here. No identifier on the row."
+    },
+    {
+      "sheet": "Design & Development",
+      "row": 9,
+      "identifier": null,
+      "name": "Camp Hale / Nova Guides",
+      "note": "Absent from 0828, 0911, 0925 and 1009; first appears here. No identifier on the row."
+    }
+  ],
+  "_renames": [
+    "Tenaya Cottages has been funded and has moved from the development pipeline",
+    "onto the PARKS capital sheet as 'Cottages FFE Renovation' with CAPP 08745.",
+    "It matched nothing automatically because it gained an identifier and a name",
+    "in the same cycle, which is exactly the case this block exists for.",
+    "",
+    "The evidence it is one project and not two:",
+    "  - Same business unit, Parks & Resorts.",
+    "  - Bill Nielsen on both: development lead on tracker 78, project manager on",
+    "    the workbook row.",
+    "  - Tracker 78's scope is 'Full FFE Remodel'; the row is 'Cottages FFE",
+    "    Renovation' at TENAYA, and 78 is named 'Tenaya Cottages'.",
+    "  - The narrative runs straight on. 78 reads 'Re-engaging with the designers",
+    "    to do model room' (0925), then 'Received proposal from designer to provide",
+    "    specs and drawings. Negotiating price.' (1009). The row now reads",
+    "    'Awaiting CAPP for design to be approved so we can release A+P to move",
+    "    forward with specs and drawings.'",
+    "  - 78 disappeared from the development sheet in the same workbook in which",
+    "    this PARKS row appeared.",
+    "  - Every cost on the row is 0 and every date is TBD, which is what an",
+    "    unapproved CAPP looks like.",
+    "",
+    "Merging keeps the project's id and both existing history entries. Creating a",
+    "new project would strand them on a pipeline row no workbook mentions again.",
+    "",
+    "relocate carries the four columns that place a project rather than describe",
+    "it. venue and section_name follow the sheet, which labels the block 'TENAYA'",
+    "the way every other PARKS block labels its own."
+  ],
+  "renames": [
+    {
+      "tracker_id": 78,
+      "sheet": "PARKS",
+      "row": 15,
+      "identifier": "08745",
+      "name": "Cottages FFE Renovation",
+      "relocate": {
+        "venue": "TENAYA",
+        "section_name": "TENAYA",
+        "source_sheet": "PARKS",
+        "project_type": "Capital"
+      },
+      "note": "Was 'Tenaya Cottages' / no CAPP in Design & Development. Funded between 1009 and 1023. development_lead stays Bill Nielsen: the PARKS sheet has no such column, and rule A means a column the workbook does not carry changes nothing."
+    }
+  ],
+  "_tracker_only": [
+    "Empty BY DECISION, per rule B above."
+  ],
+  "tracker_only_decisions": [],
+  "_human_edits": [
+    "Project 10's anticipated final cost was changed in the app on 2026-10-28 by",
+    "Gregory Dauberger, from 14,321,482 to 14,200,000. This workbook is dated",
+    "2026-10-23 and still states 14,321,482, with its three CAPP columns adding to",
+    "exactly that. The import reverts his figure, by decision on 2026-11-02: the",
+    "workbook is the source of truth and the discrepancy is reported to the client",
+    "rather than settled here."
+  ]
+}
