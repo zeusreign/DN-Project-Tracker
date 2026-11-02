@@ -7,17 +7,40 @@ for(const n of readdirSync('drizzle').filter(n=>n.endsWith('.sql')).sort())db.ex
 class Statement{constructor(sql){this.s=db.prepare(sql);this.v=[]}bind(...v){this.v=v;return this}async first(){return this.s.get(...this.v)||null}async all(){return {results:this.s.all(...this.v)}}async run(){return this.s.run(...this.v)}}
 const DB={prepare:s=>new Statement(s),async batch(stmts){db.exec('BEGIN');try{const r=[];for(const s of stmts)r.push(await s.run());db.exec('COMMIT');return r}catch(e){db.exec('ROLLBACK');throw e}}};
 const objects=new Map(),env={DB,BUCKET:{async put(k,v){objects.set(k,v)},async get(k){return objects.has(k)?{body:objects.get(k)}:null},async delete(k){objects.delete(k)}},ALLOW_PLATFORM_AUTH:'true',ADMIN_EMAILS:'admin@example.invalid'};
-async function call(path,method='GET',body,who='admin',mime='application/json'){return worker.fetch(new Request('http://localhost'+path,{method,headers:{'oai-authenticated-user-id':who,'oai-authenticated-user-email':who+'@example.invalid','content-type':mime},body:body===undefined?undefined:mime==='application/json'?JSON.stringify(body):body}),env,{})}
+// A platform-authenticated session is issued by /api/bootstrap as a cookie and
+// is then required on every write, so the harness keeps one jar per identity the
+// way a browser would, and bootstraps an identity the first time it is used.
+const cookies=new Map();
+async function call(path,method='GET',body,who='admin',mime='application/json'){
+  if(!cookies.has(who)&&path!=='/api/bootstrap')await call('/api/bootstrap','GET',undefined,who);
+  const headers={'oai-authenticated-user-id':who,'oai-authenticated-user-email':who+'@example.invalid','content-type':mime};
+  const jar=cookies.get(who);if(jar)headers.cookie=jar;
+  const response=await worker.fetch(new Request('http://localhost'+path,{method,headers,body:body===undefined?undefined:mime==='application/json'?JSON.stringify(body):body}),env,{});
+  const issued=response.headers.get('set-cookie');
+  if(issued)cookies.set(who,issued.split(';')[0]);
+  return response;
+}
 const boot=await(await call('/api/bootstrap')).json(),p=boot.projects.find(p=>p.business_unit==='Corporate'),g=boot.projects.find(p=>p.business_unit==='Gaming');
 for(const [who,role,scope] of [['viewer','viewer','All'],['editor','editor','All'],['gaming','editor','Gaming']])db.prepare("INSERT INTO user_directory(user_email,username,first_name,last_name,role,business_unit_scope,account_status,site_access_status,created_by) VALUES(?,?,'Test','User',?,?,'active','authorized','admin')").run(who+'@example.invalid',who,role,scope);
-assert.equal((await call('/api/projects/'+p.id+'/activity','POST',{current_update:'Original weekly note',reporting_period:'2026-09-24'})).status,200);
-let h=(await(await call('/api/projects/'+p.id+'/history')).json()).history[0];
+// Bootstrap seeds a full workbook history, so these two periods are derived to
+// sit just above the newest seeded row. Hardcoded dates below it would make the
+// corrections non-newest, and the current-summary assertions would then describe
+// something other than the behaviour under test.
+const newestSeeded=db.prepare('SELECT MAX(reporting_period) AS p FROM project_updates WHERE project_id=?').get(p.id).p||'2026-01-01';
+const shiftDay=(iso,days)=>new Date(Date.parse(iso.slice(0,10))+days*86400000).toISOString().slice(0,10);
+const firstPeriod=shiftDay(newestSeeded,1),laterPeriod=shiftDay(newestSeeded,2);
+assert.equal((await call('/api/projects/'+p.id+'/activity','POST',{current_update:'Original weekly note',reporting_period:firstPeriod})).status,200);
+// Bootstrap now seeds a full five-period workbook history, so the newest entry
+// is a seeded 10/23 row rather than the note this test just posted. Select the
+// row by what was written, never by position.
+const mine=async()=>(await(await call('/api/projects/'+p.id+'/history')).json()).history.find(x=>x.author_name!=='Workbook Import');
+let h=await mine();
 const route='/api/projects/'+p.id+'/history/'+h.id;
 const change={summary:'Corrected weekly note',expected_summary:h.current_summary};
 assert.equal((await call(route,'PATCH',change,'viewer')).status,403);
 assert.equal((await call(route,'PATCH',change,'gaming')).status,404);
 assert.equal((await call(route,'PATCH',change,'editor')).status,200);
-let after=(await(await call('/api/projects/'+p.id+'/history')).json()).history[0];
+let after=(await(await call('/api/projects/'+p.id+'/history')).json()).history.find(x=>x.id===h.id);
 assert.equal(after.current_summary,change.summary);assert.equal(after.reporting_period,h.reporting_period);assert.equal(after.created_at,h.created_at);assert.equal(after.revisions[0].previous_text,h.current_summary);
 assert.equal(db.prepare('SELECT current_update FROM projects WHERE id=?').get(p.id).current_update,change.summary);
 assert.equal((await call(route,'PATCH',change,'editor')).status,409);
@@ -26,7 +49,7 @@ db.prepare("UPDATE project_updates SET created_at=datetime('now','-10 days') WHE
 assert.equal((await call(route,'PATCH',{summary:'Too late',expected_summary:after.current_summary})).status,423);
 assert.equal((await(await call('/api/projects/'+p.id+'/history')).json()).history.find(x=>x.id===h.id).editable,false);
 // A correction to an older report must not replace the newest current summary.
-await call('/api/projects/'+p.id+'/activity','POST',{current_update:'Latest report',reporting_period:'2026-09-25'});
+await call('/api/projects/'+p.id+'/activity','POST',{current_update:'Latest report',reporting_period:laterPeriod});
 db.prepare("UPDATE project_updates SET created_at=datetime('now','-9 days') WHERE id=?").run(h.id);
 assert.equal((await call(route,'PATCH',{summary:'Older report correction',expected_summary:after.current_summary},'editor')).status,200);
 assert.equal(db.prepare('SELECT current_update FROM projects WHERE id=?').get(p.id).current_update,'Latest report');
@@ -56,7 +79,9 @@ assert.ok(db.prepare("SELECT details FROM audit_log WHERE action='photo_edit'").
 console.log('PASS: photo metadata persistence, input validation, stale-edit conflict, audit, Viewer and business-unit access.');
 const gp='/api/projects/'+g.id+'/photos';
 const meta={...photoData,photo_initials:'TJL',date_taken:'2026-09-25'};
-async function numbered(){return worker.fetch(new Request('http://localhost'+gp+'?kind=progress&period=2026-09-25',{method:'POST',headers:{'oai-authenticated-user-id':'editor','oai-authenticated-user-email':'editor@example.invalid','content-type':'image/png','x-photo-metadata':encodeURIComponent(JSON.stringify(meta))},body:png}),env,{})}
+// Sends its own request for the photo-metadata header, so it has to carry the
+// editor's session cookie itself; writes without one are rejected.
+async function numbered(){return worker.fetch(new Request('http://localhost'+gp+'?kind=progress&period=2026-09-25',{method:'POST',headers:{'oai-authenticated-user-id':'editor','oai-authenticated-user-email':'editor@example.invalid','content-type':'image/png','x-photo-metadata':encodeURIComponent(JSON.stringify(meta)),cookie:cookies.get('editor')},body:png}),env,{})}
 const one=await(await numbered()).json(),two=await(await numbered()).json();assert.equal(one.photo_number,'TJL-260925-01');assert.equal(two.photo_number,'TJL-260925-02');
 assert.equal((await call(gp+'/'+one.id,'DELETE',undefined,'viewer')).status,403);
 assert.equal((await call(gp+'/'+one.id,'DELETE',undefined,'editor')).status,200);

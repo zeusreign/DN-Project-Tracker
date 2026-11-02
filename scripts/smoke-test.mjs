@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { CLIENT } from "../worker/client.js";
 import { PROFILE_PHOTOS, PROFILE_PHOTO_BATCH } from "../worker/profile-photos.js";
 import { EXPORT_FORMATS } from "../worker/exports.js";
+// Asserted against the seed FILE, not a hardcoded count, so regenerating the
+// preview data from a newer workbook cannot silently invalidate these checks.
+import { SEED_PROJECTS } from "../worker/seed.js";
 import { createBrowser } from "./browser-harness.mjs";
 
 // The browser script is embedded in a template; validate its generated syntax too.
@@ -183,14 +186,11 @@ class D1Database {
 }
 
 const database = new DatabaseSync(":memory:");
-database.exec(await readFile(new URL("../drizzle/0000_dnc_project_hub.sql", import.meta.url), "utf8"));
-database.exec(await readFile(new URL("../drizzle/0001_workbook_structure_and_roles.sql", import.meta.url), "utf8"));
-database.exec(await readFile(new URL("../drizzle/0002_user_directory.sql", import.meta.url), "utf8"));
-database.exec(await readFile(new URL("../drizzle/0003_development_pipeline_and_directory.sql", import.meta.url), "utf8"));
-database.exec(await readFile(new URL("../drizzle/0004_pilot_authentication.sql", import.meta.url), "utf8"));
-database.exec(await readFile(new URL("../drizzle/0005_profile_photos.sql", import.meta.url), "utf8"));
-database.exec(await readFile(new URL("../drizzle/0006_enhanced_media_and_revisions.sql", import.meta.url), "utf8"));
-database.exec(await readFile(new URL("../drizzle/0007_photo_details.sql", import.meta.url), "utf8"));
+// Applied by reading the directory, not a hardcoded list: a list silently left
+// the test schema a migration behind production the moment one was added.
+for (const migration of (await readdir(new URL("../drizzle/", import.meta.url))).filter((name) => name.endsWith(".sql")).sort()) {
+  database.exec(await readFile(new URL("../drizzle/" + migration, import.meta.url), "utf8"));
+}
 const DB = new D1Database(database);
 const photoObjects = new Map();
 const BUCKET = {
@@ -207,12 +207,22 @@ const headers = {
   "oai-authenticated-user-full-name-encoding": "percent-encoded-utf-8",
 };
 
+// The preview session cookie is issued by /api/bootstrap and then required on
+// every write, so the helper keeps it the way a browser would.
+let platformCookie = null;
 async function call(path, options = {}) {
   const request = new Request("https://tracker.example" + path, {
     ...options,
-    headers: { ...headers, ...(options.headers || {}) },
+    headers: {
+      ...headers,
+      ...(platformCookie ? { cookie: platformCookie } : {}),
+      ...(options.headers || {}),
+    },
   });
-  return worker.fetch(request, env, {});
+  const response = await worker.fetch(request, env, {});
+  const issued = response.headers.get("set-cookie");
+  if (issued) platformCookie = issued.split(";")[0];
+  return response;
 }
 
 const unauthorized = await worker.fetch(new Request("https://tracker.example/api/bootstrap"), env, {});
@@ -235,21 +245,42 @@ for (const photo of PROFILE_PHOTOS) {
 }
 await call("/api/bootstrap");
 assert.equal(database.prepare("SELECT count(*) AS n FROM audit_log WHERE action = 'profile_photo_import'").get().n, 7, "Refresh does not reimport portraits");
-assert.equal(bootstrap.projects.length, 74);
+assert.equal(bootstrap.projects.length, SEED_PROJECTS.length);
 assert.equal(bootstrap.projects[0].source_sort_order, 1);
-assert.equal(bootstrap.projects.at(-1).source_sort_order, 74);
-assert.equal(new Set(bootstrap.projects.map((project) => project.source_key)).size, 74);
+assert.equal(bootstrap.projects.at(-1).source_sort_order, SEED_PROJECTS.length);
+assert.equal(new Set(bootstrap.projects.map((project) => project.source_key)).size, SEED_PROJECTS.length);
 assert.equal(bootstrap.me.role, "admin");
-assert.equal(bootstrap.projects.filter((project) => project.project_type === "Capital").length, 53);
-assert.equal(bootstrap.projects.filter((project) => project.budget_risk === "High" || project.schedule_risk === "High").length, 5);
-assert.equal(bootstrap.summary.activeProjects, 69);
-assert.equal(bootstrap.summary.developmentProjects, 16);
-assert.equal(bootstrap.summary.needsStatus, 3);
-assert.equal(bootstrap.projects.filter((project) => project.status === "Needs Status").length, 3);
-assert.equal(bootstrap.projects.filter((project) => project.project_type === "Development" && project.development_source_row).length, 21);
-const parksWaybound = bootstrap.projects.find((project) => project.source_key.includes("CACTUS MOON:Waybound Phase I"));
-assert.ok(parksWaybound.current_update.length > 250);
-assert.doesNotMatch(parksWaybound.current_update, /\.\.\.$/);
+assert.equal(bootstrap.projects.filter((project) => project.project_type === "Capital").length,
+  SEED_PROJECTS.filter((project) => project.project_type === "Capital").length);
+// The 10/23 preview data contains no High ratings, so a bare High count would
+// assert 0 and cover nothing. Compare the whole distribution against the seed
+// instead: that stays meaningful whatever ratings the next workbook carries.
+const riskTally = (rows, field) => rows.reduce((tally, row) => ({ ...tally, [row[field] ?? "null"]: (tally[row[field] ?? "null"] || 0) + 1 }), {});
+for (const field of ["budget_risk", "schedule_risk"]) {
+  assert.deepEqual(riskTally(bootstrap.projects, field), riskTally(SEED_PROJECTS, field),
+    `bootstrap must report the seed's ${field} ratings unchanged`);
+}
+// Computed from the seed with the route's own status rules, so these still check
+// the KPI arithmetic rather than a frozen number from an older workbook.
+const CURRENT_STATUSES = new Set(["Active", "On Hold", "Closeout"]);
+const seedCurrent = SEED_PROJECTS.filter((project) => CURRENT_STATUSES.has(project.status));
+assert.equal(bootstrap.summary.activeProjects, seedCurrent.length);
+assert.equal(bootstrap.summary.developmentProjects, seedCurrent.filter((project) => project.project_type === "Development").length);
+assert.equal(bootstrap.summary.needsStatus, SEED_PROJECTS.filter((project) => project.status === "Needs Status").length);
+assert.equal(bootstrap.projects.filter((project) => project.status === "Needs Status").length,
+  SEED_PROJECTS.filter((project) => project.status === "Needs Status").length);
+assert.equal(bootstrap.projects.filter((project) => project.project_type === "Development" && project.development_source_row).length,
+  SEED_PROJECTS.filter((project) => project.project_type === "Development").length,
+  "every seeded development project must carry its source row");
+// Chosen from the seed by length rather than named. Naming a project meant that
+// renaming it in a later workbook turned this into a find() returning undefined,
+// which asserts nothing instead of failing.
+const longestSeeded = SEED_PROJECTS.filter((project) => project.current_update)
+  .reduce((longest, project) => project.current_update.length > longest.current_update.length ? project : longest);
+assert.ok(longestSeeded.current_update.length > 250, "preview data must contain a long update to test truncation");
+const longUpdateProject = bootstrap.projects.find((project) => project.source_key === longestSeeded.source_key);
+assert.equal(longUpdateProject.current_update, longestSeeded.current_update);
+assert.doesNotMatch(longUpdateProject.current_update, /\.\.\.$/);
 
 const adminResponse = await call("/api/admin");
 assert.equal(adminResponse.status, 200);
@@ -561,15 +592,21 @@ function buildSignOut(apiImplementation) {
   // never reached" rather than as an incidental ReferenceError. `announceSession`
   // is stubbed for the same reason, and recorded so the other-tab signal is checked
   // rather than merely tolerated.
-  const run = new Function("api", "showSignIn", "toast", "announceSession", signOutSource + ";return signOut;")(
+  // signOut now branches on the signed-in user's auth_source, so `state` and the
+  // platform route are supplied too. platformSignOut is recorded rather than
+  // ignored, so a password sign-out silently taking the platform path fails here.
+  const platformed = [];
+  const run = new Function("api", "showSignIn", "toast", "announceSession", "state", "platformSignOut", signOutSource + ";return signOut;")(
     apiImplementation, (message) => shown.push(message), (message) => toasted.push(message),
     (message) => announced.push(message),
+    { me: { auth_source: "password" } }, async () => { platformed.push(true); },
   );
-  return { run, shown, toasted, announced };
+  return { run, shown, toasted, announced, platformed };
 }
 const succeedingSignOut = buildSignOut(async () => ({ ok: true }));
 await succeedingSignOut.run();
 assert.deepEqual(succeedingSignOut.shown, [""], "a successful sign-out shows the sign-in screen");
+assert.deepEqual(succeedingSignOut.platformed, [], "a password sign-out must not take the platform route");
 assert.deepEqual(succeedingSignOut.announced, [{ type: "signed-out" }],
   "signing out tells the other tabs, so they do not sit on a workspace that can no longer save");
 const failingSignOut = buildSignOut(async () => { throw new Error("Your session has expired. Please sign in again."); });
@@ -947,9 +984,15 @@ const historyProject = bootstrap.projects.find((project) => project.previous_upd
 assert.ok(historyProject);
 const historyResponse = await call(`/api/projects/${historyProject.id}/history`);
 const history = await historyResponse.json();
-assert.equal(history.history.length, 2);
-assert.equal(history.history[0].reporting_period, "2026-08-28");
-assert.equal(history.history[1].reporting_period, "2026-08-21");
+// The preview history now spans every seeded report period rather than two, so
+// the periods are read back rather than named here. What matters is unchanged:
+// the endpoint returns all of a project's entries, newest period first.
+const expectedPeriods = database
+  .prepare("SELECT reporting_period FROM project_updates WHERE project_id = ? ORDER BY reporting_period DESC")
+  .all(historyProject.id).map((row) => row.reporting_period);
+assert.ok(expectedPeriods.length >= 2, "preview data must give this project a multi-period history");
+assert.equal(history.history.length, expectedPeriods.length);
+assert.deepEqual(history.history.map((entry) => entry.reporting_period), expectedPeriods);
 
 // Total Approved Budget is an ENTERED figure, not always a derived one.
 //
@@ -960,12 +1003,14 @@ assert.equal(history.history[1].reporting_period, "2026-08-21");
 //
 // Editing a cost column must NOT overwrite a stated total. An earlier version
 // re-derived it unconditionally and silently destroyed the client's figure.
-const capital = bootstrap.projects.find((project) => project.project_type === "Capital");
-assert.notEqual(
-  capital.approved_budget,
-  (capital.precon_capp || 0) + (capital.construction_capp || 0) + (capital.add_capp || 0),
-  "this fixture must carry a stated total that differs from its parts",
-);
+// Selected by the property the test needs, not by position. Taking the first
+// capital project found one with a null total once the preview data changed, and
+// `notEqual(null, 0)` then passed while asserting nothing.
+const componentsOf = (project) => (project.precon_capp || 0) + (project.construction_capp || 0) + (project.add_capp || 0);
+const capital = bootstrap.projects.find((project) => project.project_type === "Capital"
+  && project.approved_budget !== null && project.approved_budget !== undefined
+  && Number(project.approved_budget) !== componentsOf(project));
+assert.ok(capital, "preview data must carry a capital project whose stated total differs from its parts");
 const statedTotal = capital.approved_budget;
 const costResponse = await call(`/api/projects/${capital.id}/fields`, {
   method: "PATCH",
@@ -1089,13 +1134,19 @@ const roleResponse = await call("/api/admin/users", {
 });
 assert.equal(roleResponse.status, 200);
 const beforeDeniedAuditCount = database.prepare("SELECT COUNT(*) AS n FROM audit_log").get().n;
+// The viewer is given a session first. Without one the request is refused as
+// unauthenticated (401) before the role is ever consulted, which would make this
+// pass for the wrong reason and stop testing the permission at all.
+const viewerHeaders = {
+  "oai-authenticated-user-id": "viewer-id",
+  "oai-authenticated-user-email": "viewer@example.com",
+};
+const viewerBootstrap = await worker.fetch(new Request("https://tracker.example/api/bootstrap", { headers: viewerHeaders }), env, {});
+const platformViewerCookie = (viewerBootstrap.headers.get("set-cookie") || "").split(";")[0];
+assert.ok(platformViewerCookie, "the viewer must be issued a session before the permission check is meaningful");
 const viewerWrite = await worker.fetch(new Request(`https://tracker.example/api/projects/${capital.id}/fields`, {
   method: "PATCH",
-  headers: {
-    "content-type": "application/json",
-    "oai-authenticated-user-id": "viewer-id",
-    "oai-authenticated-user-email": "viewer@example.com",
-  },
+  headers: { ...viewerHeaders, "content-type": "application/json", cookie: platformViewerCookie },
   body: JSON.stringify({ status: "Complete" }),
 }), env, {});
 assert.equal(viewerWrite.status, 403);
@@ -1155,7 +1206,7 @@ assert.equal(exportResponse.status, 200);
 assert.match(await exportResponse.text(), /A&E \/ Pre-Con CAPP/);
 
 const secondBootstrap = await (await call("/api/bootstrap")).json();
-assert.equal(secondBootstrap.projects.length, 74);
+assert.equal(secondBootstrap.projects.length, SEED_PROJECTS.length);
 
 const createDevelopment = await call("/api/projects", {
   method: "POST",
