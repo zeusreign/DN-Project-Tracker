@@ -165,12 +165,28 @@ export function buildStatements(report) {
   // approved_budget is written as it stands. It is NOT re-derived from the
   // three CAPP columns: on some rows the workbook states a total that its own
   // columns do not add up to, and that figure is the one the client reports.
+  const WRITABLE_COLUMNS = new Set([
+    "name", "capp_number", "project_manager",
+    "budget_risk", "schedule_risk",
+    "precon_capp", "construction_capp", "add_capp", "approved_budget",
+    "anticipated_final_cost",
+    "original_start_date", "current_start_date",
+    "original_turnover_date", "current_turnover_date",
+    "venue", "section_name", "source_sheet", "project_type",
+  ]);
+
   for (const entry of report.matched) {
     const changes = entry.planned_fields || [];
     if (!changes.length) continue;
     const id = entry.tracker.id;
 
     for (const change of changes) {
+      // change.field is interpolated into the statement below. It only ever
+      // comes from this repository's own code or config, but a typo there would
+      // otherwise become SQL against a column nobody meant to touch.
+      if (!WRITABLE_COLUMNS.has(change.field)) {
+        throw new Error(`Refusing to write column "${change.field}" on project ${id}: not a workbook-owned column.`);
+      }
       add(
         `UPDATE projects SET ${change.field} = ${sqlLiteral(change.after)}, updated_at = datetime('now')\n` +
         `  WHERE id = ${id} AND ${change.field} IS NOT ${sqlLiteral(change.after)};`,

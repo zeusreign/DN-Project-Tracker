@@ -147,6 +147,27 @@ Three rules replace it, all confirmed by the client:
   application stopped re-deriving it for the same reason; see `worker/index.js`, the guarded
   recompute in the project-fields route.
 
+**A project can move, but only when the config says so.** A project funded out of the development
+pipeline arrives on a capital sheet with a name and a CAPP number it did not have before, so it
+matches nothing: the matcher works from exactly those two things. `renames` handles the identity
+half; a `relocate` block on the same entry handles the other four columns — `venue`, `section_name`,
+`source_sheet` and `project_type`:
+
+```json
+{ "tracker_id": 78, "sheet": "PARKS", "row": 15,
+  "identifier": "08745", "name": "Cottages FFE Renovation",
+  "relocate": { "venue": "TENAYA", "section_name": "TENAYA",
+                "source_sheet": "PARKS", "project_type": "Capital" } }
+```
+
+Merging keeps the project's id and its whole history. Creating a second project instead strands
+every earlier update on a pipeline row no workbook will mention again. Nothing about a move is
+inferred, for the same reason a rename is not: it is invisible once made.
+
+Note that the application cannot edit three of those four columns — `textFields` in the project
+route covers `section_name` but not `venue`, `source_sheet` or `project_type`, which are set at
+creation. The audit row is still rendered in full because `auditFieldLabels` carries all four.
+
 Field updates are audited in exactly the shape `fieldAuditStatement()` emits for a person editing
 the same columns, because `auditRowHtml()` renders from `details.changes` and drops any entry whose
 field it has no label for. A differently shaped row still appears, but reads "Before-and-after
