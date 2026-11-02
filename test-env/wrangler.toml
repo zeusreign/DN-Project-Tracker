@@ -72,3 +72,11 @@ ALLOW_PLATFORM_AUTH = "false"
 
 # Empty, as in production. Does not create a login account.
 ADMIN_EMAILS = ""
+
+# Ask the Tracker: the STAGING AI service deployed from the 2026-11-02 package.
+# Not a secret, so it lives here rather than in the dashboard. The production
+# build (DNC_REVIEW_BUILD=false) requires https, a path of exactly
+# /api/tracker-service, and no query, fragment or credentials in the URL. It also
+# refuses the vendor's preview endpoint, so this must be our own deployment.
+# The matching shared secret is DNC_AI_SERVICE_TOKEN, set with `pages secret put`.
+DNC_AI_SERVICE_URL = "https://dnc-tracker-ai-dev.plain-feather-a7d3.workers.dev/api/tracker-service"
