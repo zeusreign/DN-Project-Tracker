@@ -14,8 +14,17 @@ for(const n of readdirSync('drizzle').filter(n=>n.endsWith('.sql')).sort())db.ex
 class Statement{constructor(sql){this.s=db.prepare(sql);this.v=[]}bind(...v){this.v=v;return this}async first(){return this.s.get(...this.v)||null}async all(){return {results:this.s.all(...this.v)}}async run(){return this.s.run(...this.v)}}
 const DB={prepare:s=>new Statement(s),async batch(stmts){db.exec('BEGIN');try{const r=[];for(const s of stmts)r.push(await s.run());db.exec('COMMIT');return r}catch(e){db.exec('ROLLBACK');throw e}}};
 const objects=new Map(),env={DB,BUCKET:{async put(k,v){objects.set(k,v)},async get(k){return objects.has(k)?{body:objects.get(k)}:null},async delete(k){objects.delete(k)}},ALLOW_PLATFORM_AUTH:'true',ADMIN_EMAILS:'admin@example.invalid'};
-function headers(who='admin'){return {'oai-authenticated-user-id':who,'oai-authenticated-user-email':who+'@example.invalid','content-type':'application/json'}}
-async function call(path,method='GET',body,who='admin'){return worker.fetch(new Request('https://tracker.example'+path,{method,headers:headers(who),body:body===undefined?undefined:JSON.stringify(body)}),env,{})}
+// The idle-session guard rejects requests that carry no session cookie, so each
+// identity bootstraps once and then reuses the cookie /api/bootstrap issued it.
+const cookies=new Map();
+function headers(who='admin'){const h={'oai-authenticated-user-id':who,'oai-authenticated-user-email':who+'@example.invalid','content-type':'application/json'};const jar=cookies.get(who);if(jar)h.cookie=jar;return h}
+async function call(path,method='GET',body,who='admin'){
+  if(!cookies.has(who)&&path!=='/api/bootstrap')await call('/api/bootstrap','GET',undefined,who);
+  const response=await worker.fetch(new Request('https://tracker.example'+path,{method,headers:headers(who),body:body===undefined?undefined:JSON.stringify(body)}),env,{});
+  const issued=response.headers.get('set-cookie');
+  if(issued)cookies.set(who,issued.split(';')[0]);
+  return response;
+}
 const boot=await(await call('/api/bootstrap')).json(),p=boot.projects.find(p=>p.business_unit==='Corporate'),g=boot.projects.find(p=>p.business_unit==='Gaming');
 for(const [who,role,scope] of [['viewer','viewer','All'],['editor','editor','All'],['gaming','editor','Gaming']])db.prepare("INSERT INTO user_directory(user_email,username,first_name,last_name,role,business_unit_scope,account_status,site_access_status,created_by) VALUES(?,?,'Test','User',?,?,'active','authorized','admin')").run(who+'@example.invalid',who,role,scope);
 const seedNote=(id,day,note)=>db.prepare("INSERT INTO project_updates(source_key,project_id,reporting_period,current_summary,author_email) VALUES(?,?,?,?,?)").run('test-'+id+'-'+day,id,day,note,'test@example.invalid');
@@ -83,6 +92,8 @@ assert.equal((await call('/api/projects/'+p.id+'/fields','PATCH',{status:'Comple
 assert.ok((await(await call('/api/bootstrap')).json()).projects.some(x=>x.id===p.id));
 // Exercise served client rather than testing strings alone. Isolated synthetic auth.
 const page=await(await call('/')).text();
+// The served client fetches as the viewer, so that identity needs its own jar.
+await call('/api/bootstrap','GET',undefined,'viewer');
 const browser=await createBrowser({page,handler:req=>{const h=new Headers(req.headers);for(const [k,v] of Object.entries(headers('viewer')))h.set(k,v);return worker.fetch(new Request(req,{headers:h}),env,{})}});
 await browser.start();await browser.fire('moduleInfoBtn','click').results;assert.equal(browser.byId('moduleInfoDialog').open,true);assert.match(browser.text('moduleInfoBody'),/capital project activity/);
 browser.byId('moduleInfoDialog').close();await browser.fire('workbookBtn','click').results;await browser.settle();assert.equal(browser.location.hash,'#workbook');assert.match(browser.text('workbookTable'),/Previous Week Update/);assert.match(browser.text('workbookBasis'),/not historical financial snapshots/);

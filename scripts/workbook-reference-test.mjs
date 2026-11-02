@@ -10,7 +10,19 @@ for(const f of readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())db.ex
 class Statement{constructor(sql){this.s=db.prepare(sql);this.v=[]}bind(...v){this.v=v;return this}async first(){return this.s.get(...this.v)||null}async all(){return {results:this.s.all(...this.v)}}async run(){return this.s.run(...this.v)}}
 const DB={prepare:s=>new Statement(s),async batch(stmts){db.exec('BEGIN');try{const r=[];for(const s of stmts)r.push(await s.run());db.exec('COMMIT');return r}catch(e){db.exec('ROLLBACK');throw e}}};
 const env={DB,ALLOW_PLATFORM_AUTH:'true',SITES_OWNER_PREVIEW:'true'};
-const call=path=>worker.fetch(new Request('https://test.invalid'+path,{headers:{'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@example.invalid'}}),env,{});
+// The idle-session guard rejects every request that arrives without the session
+// cookie /api/bootstrap issues, so the harness bootstraps once and keeps the jar
+// the way a browser would. Without it every call below comes back 401.
+let cookie=null;
+const call=async path=>{
+  if(!cookie&&path!=='/api/bootstrap')await call('/api/bootstrap');
+  const headers={'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@example.invalid'};
+  if(cookie)headers.cookie=cookie;
+  const response=await worker.fetch(new Request('https://test.invalid'+path,{headers}),env,{});
+  const issued=response.headers.get('set-cookie');
+  if(issued)cookie=issued.split(';')[0];
+  return response;
+};
 const report=await(await call('/api/workbook?end=2026-10-23')).json();
 assert.equal(report.projects.length,72);
 const previous=SEED_PROJECTS.filter(p=>p.previous_update);
