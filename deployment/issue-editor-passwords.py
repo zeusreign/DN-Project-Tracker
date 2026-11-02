@@ -33,7 +33,7 @@ def main():
     if len(targets)!=len(prepared['users']): p.error('Duplicate usernames in credentials file')
     origin=a.url.rstrip('/'); cookies=http.cookiejar.CookieJar(); opener=build_opener(NoRedirect(), HTTPCookieProcessor(cookies)); csrf=None
     def api(path, body=None):
-        headers={'Origin':origin,'Accept':'application/json'}
+        headers={'Origin':origin,'Accept':'application/json','User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
         if body is not None: headers['Content-Type']='application/json'
         if csrf: headers['x-csrf-token']=csrf
         req=Request(origin+path,data=None if body is None else json.dumps(body).encode(),headers=headers)
