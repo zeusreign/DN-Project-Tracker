@@ -15,11 +15,19 @@ set -euo pipefail
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 pages_dir="$project_root/pages-dist"
 
-bash "$project_root/scripts/build.sh"
+# PRODUCTION profile, not the review profile. scripts/build.sh runs bundle.mjs
+# WITHOUT --production, which leaves DNC_REVIEW_BUILD=true. That build trusts
+# platform identity headers, ships the preview seed data, re-runs the project,
+# directory, workbook-history and portrait imports against whatever database it
+# is pointed at, and accepts only the vendor's preview AI endpoint. The vendor
+# handoff is explicit that it "must not be used as the live deployment artifact".
+# Deployed targets get the production bundle; use scripts/build.sh directly if
+# you specifically want the review build for local inspection.
+node "$project_root/scripts/bundle.mjs" --production
 
 rm -rf "$pages_dir"
 mkdir -p "$pages_dir"
-cp "$project_root/dist/server/index.js" "$pages_dir/_worker.js"
+cp "$project_root/production-dist/_worker.js" "$pages_dir/_worker.js"
 
 raw=$(stat -c%s "$pages_dir/_worker.js")
 gzip_size=$(gzip -9 -c "$pages_dir/_worker.js" | wc -c)
