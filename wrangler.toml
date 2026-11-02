@@ -63,3 +63,13 @@ ALLOW_PLATFORM_AUTH = "false"
 # to the platform-auth fallback above and to role lookup). The first real
 # administrator is provisioned against D1. Set only if the client asks for it.
 ADMIN_EMAILS = ""
+
+# Ask the Tracker: the PRODUCTION AI service deployed from the 2026-11-02 package.
+# Not a secret, so it lives here rather than in the dashboard. The production
+# build (DNC_REVIEW_BUILD=false) requires https, a path of exactly
+# /api/tracker-service, and no query, fragment or credentials in the URL. It also
+# refuses the vendor's preview endpoint, so this must be our own deployment.
+#
+# This is a DIFFERENT worker, database and secret from the staging service in
+# test-env/wrangler.toml. They must never be shared; see START_HERE.md section 4.
+DNC_AI_SERVICE_URL = "https://dnc-tracker-ai-prod.plain-feather-a7d3.workers.dev/api/tracker-service"
