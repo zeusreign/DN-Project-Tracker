@@ -1,0 +1,11 @@
+import {readFileSync,writeFileSync} from 'node:fs';
+const source=JSON.parse(readFileSync(new URL('../preview-source/workbook.json',import.meta.url),'utf8'));
+const old=readFileSync(new URL('../worker/seed.js',import.meta.url),'utf8');
+const original=JSON.parse(old.slice(old.indexOf('[')).trim().replace(/;$/,''));
+const defaults=Object.fromEntries([...new Set(original.flatMap(x=>Object.keys(x)))].map(k=>[k,null]));
+const rows=source.sheets.flatMap(x=>x.rows);
+if(rows.length!==72||rows.some(x=>!x.business_unit))throw Error('Review unresolved workbook rows before seeding.');
+const projects=rows.map((r,i)=>({...defaults,...r.fields,source_key:'preview-oct23:'+r.source.sheet+':'+r.source.row,business_unit:r.business_unit,venue:r.venue||r.section_heading||r.business_unit,project_type:r.kind==='capital'?'Capital':'Development',name:r.name,capp_number:r.fields.capp_number==null?null:String(r.fields.capp_number),initiative_number:r.fields.initiative_number==null?null:String(r.fields.initiative_number),status:r.kind==='capital'?'Active':r.fields.status||'Needs Status',phase:r.kind==='capital'?'Construction / Delivery':'Development',current_update:r.current_update,previous_update:r.previous_update,budget_risk:r.fields.budget_risk||'Not Rated',schedule_risk:r.fields.schedule_risk||'Not Rated',reporting_period:source.report_date,source_row:r.source.row,source_sort_order:i+1,section_name:r.section_heading,source_sheet:r.source.sheet}));
+writeFileSync(new URL('../worker/seed.js',import.meta.url),'// Private preview copy of supplied October 23 workbook; project IDs are local to this Site.\nexport const SEED_PROJECTS = '+JSON.stringify(projects,null,2)+';\n');
+writeFileSync(new URL('../docs/PREVIEW_DATA_NOTES.json',import.meta.url),JSON.stringify({workbook:source.generated_from,report_date:source.report_date,previous_report_date:null,capital:projects.filter(x=>x.project_type==='Capital').length,development:projects.filter(x=>x.project_type==='Development').length,flags:rows.filter(r=>r.flags.length).map(r=>({source:r.source,name:r.name,flags:r.flags})),excluded:source.excluded},null,2)+'\n');
+console.log('Prepared '+projects.length+' preview records. Previous narratives retained without guessed history dates.');

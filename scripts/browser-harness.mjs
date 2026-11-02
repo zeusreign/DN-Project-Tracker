@@ -304,6 +304,7 @@ class Element {
   close() { this.open = false; }
   getBoundingClientRect() { return { width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }; }
   scrollIntoView() {}
+  scrollTo(options) { if (options.top !== undefined) this.scrollTop = options.top; if (options.left !== undefined) this.scrollLeft = options.left; }
 
   addEventListener(type, handler) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);

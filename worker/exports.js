@@ -35,7 +35,9 @@ export function projectExportData(projects) {
       p.development_current_estimate_date, p.development_promoted_at, p.development_promoted_by,
     ];
   });
-  return { headers, rows };
+  // Place Activity immediately after CAPP and PM in the flat register too.
+  const order=[0,1,2,3,4,5,7,23,24,6,...Array.from({length:15},(_,i)=>i+8),...Array.from({length:13},(_,i)=>i+25)];
+  return {headers:order.map(i=>headers[i]),rows:rows.map(r=>order.map(i=>r[i]))};
 }
 
 export function delimitedExport(data, delimiter) {
@@ -110,43 +112,97 @@ export function xlsxExport(data) {
   const ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
   const relns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
   const declaration = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
-  const money = new Set([11,12,13,14,15,16,30,31,32,34]), integers = new Set([0,22]);
-  // Keep Promoted At as its original timestamp text so its time/zone is not lost.
-  const dates = new Set([18,19,20,21,25,27,33,35]);
+  const sheets = data.sheets || [{...data,name:'Project Register'}];
+  if(sheets.length>100)throw new Error('Too many sheets');
+  function columnType(sheet,col) {
+    if(sheet.columnTypes)return sheet.columnTypes[col];
+    const header=sheet.headers[col];
+    if(['A&E / Pre-Con CAPP','Construction CAPP','Add-CAPP','Total Approved Budget','Anticipated Final Cost','Budget Variance','Subsidiary / Biz Dev Expense','Development Original Estimate','Development Current Estimate'].includes(header))return 'money';
+    if(header==='% Variance')return 'percent';
+    if(['Source Order','Duration Change'].includes(header))return 'integer';
+    if(['Original Start','Current Start','Original Turnover','Current Turnover','Development Request Date','Development Deliverable Due Date','Original Estimate Date','Current Estimate Date'].includes(header))return 'date';
+    return 'text';
+  }
+  function columnWidth(sheet,col){return sheet.widths?.[col]||(/Activity Update/.test(sheet.headers[col])?65:['Major Project','Project','Development Consultants'].includes(sheet.headers[col])?32:23);}
   function textCell(ref, value, style) {
     if (String(value).length > 32767) throw new Error("An activity is too long for one Excel cell. Use CSV or tab-delimited instead.");
     return `<c r="${ref}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${xmlText(value)}</t></is></c>`;
   }
-  function rowXml(values, row) {
+  const font=(bold=false,color='FF000000',size=11)=>`<font>${bold?'<b/>':''}<sz val="${size}"/><color rgb="${color}"/><name val="Calibri"/></font>`;
+  const fill=color=>`<fill><patternFill patternType="solid"><fgColor rgb="${color}"/><bgColor indexed="64"/></patternFill></fill>`;
+  const xf=(num=0,fontId=0,fillId=0,borderId=0,align='left',wrap=true)=>`<xf numFmtId="${num}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" horizontal="${align}"${wrap?' wrapText="1"':''}/></xf>`;
+  const cellStyles=[
+    xf(),xf(0,1,2,0,'center'),xf(7,0,0,0,'right',false),xf(10,0,0,0,'right',false),xf(14),xf(3,0,0,0,'right',false),
+    xf(0,2,3),xf(0,2,4),xf(0,2,0,1,'center').replace('vertical="top"','vertical="center"'),xf(0,3,0,1,'center').replace('vertical="top"','vertical="center"'),
+    xf(0,0,0,1),xf(164,0,0,1,'right',false),xf(165,0,0,1,'right',false),xf(166,0,0,1,'center',false),xf(3,0,0,1,'right',false),xf(49,0,0,1,'center'),xf(164,0,5,1,'right',false),xf(0,2,0,1),xf(164,2,0,1,'right',false)
+  ];
+  const fonts=[font(),font(true,'FFFFFFFF'),font(true),font(true,'FF305496')];
+  const fills=['<fill><patternFill patternType="none"/></fill>','<fill><patternFill patternType="gray125"/></fill>',fill('FF063450'),fill('FF9BC2E6'),fill('FFFF0000'),fill('FFE7E6E6')];
+  const variants=new Map();
+  function appearanceStyle(base,appearance={}) {
+    const valid=c=>/^#[0-9a-f]{6}$/i.test(c||'');
+    if(!valid(appearance.fill)&&!valid(appearance.color)&&appearance.align!=='center')return base;
+    const key=base+'|'+(appearance.fill||'')+'|'+(appearance.color||'')+'|'+(appearance.align||'');
+    if(variants.has(key))return variants.get(key);
+    let xml=cellStyles[base];
+    if(appearance.align==='center')xml=xml.replace(/horizontal="[^"]+"/,'horizontal="center"');
+    if(valid(appearance.fill)){
+      const value=fill('FF'+appearance.fill.slice(1).toUpperCase());let id=fills.indexOf(value);
+      if(id<0){id=fills.length;fills.push(value);}xml=xml.replace(/fillId="\d+"/,'fillId="'+id+'"');
+    }
+    if(valid(appearance.color)){
+      const original=Number(xml.match(/fontId="(\d+)"/)[1]);
+      const value=font(fonts[original].includes('<b/>'),'FF'+appearance.color.slice(1).toUpperCase());let id=fonts.indexOf(value);
+      if(id<0){id=fonts.length;fonts.push(value);}xml=xml.replace(/fontId="\d+"/,'fontId="'+id+'"');
+    }
+    const id=cellStyles.length;cellStyles.push(xml);variants.set(key,id);return id;
+  }
+  function rowXml(values, row, sheet, kind = row===1?"header":"data", appearances=[]) {
     const cells = values.map((value, col) => {
       const ref = columnName(col) + row;
-      if (row === 1) return textCell(ref, value, 1);
-      if (value == null || value === "") return `<c r="${ref}" s="0"/>`;
-      if (money.has(col) || integers.has(col) || col === 17) {
+      if (kind === 'section') return textCell(ref, value ?? '', appearanceStyle(6,appearances[col]));
+      if (kind === "header") return textCell(ref, value, sheet.grouped?(sheet.kind==='development'?9:8):1);
+      const baseStyle=appearanceStyle(sheet.grouped?(kind==='total'?17:col===1||sheet.headers[col]==='CAPP / Initiative #'?15:10):0,appearances[col]);
+      if (value == null || value === "") return `<c r="${ref}" s="${baseStyle}"/>`;
+      const type=columnType(sheet,col);
+      if (["money","integer","percent"].includes(type)) {
         const number = Number(value);
-        if (Number.isFinite(number)) return `<c r="${ref}" s="${money.has(col) ? 2 : col === 17 ? 3 : 5}" t="n"><v>${number}</v></c>`;
+        if (Number.isFinite(number)) return `<c r="${ref}" s="${appearanceStyle(sheet.grouped?(kind==='total'?18:type==='money'?11:type==='percent'?12:14):(type === "money" ? 2 : type === "percent" ? 3 : 5),appearances[col])}" t="n"><v>${number}</v></c>`;
       }
-      if (dates.has(col) && /^\d{4}-\d{2}-\d{2}(?:$|[T ])/.test(String(value))) {
+      if (type === "date" && /^\d{4}-\d{2}-\d{2}(?:$|[T ])/.test(String(value))) {
         const time = Date.parse(String(value).slice(0, 10) + "T00:00:00Z");
-        if (Number.isFinite(time)) return `<c r="${ref}" s="4" t="n"><v>${time / 86400000 + 25569}</v></c>`;
+        if (Number.isFinite(time)) return `<c r="${ref}" s="${appearanceStyle(sheet.grouped?13:4,appearances[col])}" t="n"><v>${time / 86400000 + 25569}</v></c>`;
       }
       // Identifiers and all user-entered text are literal strings, never formulas.
-      return textCell(ref, value, 0);
+      return textCell(ref, value, baseStyle);
     }).join("");
-    const lines = Math.max(1, ...values.map((v, i) => String(v ?? "").split(/\r\n|[\r\n]/).reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / ([23,24].includes(i) ? 60 : [3,4,28].includes(i) ? 29 : 20))), 0)));
-    const height = row === 1 ? 44 : Math.min(409, Math.max(30, lines * 15 + 8));
+    const lines = Math.max(1, ...values.map((v, i) => String(v ?? "").split(/\r\n|[\r\n]/).reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / (columnWidth(sheet,i)-3))), 0)));
+    const height = kind === "section" || kind === "total" ? 26 : kind === "header" ? (sheet.grouped?60:44) : Math.min(409, Math.max(30, lines * 15 + 8));
     return `<row r="${row}" ht="${height}" customHeight="1">${cells}</row>`;
   }
-  const last = columnName(data.headers.length - 1) + (data.rows.length + 1);
-  const cols = data.headers.map((_, i) => `<col min="${i+1}" max="${i+1}" width="${[23,24].includes(i) ? 65 : [3,4,28].includes(i) ? 32 : i === 5 ? 16 : 23}" customWidth="1"/>`).join("");
-  const worksheet = declaration + `<worksheet xmlns="${ns}"><dimension ref="A1:${last}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="30"/><cols>${cols}</cols><sheetData>${[data.headers, ...data.rows].map((r,i) => rowXml(r,i+1)).join("")}</sheetData><autoFilter ref="A1:${last}"/></worksheet>`;
-  const styles = declaration + `<styleSheet xmlns="${ns}"><fonts count="2"><font><sz val="11"/><color rgb="FF23313A"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF063450"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="7" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top" horizontal="right"/></xf><xf numFmtId="10" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top" horizontal="right"/></xf><xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top"/></xf><xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top" horizontal="right"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
-  return zipMembers({
-    "[Content_Types].xml": declaration + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
-    "_rels/.rels": declaration + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${relns}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
-    "xl/workbook.xml": declaration + `<workbook xmlns="${ns}" xmlns:r="${relns}"><bookViews><workbookView/></bookViews><sheets><sheet name="Project Register" sheetId="1" r:id="rId1"/></sheets></workbook>`,
-    "xl/_rels/workbook.xml.rels": declaration + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${relns}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${relns}/styles" Target="styles.xml"/></Relationships>`,
-    "xl/styles.xml": styles,
-    "xl/worksheets/sheet1.xml": worksheet,
+  const worksheets=sheets.map(sheet=>{
+    if(sheet.rows.length>1048575)throw new Error('Too many rows');
+    const entries=[{kind:'header',values:sheet.headers}];
+    const sections=new Map((sheet.sections||[]).map(s=>[s.index,s]));
+    sheet.rows.forEach((values,i)=>{
+      if(sections.has(i))entries.push({kind:'section',values:sheet.headers.map((_,j)=>j===0?sections.get(i).label:null),appearances:sheet.headers.map(()=>sections.get(i).style)});
+      entries.push({kind:'data',values,appearances:sheet.cellStyles?.[i]});
+    });
+    if(sheet.total)entries.push({kind:'total',values:sheet.total,appearances:sheet.totalStyles});
+    const last = columnName(sheet.headers.length - 1) + entries.length;
+    const cols=sheet.headers.map((_,i)=>`<col min="${i+1}" max="${i+1}" width="${columnWidth(sheet,i)}" customWidth="1"/>`).join('');
+    const freeze=sheet.freezeColumns||0, cell=columnName(freeze)+'2',pane=freeze?'bottomRight':'bottomLeft';
+    const printTitle=sheet.grouped?' showGridLines="0"':'';
+    return declaration + `<worksheet xmlns="${ns}"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${last}"/><sheetViews><sheetView workbookViewId="0"${printTitle}><pane ${freeze?`xSplit="${freeze}" `:''}ySplit="1" topLeftCell="${cell}" activePane="${pane}" state="frozen"/><selection pane="${pane}" activeCell="${cell}" sqref="${cell}"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="30"/><cols>${cols}</cols><sheetData>${entries.map((r,i) => rowXml(r.values,i+1,sheet,r.kind,r.appearances)).join("")}</sheetData>${sheet.autoFilter===false?'':`<autoFilter ref="A1:${last}"/>`}<pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup orientation="landscape" paperSize="9" fitToWidth="1" fitToHeight="0"/></worksheet>`;
   });
+  const styles = declaration + `<styleSheet xmlns="${ns}"><numFmts count="3"><numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0;(&quot;$&quot;#,##0)"/><numFmt numFmtId="165" formatCode="0.0%"/><numFmt numFmtId="166" formatCode="mm/dd/yy"/></numFmts><fonts count="${fonts.length}">${fonts.join('')}</fonts><fills count="${fills.length}">${fills.join('')}</fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="hair"><color rgb="FFD9D9D9"/></left><right style="hair"><color rgb="FFD9D9D9"/></right><top style="hair"><color rgb="FFD9D9D9"/></top><bottom style="hair"><color rgb="FFD9D9D9"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${cellStyles.length}">${cellStyles.join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+  const members={
+    "[Content_Types].xml": declaration + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheets.map((_,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+    "_rels/.rels": declaration + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${relns}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    "xl/workbook.xml": declaration + `<workbook xmlns="${ns}" xmlns:r="${relns}"><bookViews><workbookView/></bookViews><sheets>${sheets.map((s,i)=>`<sheet name="${xmlText(s.name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join('')}</sheets></workbook>`,
+    "xl/_rels/workbook.xml.rels": declaration + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_,i)=>`<Relationship Id="rId${i+1}" Type="${relns}/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length+1}" Type="${relns}/styles" Target="styles.xml"/></Relationships>`,
+    "xl/styles.xml": styles,
+  };
+  worksheets.forEach((xml,i)=>members['xl/worksheets/sheet'+(i+1)+'.xml']=xml);
+  return zipMembers(members);
 }

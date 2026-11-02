@@ -1,3 +1,5 @@
+import { reportingApi } from './reporting.js';
+import { ensureWorkbookHistory } from './workbook-history.js';
 import { enhancedApi, editDeadline } from "./enhanced-api.js";
 import { PAGE } from "./page.js";
 import { SEED_PROJECTS } from "./seed.js";
@@ -5,9 +7,11 @@ import { OG_IMAGE_BASE64 } from "./social.js";
 import { PROFILE_PHOTOS, PROFILE_PHOTO_BATCH } from "./profile-photos.js";
 import { EXPORT_FORMATS, projectExportData, delimitedExport, xlsxExport, zipMembers } from "./exports.js";
 
-const REPORTING_PERIOD = "2026-08-28";
-const PREVIOUS_REPORTING_PERIOD = "2026-08-21";
-const SEED_VERSION = "workbook-order-v4-full-parks-and-development";
+const REPORTING_PERIOD = "2026-10-23";
+// Compile-time profile: production builds cannot load preview records or identity.
+const DNC_REVIEW_BUILD = true;
+const PREVIOUS_REPORTING_PERIOD = null;
+const SEED_VERSION = "private-review-oct23-v1";
 const DIRECTORY_SEED_VERSION = "bill-email-directory-v5-runtime-compatible-passwords";
 const PASSWORD_ITERATIONS = 100000;
 const PASSWORD_MIN_LENGTH = 10;
@@ -23,12 +27,12 @@ const SESSION_SECONDS = 60 * 60 * 8;
 // The browser reads this number back from /api/bootstrap and derives its warning
 // from it, so this constant is the single source of truth — nothing else needs
 // editing to change the timeout. Drop it to `60 * 2` to exercise the behaviour by
-// hand without waiting three quarters of an hour.
-const IDLE_SECONDS = 60 * 45;
+// hand without waiting forty minutes.
+const IDLE_SECONDS = 60 * 40;
 
 // How long before the cut-off the browser warns. Kept below IDLE_SECONDS so a
 // short test value still produces a visible warning.
-const IDLE_WARNING_SECONDS = Math.min(60, Math.floor(IDLE_SECONDS / 2));
+const IDLE_WARNING_SECONDS = 60 * 10;
 
 // ---------------------------------------------------------------------------
 // WHAT COUNTS AS ACTIVITY
@@ -50,7 +54,8 @@ const IDLE_WARNING_SECONDS = Math.min(60, Math.floor(IDLE_SECONDS / 2));
 // Someone who is reading rather than typing still stays signed in: scrolling,
 // clicking, tapping and typing all fire the activity ping above.
 function countsAsActivity(request) {
-  return !["GET", "HEAD", "OPTIONS"].includes(request.method);
+  const path=new URL(request.url).pathname;
+  return !["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/api/assistant/history","/api/assistant/voice"].includes(path);
 }
 
 // Seconds of idle time left, as the worker sees it. This is the only number the
@@ -68,7 +73,7 @@ function idleRemainingFor(user, touched, total) {
 }
 
 // LOCAL VERIFICATION ONLY. Setting IDLE_SECONDS_OVERRIDE runs the whole timeout in
-// a couple of minutes instead of three quarters of an hour, so the warning and the
+// a couple of minutes instead of forty minutes, so the warning and the
 // cut-off can be watched by hand without editing and then un-editing the constant
 // above — which is how a two-minute timeout once reached production.
 //
@@ -475,12 +480,42 @@ async function authenticatedUser(db, request, env, touch = true) {
   return null;
 }
 
+// A platform login also gets a browser-specific Tracker idle session. The
+// platform identity remains the authority; this cookie only narrows its lifetime.
+async function platformIdleSession(db,request,user,env,touch){
+  const token=cookieValue(request,'dnc_preview_session'),now=Date.now(),total=idleSecondsFor(env);
+  let key,session;
+  if(token){
+    key='preview_session:'+await sha256(token);
+    const row=await db.prepare('SELECT value FROM app_meta WHERE key=?').bind(key).first();
+    try{session=JSON.parse(row?.value||'null')}catch{}
+    if(!session||session.userId!==user.id||now-session.lastUsed>=total*1000||now-session.createdAt>=SESSION_SECONDS*1000)return false;
+  }else{
+    if(new URL(request.url).pathname!=='/api/bootstrap')return false;
+    const fresh=crypto.randomUUID()+crypto.randomUUID();key='preview_session:'+await sha256(fresh);
+    session={userId:user.id,lastUsed:now,createdAt:now};
+    user.platformSessionSetCookie='dnc_preview_session='+fresh+'; HttpOnly; '+(env.SITES_LOCAL_QA===true?'':'Secure; ')+'SameSite=Strict; Path=/; Max-Age='+SESSION_SECONDS;
+  }
+  if(touch)session.lastUsed=now;
+  if(touch||!token)await db.prepare("INSERT INTO app_meta(key,value,updated_at) VALUES(?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(key,JSON.stringify(session)).run();
+  user.session_last_used_at=new Date(session.lastUsed).toISOString().slice(0,19).replace('T',' ');
+  user.session_created_at=new Date(session.createdAt).toISOString().slice(0,19).replace('T',' ');
+  return true;
+}
+
 function envList(value) {
   return String(value || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
 }
 
 async function roleFor(db, env, user) {
   if (!user?.email) return null;
+  // Private Sites review only. Dispatch admits the owner; bind that first
+  // platform identity so a later sharing change does not grant editor access.
+  if (env.SITES_OWNER_PREVIEW === 'true' && user.auth_source === 'openai') {
+    await db.prepare("INSERT OR IGNORE INTO app_meta(key,value) VALUES('sites_preview_owner_id',?)").bind(user.id).run();
+    const owner=await db.prepare("SELECT value FROM app_meta WHERE key='sites_preview_owner_id'").first();
+    return owner?.value===user.id?'admin':null;
+  }
   if (user.directory_role) return user.directory_role;
   const email = user.email.toLowerCase();
   if (envList(env.ADMIN_EMAILS).includes(email)) return "admin";
@@ -569,7 +604,7 @@ function normalizedSeedProjects() {
       source_key: occurrence === 1 ? project.source_key : project.source_key + ":source-row:" + (index + 1),
       source_sort_order: index + 1,
       section_name: project.project_type === "Development" ? project.business_unit : project.venue,
-      source_sheet: seedSheet(project),
+      source_sheet: project.source_sheet || seedSheet(project),
     };
   });
 }
@@ -581,6 +616,7 @@ async function batchInChunks(db, statements, size = 35) {
 }
 
 async function ensureSeed(db) {
+  if (!DNC_REVIEW_BUILD) return;
   const marker = await db.prepare("SELECT value FROM app_meta WHERE key = 'seed_version'").first();
   if (marker?.value === SEED_VERSION) return;
 
@@ -680,7 +716,7 @@ async function ensureSeed(db) {
   );
   await batchInChunks(db, updateInserts);
 
-  const previousInserts = seedProjects.filter((p) => p.previous_update).map((project) =>
+  const previousInserts = seedProjects.filter((p) => p.previous_update && PREVIOUS_REPORTING_PERIOD).map((project) =>
     db.prepare(`
       INSERT OR IGNORE INTO project_updates (
         source_key, project_id, reporting_period, current_summary,
@@ -737,6 +773,7 @@ async function ensureSeed(db) {
 }
 
 async function ensureDirectorySeed(db) {
+  if (!DNC_REVIEW_BUILD) return;
   const marker = await db.prepare("SELECT value FROM app_meta WHERE key = 'directory_seed_version'").first();
   if (marker?.value === DIRECTORY_SEED_VERSION) return;
   const statements = USER_DIRECTORY_SEED.flatMap((person) => {
@@ -793,7 +830,7 @@ async function ensureDirectorySeed(db) {
   `).bind(DIRECTORY_SEED_VERSION).run();
 }
 
-async function projectRows(db, scope = null) {
+async function projectRows(db, scope = null, membership = 'active') {
   const filter = scopeFilter(scope, "b");
   const result = await runScoped(db, `
     SELECT
@@ -820,7 +857,7 @@ async function projectRows(db, scope = null) {
     FROM projects p
     JOIN business_units b ON b.id = p.business_unit_id
     LEFT JOIN development_details d ON d.project_id = p.id
-    WHERE p.archived_at IS NULL${filter.sql}
+    WHERE p.archived_at IS ${membership === 'archived' ? 'NOT ' : ''}NULL${filter.sql}
     ORDER BY p.source_sort_order, p.id
   `, filter);
   return result.results || [];
@@ -950,6 +987,11 @@ async function handleLogin(request, env) {
 // cookie is SameSite=Strict, so a cross-site POST arrives carrying no cookie at all
 // and therefore deletes nothing.
 async function handleLogout(request, env) {
+  const platformToken=cookieValue(request,'dnc_preview_session');
+  if(platformToken){
+    await env.DB.prepare('DELETE FROM app_meta WHERE key=?').bind('preview_session:'+await sha256(platformToken)).run();
+    return json({ok:true},200,{'set-cookie':'dnc_preview_session=; HttpOnly; '+(env.SITES_LOCAL_QA===true?'':'Secure; ')+'SameSite=Strict; Path=/; Max-Age=0'});
+  }
   const token = cookieValue(request, "dnc_session");
   if (token) {
     const session = await env.DB.prepare(`
@@ -1001,6 +1043,7 @@ async function handlePasswordChange(request, env, user) {
 }
 
 async function importRequestedProfilePhotos(env, user) {
+  if (!DNC_REVIEW_BUILD) return;
   if (!env.BUCKET) return;
   for (const photo of PROFILE_PHOTOS) {
     const version = PROFILE_PHOTO_BATCH + "-" + photo.key;
@@ -1035,8 +1078,15 @@ function withAvatar(row) {
   };
 }
 
+// Store IANA identifiers, not fixed UTC offsets, so daylight saving is automatic.
+function validTimeZone(value){
+ if(value===null||value===undefined||value==='')return null;
+ if(typeof value!=='string'||value.length>100||value!=='UTC'&&!/^[A-Za-z_+-]+(?:\/[A-Za-z0-9_+-]+)+$/.test(value))return undefined;
+ try{return new Intl.DateTimeFormat('en-US',{timeZone:value}).resolvedOptions().timeZone}catch{return undefined}
+}
+
 async function readProfile(db, id) {
-  const row = await db.prepare("SELECT id, first_name, last_name, username, user_email, title, location, mobile_phone, role, avatar_version FROM user_directory WHERE id = ?").bind(id).first();
+  const row = await db.prepare("SELECT id, first_name, last_name, username, user_email, title, location, mobile_phone, role, avatar_version, time_zone FROM user_directory WHERE id = ?").bind(id).first();
   return row ? withAvatar(row) : null;
 }
 
@@ -1101,6 +1151,7 @@ async function handleAvatar(request, env, user, role, id) {
 }
 
 async function handleApi(request, env, url) {
+  if(request.method==='POST'&&url.pathname==='/api/ask/service-health')return askTrackerServiceHealth(request,env);
   if (!env.DB) return error("The project database is not available.", 503);
   await ensureSeed(env.DB);
   await ensureDirectorySeed(env.DB);
@@ -1118,8 +1169,19 @@ async function handleApi(request, env, url) {
   if (!user?.id || !user?.email) return error("Sign in with an authorized account to continue.", 401);
   const role = await roleFor(env.DB, env, user);
   if (!role) return error("This account is suspended or not authorized.", 403);
+  if(user.auth_source==='openai'&&!await platformIdleSession(env.DB,request,user,env,activity))return json({error:'Your Tracker session ended after inactivity. Sign in again to continue.',reauthenticate:true},401);
+  // This owner-private copy uses TJ's ChatGPT email, while his copied Tracker
+  // profile uses his DN email. Reuse the profile without changing either login,
+  // password or role. roleFor has already verified the bound Site owner above.
+  if(env.SITES_OWNER_PREVIEW==='true' && user.auth_source==='openai' && role==='admin'){
+    const email=user.email.toLowerCase();
+    const profileEmail=email==='tom@lagospm.com'?'tlagos@delawarenorth.com':email;
+    const profile=await env.DB.prepare('SELECT id FROM user_directory WHERE lower(user_email)=?').bind(profileEmail).first();
+    if(profile)user.directory_id=profile.id;
+  }
   // Resolved server-side from the directory record; null means unrestricted.
   const scope = await scopeFor(env.DB, user, role);
+  if (DNC_REVIEW_BUILD) await ensureWorkbookHistory(env.DB);
   if (user.auth_source === "local" && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     if (request.headers.get("x-csrf-token") !== user.csrf_token) return error("Your secure session could not be verified. Refresh and try again.", 403);
   }
@@ -1169,12 +1231,14 @@ async function handleApi(request, env, url) {
     return error("Replace the temporary password before using the tracker.", 428);
   }
 
+  if(url.pathname.startsWith("/api/ask/")||url.pathname.startsWith("/api/assistant/"))return askTrackerApi(request,env,url,user,role,scope);
+
   if (request.method === "GET" && url.pathname === "/api/bootstrap") {
     if (role === "admin") await importRequestedProfilePhotos(env, user);
     const projects = await projectRows(env.DB, scope);
     const profile = user.directory_id ? await readProfile(env.DB, user.directory_id) : null;
     // Renew an active session, never an expired one. Keep an absolute 24-hour cap.
-    const sessionHeaders = {};
+    const sessionHeaders = user.platformSessionSetCookie?{"set-cookie":user.platformSessionSetCookie}:{};
     if (user.auth_source === "local") {
       const remaining = Math.min(SESSION_SECONDS, Math.floor((Date.parse(user.session_created_at.replace(' ', 'T') + 'Z') + 86400000 - Date.now()) / 1000));
       if (remaining <= 0) return error("Your session has expired. Please sign in again.", 401);
@@ -1201,6 +1265,20 @@ async function handleApi(request, env, url) {
       },
     }, 200, sessionHeaders);
   }
+  const reportResponse = await reportingApi(request,env,user,role,scope,{json,error,projectRows,scopeFilter,canWrite,projectInScope});
+  if(reportResponse)return reportResponse;
+  // Archival is reversible. Old clients cannot permanently delete a project.
+  if(request.method==='DELETE' && /^\/api\/projects\/\d+$/.test(url.pathname))return error('Use Archive instead of deleting a project.',405);
+  if(!['GET','HEAD'].includes(request.method)){
+    const projectWrite=url.pathname.match(/^\/api\/projects\/(\d+)(?:\/|$)/);
+    if(projectWrite){
+      if(!canWrite(role))return error('Editor access is required.',403);
+      const id=Number(projectWrite[1]);
+      if(!await projectInScope(env.DB,id,scope))return error('Project not found.',404);
+      const archived=await env.DB.prepare('SELECT archived_at FROM projects WHERE id=?').bind(id).first();
+      if(archived?.archived_at)return error('Restore this project from Archive before editing it.',409);
+    }
+  }
   const exportMatch = url.pathname.match(/^\/api\/export\.(csv|tsv|xlsx)$/);
   if (request.method === "GET" && exportMatch) return exportProjects(request, env, exportMatch[1], user, role, scope);
   if (url.pathname === "/api/account/profile") {
@@ -1208,8 +1286,9 @@ async function handleApi(request, env, url) {
     if (request.method === "GET") return json({ profile: await readProfile(env.DB, user.directory_id) });
     if (request.method === "PATCH") {
       const body = await request.json().catch(() => null);
-      const allowed = new Set(["title", "location", "mobile_phone"]);
-      if (!body || Array.isArray(body) || !Object.keys(body).length || Object.keys(body).some(key => !allowed.has(key) || (body[key] !== null && typeof body[key] !== "string"))) return error("Only job title, location and mobile phone can be changed here.");
+      const allowed = new Set(["title", "location", "mobile_phone", "time_zone"]);
+      if (!body || Array.isArray(body) || !Object.keys(body).length || Object.keys(body).some(key => !allowed.has(key) || (body[key] !== null && typeof body[key] !== "string"))) return error("Only job title, location, mobile phone and time zone can be changed here.");
+      if(Object.hasOwn(body,'time_zone')){const zone=validTimeZone(body.time_zone);if(zone===undefined)return error('Choose a valid time zone, such as America/Denver, or Automatic.');body.time_zone=zone;}
       const fields = Object.keys(body);
       await env.DB.batch([
         env.DB.prepare("UPDATE user_directory SET " + fields.map(key => key + " = ?").join(", ") + ", updated_at = datetime('now') WHERE id = ?").bind(...fields.map(key => asText(body[key], key === "mobile_phone" ? 60 : 180)), user.directory_id),
@@ -1250,7 +1329,7 @@ async function handleApi(request, env, url) {
       ORDER BY reporting_period DESC, created_at DESC, id DESC
     `).bind(projectId).all();
     const revisions = await env.DB.prepare("SELECT r.* FROM activity_revisions r JOIN project_updates u ON u.id=r.update_id WHERE u.project_id=? ORDER BY r.created_at DESC,r.id DESC").bind(projectId).all();
-    return json({ project, server_time: new Date().toISOString(), history: (history.results || []).map(h=>({...h,edit_deadline:new Date(editDeadline(h.created_at)).toISOString(),editable:canWrite(role)&&Date.now()<editDeadline(h.created_at),revisions:(revisions.results||[]).filter(r=>r.update_id===h.id)})) });
+    return json({ project, server_time: new Date().toISOString(), history: (history.results || []).map(h=>({...h,edit_deadline:new Date(editDeadline(h.created_at)).toISOString(),editable:!project.archived_at&&canWrite(role)&&Date.now()<editDeadline(h.created_at),revisions:(revisions.results||[]).filter(r=>r.update_id===h.id)})) });
   }
   if (request.method === "GET" && url.pathname === "/api/admin/backup") {
     // Administrators only. Editors and Viewers are refused here, before any
@@ -1286,7 +1365,7 @@ async function handleApi(request, env, url) {
     const [roles, audit, counts, loginEvents] = await Promise.all([
       env.DB.prepare(`
         SELECT id, username, user_email, first_name, last_name, role, title, department, company,
-               business_unit_scope, location, mobile_phone, account_status,
+               business_unit_scope, location, mobile_phone, time_zone, account_status,
                site_access_status, notes, last_login_at, failed_login_count, locked_until, updated_at,
                CASE WHEN password_hash IS NULL THEN 0 ELSE 1 END AS password_configured,
                must_change_password, password_changed_at, avatar_version
@@ -1317,6 +1396,36 @@ async function handleApi(request, env, url) {
       configured_admin_count: envList(env.ADMIN_EMAILS).length,
     });
   }
+  const initialPasswordMatch = url.pathname.match(/^\/api\/admin\/users\/(\d+)\/initial-password$/);
+  if (request.method === "POST" && initialPasswordMatch) {
+    if (role !== "admin") return error("Administrator access is required.", 403);
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body.expected_email !== 'string') return error('Specify the expected Editor email.');
+    const email = body.expected_email.trim().toLowerCase();
+    const password = body.temporary_password;
+    if (typeof password !== 'string') return error('A temporary password is required.');
+    const passwordError = validatePassword(password); if (passwordError) return error(passwordError);
+    const credential = await passwordRecord(password), id = Number(initialPasswordMatch[1]);
+    // The condition is atomic: never replace a password or a changed Admin role,
+    // even if another administrator updates the account after the roster read.
+    const results = await env.DB.batch([
+      env.DB.prepare(`UPDATE user_directory SET
+        password_hash=?,password_salt=?,password_iterations=?,password_algorithm=?,
+        password_changed_at=datetime('now'),must_change_password=1,failed_login_count=0,locked_until=NULL,
+        account_status='active',site_access_status='authorized',updated_at=datetime('now')
+        WHERE id=? AND lower(COALESCE(username,user_email))=? AND role='editor'
+        AND password_hash IS NULL AND user_email IS NOT NULL
+        AND account_status IN ('active','pending') AND site_access_status IN ('authorized','pending')
+        AND (?=1 OR (account_status='active' AND site_access_status='authorized'))
+      `).bind(credential.hash,credential.salt,credential.iterations,credential.algorithm,id,email,body.activate_pending===true?1:0),
+      env.DB.prepare(`INSERT INTO audit_log(action,entity_type,entity_key,actor_id,actor_email,details)
+        SELECT 'initial_editor_password','user',?,?,?,? WHERE changes()=1
+      `).bind(String(id),user.id,user.email,JSON.stringify({email,mustChangePassword:true}))
+    ]);
+    if (Number(results[0]?.meta?.changes ?? results[0]?.changes ?? 0)!==1)
+      return error('Account already has a password, is no longer an eligible Editor, or its identity/access changed. Nothing was reset.',409);
+    return json({id,installed:true,must_change_password:true});
+  }
   if (request.method === "POST" && url.pathname === "/api/admin/users") {
     if (role !== "admin") return error("Administrator access is required.", 403);
     const body = await request.json().catch(() => null);
@@ -1326,6 +1435,8 @@ async function handleApi(request, env, url) {
     const lastName = asText(body.last_name, 100);
     const email = asText(body.user_email, 240)?.toLowerCase() || null;
     const username = asText(body.username, 240)?.toLowerCase() || email;
+    const zoneSupplied=Object.hasOwn(body,'time_zone'),timeZone=validTimeZone(body.time_zone);
+    if(timeZone===undefined)return error('Choose a valid time zone, such as America/Denver, or Automatic.');
     const savedRole = asText(body.role, 20) || "viewer";
     const accountStatus = asText(body.account_status, 20) || "pending";
     const siteAccessStatus = email ? (asText(body.site_access_status, 30) || "pending") : "email_required";
@@ -1363,6 +1474,7 @@ async function handleApi(request, env, url) {
         UPDATE user_directory SET user_email = ?, username = ?, first_name = ?, last_name = ?, role = ?,
           title = ?, department = ?, company = ?, business_unit_scope = ?, location = ?,
           mobile_phone = ?, account_status = ?, site_access_status = ?, notes = ?,
+          time_zone = CASE WHEN ? THEN ? ELSE time_zone END,
           password_hash = COALESCE(?, password_hash), password_salt = COALESCE(?, password_salt),
           password_iterations = COALESCE(?, password_iterations), password_algorithm = COALESCE(?, password_algorithm),
           password_changed_at = CASE WHEN ? IS NULL THEN password_changed_at ELSE datetime('now') END,
@@ -1375,7 +1487,7 @@ async function handleApi(request, env, url) {
         email, username, firstName, lastName, savedRole, asText(body.title, 180),
         asText(body.department, 180) || "Design & Construction", asText(body.company, 180) || "Delaware North",
         asText(body.business_unit_scope, 240) || "All", asText(body.location, 180),
-        asText(body.mobile_phone, 60), accountStatus, siteAccessStatus, asText(body.notes, 2000),
+        asText(body.mobile_phone, 60), accountStatus, siteAccessStatus, asText(body.notes, 2000), zoneSupplied?1:0, timeZone,
         password?.hash || null, password?.salt || null, password?.iterations || null, password?.algorithm || null,
         password?.hash || null, password?.hash || null, password?.hash || null, password?.hash || null, directoryId
       ));
@@ -1393,17 +1505,17 @@ async function handleApi(request, env, url) {
           business_unit_scope, location, mobile_phone, account_status,
           site_access_status, notes, created_by, password_hash, password_salt,
           password_iterations, password_algorithm, password_changed_at,
-          must_change_password, updated_at
+          must_change_password, updated_at, time_zone
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,
-          CASE WHEN ? IS NULL THEN 1 ELSE 1 END, datetime('now'))
+          CASE WHEN ? IS NULL THEN 1 ELSE 1 END, datetime('now'), ?)
       `).bind(
         email, username, firstName, lastName, savedRole, asText(body.title, 180),
         asText(body.department, 180) || "Design & Construction", asText(body.company, 180) || "Delaware North",
         asText(body.business_unit_scope, 240) || "All", asText(body.location, 180),
         asText(body.mobile_phone, 60), accountStatus, siteAccessStatus, asText(body.notes, 2000), user.email,
         password?.hash || null, password?.salt || null, password?.iterations || null, password?.algorithm || null,
-        password?.hash || null, password?.hash || null
+        password?.hash || null, password?.hash || null, timeZone
       ));
     }
     if (email) statements.push(env.DB.prepare(`
@@ -1416,7 +1528,7 @@ async function handleApi(request, env, url) {
       INSERT INTO audit_log (action, entity_type, entity_key, actor_id, actor_email, details)
       VALUES ('directory_update', 'user', ?, ?, ?, ?)
     `).bind(email || firstName + " " + lastName, user.id, user.email, JSON.stringify({
-      role: savedRole, accountStatus, siteAccessStatus, temporaryPasswordSet: Boolean(password),
+      role: savedRole, accountStatus, siteAccessStatus, temporaryPasswordSet: Boolean(password), timeZoneChanged:zoneSupplied,
     })));
     const savedResults = await env.DB.batch(statements);
     const savedId = directoryId || Number(savedResults[0].meta?.last_row_id ?? savedResults[0].lastInsertRowid);
@@ -1980,7 +2092,14 @@ async function exportProjects(request, env, format, authenticated = null, knownR
 export default {
   async fetch(request, env, ctx) {
     void ctx;
+    if (!DNC_REVIEW_BUILD) env = {...env, ALLOW_PLATFORM_AUTH:"false", SITES_OWNER_PREVIEW:"false"};
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/signature-font.otf") {
+      return new Response(base64Bytes(SIGNATURE_FONT_BASE64), {headers:{"content-type":"font/otf","cache-control":"public, max-age=86400","x-content-type-options":"nosniff"}});
+    }
+    if (request.method === "GET" && url.pathname === "/signature-font-license.txt") {
+      return new Response(SIGNATURE_FONT_LICENSE, {headers:{"content-type":"text/plain; charset=utf-8","cache-control":"public, max-age=86400"}});
+    }
     if (request.method === "GET" && url.pathname === "/og.png") {
       return new Response(base64Bytes(OG_IMAGE_BASE64), { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
     }

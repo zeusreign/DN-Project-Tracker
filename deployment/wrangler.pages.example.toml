@@ -1,0 +1,18 @@
+# Copy to the tracker source root as wrangler.toml; replace every REPLACE value.
+name = "REPLACE_WITH_EXISTING_PAGES_PROJECT_NAME"
+pages_build_output_dir = "production-dist"
+compatibility_date = "2026-05-15"
+[vars]
+ALLOW_PLATFORM_AUTH = "false"
+SITES_OWNER_PREVIEW = "false"
+ADMIN_EMAILS = ""
+DNC_AI_SERVICE_URL = "https://REPLACE_WITH_AI_WORKER_HOST/api/tracker-service"
+[[d1_databases]]
+binding = "DB"
+database_name = "REPLACE_WITH_EXISTING_TRACKER_DATABASE_NAME"
+database_id = "REPLACE_WITH_EXISTING_TRACKER_DATABASE_ID"
+migrations_dir = "drizzle"
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "REPLACE_WITH_EXISTING_PHOTO_BUCKET_NAME"
+# Configure DNC_AI_SERVICE_TOKEN using Pages secrets, never in this file.

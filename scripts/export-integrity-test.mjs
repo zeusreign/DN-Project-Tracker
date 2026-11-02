@@ -17,10 +17,10 @@ const data = projectExportData([{
   approved_budget: 500, current_update: "+sample text",
 }]);
 assert.equal(data.headers.length, 38);
-assert.equal(data.rows[0][16], 200);
-assert.equal(data.rows[0][17], 0.2);
-assert.equal(data.rows[1][16], null);
-assert.equal(data.rows[1][17], null);
+assert.equal(data.rows[0][18], 200);
+assert.equal(data.rows[0][19], 0.2);
+assert.equal(data.rows[1][18], null);
+assert.equal(data.rows[1][19], null);
 assert.throws(() => delimitedExport(data, "|"), /Unsupported/);
 assert.throws(() => xlsxExport(projectExportData([{current_update: "x".repeat(32768)}])), /too long/);
 
@@ -53,15 +53,15 @@ for key in ("xlsx", "empty"):
         assert sheet.max_row == 3
         assert sheet["E2"].value == "=1+1" and sheet["E2"].data_type == "s"
         assert sheet["F2"].value == "00864" and sheet["F3"].value == "00042"
-        assert sheet["L2"].value == -100.25 and sheet["L2"].data_type == "n"
-        assert sheet["Q2"].value == 200 and sheet["R2"].value == 0.2
-        assert sheet["S2"].value == datetime(2026, 9, 4)
-        assert sheet["W2"].value == -3
-        assert sheet["X2"].value == p["note"]
+        assert sheet["N2"].value == -100.25 and sheet["N2"].data_type == "n"
+        assert sheet["S2"].value == 200 and sheet["T2"].value == 0.2
+        assert sheet["U2"].value == datetime(2026, 9, 4)
+        assert sheet["Y2"].value == -3
+        assert sheet["H2"].value == p["note"]
         assert sheet["AK2"].value == "2026-09-04T12:34:56Z"
-        assert sheet["Y2"].value == "@example" and sheet["X3"].value == "+sample text"
-        assert sheet["Q3"].value is None and sheet["R3"].value is None
-        assert sheet["X2"].alignment.wrap_text
+        assert sheet["I2"].value == "@example" and sheet["H3"].value == "+sample text"
+        assert sheet["S3"].value is None and sheet["T3"].value is None
+        assert sheet["H2"].alignment.wrap_text
     else:
         assert sheet.max_row == 1
 for key, delimiter in (("csv", ","), ("tsv", "\t")):
@@ -69,9 +69,9 @@ for key, delimiter in (("csv", ","), ("tsv", "\t")):
     rows = list(csv.reader(io.StringIO(p[key][1:], newline=""), delimiter=delimiter))
     assert len(rows) == 3 and all(len(row) == 38 for row in rows)
     assert rows[1][4] == "'=1+1" and rows[1][5] == "00864"
-    assert rows[1][11] == "-100.25" and rows[1][22] == "-3"
-    assert rows[1][23] == p["note"] and rows[1][24] == "'@example"
-    assert rows[2][23] == "'+sample text" and rows[2][16:18] == ["", ""]
+    assert rows[1][13] == "-100.25" and rows[1][24] == "-3"
+    assert rows[1][7] == p["note"] and rows[1][8] == "'@example"
+    assert rows[2][7] == "'+sample text" and rows[2][18:20] == ["", ""]
 print("Export integrity passed: Excel reader, ZIP CRC/XML, cell types, identifiers, Unicode, multiline notes, CSV/TSV quoting, formula safety, and empty data.")
 `;
 const result = spawnSync(process.env.CODEX_PRIMARY_RUNTIME_PYTHON || "python3", ["-c", python], {

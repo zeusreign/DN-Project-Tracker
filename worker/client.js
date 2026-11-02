@@ -1,3 +1,4 @@
+import { REPORTING_CLIENT } from './reporting-client.js';
 import { ENHANCED_CLIENT } from "./enhanced.js";
 export const CLIENT = `
 var state={projects:[],summary:{},updates:[],me:null,csrf:null,preset:"progress",sortKey:"source_sort_order",sortDir:"asc",devSortKey:"source_sort_order",devSortDir:"asc",activityId:null,unitScope:"All",adminUsers:[],adminAudit:[],adminPage:1,adminLoginEvents:[],loginPage:1,kpiDragKey:null,kpiDragged:false};
@@ -53,6 +54,7 @@ async function api(path,options,retried){var defaults={"content-type":"applicati
 if(r.status===403&&!retried&&((options&&options.method)||"GET")!=="GET"){var fresh=null;try{fresh=await api("/api/session",null,true)}catch(probeError){fresh=null}
 if(fresh&&fresh.csrf_token&&fresh.csrf_token!==state.csrf){state.csrf=fresh.csrf_token;return api(path,options,true)}}
 var fallback=r.status===401?(path==="/api/login"?"The User ID or password is incorrect.":"Your session has expired. Please sign in again."):r.status===423?"This account is temporarily locked. Contact an Administrator or try again later.":r.status===403?"Your account does not have permission to complete this action.":"The tracker could not complete the request. Please try again.";if(r.status===401&&path!=="/api/login"){
+if(data.reauthenticate)platformSignOut();
 // A 401 on anything except the sign-in request itself means the session is gone —
 // timed out, expired, or ended elsewhere. The sign-in screen is the only correct
 // destination, and reaching it must not depend on the warning modal having fired:
@@ -191,13 +193,13 @@ async function showPasswordChangeOnly(){
   toast("Replace your temporary password to continue.");
   return false;
 }
-async function load(reset){if(reset){state.preset="progress";state.sortKey="source_sort_order";state.sortDir="asc";state.devSortKey="source_sort_order";state.devSortDir="asc";state.unitScope="All";["search","developmentSearch"].forEach(function(id){byId(id).value=""});["statusFilter","riskFilter","developmentStatus"].forEach(function(id){byId(id).value=""});document.querySelectorAll(".preset").forEach(function(b){b.classList.toggle("active",b.dataset.preset==="progress")})}var r=await fetch("/api/bootstrap",{cache:"no-store",credentials:"same-origin",redirect:"error"});if(r.status===401){showSignIn(state.me?"Your session has expired. Sign in again to continue.":"");return false}
+async function load(reset){if(reset){state.preset="progress";state.sortKey="source_sort_order";state.sortDir="asc";state.devSortKey="source_sort_order";state.devSortDir="asc";state.unitScope="All";["search","developmentSearch"].forEach(function(id){byId(id).value=""});["statusFilter","riskFilter","developmentStatus"].forEach(function(id){byId(id).value=""});document.querySelectorAll(".preset").forEach(function(b){b.classList.toggle("active",b.dataset.preset==="progress")})}var r=await fetch("/api/bootstrap",{cache:"no-store",credentials:"same-origin",redirect:"error"});if(r.status===401){var expired=await r.json().catch(function(){return {}});if(expired.reauthenticate){await platformSignOut();return false}showSignIn(state.me?"Your session has expired. Sign in again to continue.":"");return false}
 // 428 means the account is signed in but still on a temporary password. The
 // workspace payload is deliberately withheld, so there is no me object to use —
 // the details come from /api/session instead, which sits above that gate. Before
 // this the user was simply told to replace the password with no form to do it in.
 if(r.status===428)return showPasswordChangeOnly();
-var data=await r.json();if(!r.ok)throw new Error(data.error||"Tracker unavailable");state.projects=data.projects;state.summary=data.summary;state.updates=data.updates;state.me=data.me;state.csrf=data.me.csrf_token||null;renderProfileHeader();applyCapabilities();renderAll();byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;setView(location.hash.replace("#","")||"projects",!reset);startIdleWatch();if(state.me.auth_source==="local"&&state.me.must_change_password){byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;setTimeout(function(){if(!byId("passwordDialog").open)byId("passwordDialog").showModal()},80)}return true}
+var data=await r.json();if(!r.ok)throw new Error(data.error||"Tracker unavailable");state.projects=data.projects;state.summary=data.summary;state.updates=data.updates;state.me=data.me;state.csrf=data.me.csrf_token||null;renderProfileHeader();applyCapabilities();renderAll();byId("loading").hidden=true;byId("signedOut").hidden=true;byId("workspace").hidden=false;setView(location.hash.replace("#","")||"projects",!reset);startIdleWatch();if(state.me.auth_source==="local"&&state.me.must_change_password){byId("passwordDialogClose").hidden=true;byId("passwordDialogCancel").hidden=true;byId("passwordDialogSignOut").hidden=false;setTimeout(function(){if(!byId("passwordDialog").open)byId("passwordDialog").showModal()},80)}openRequestedAssistant();return true}
 async function signIn(event){event.preventDefault();var button=byId("loginBtn"),message=byId("loginError"),username=byId("loginUsername").value.trim(),password=byId("loginPassword").value;message.textContent="";button.disabled=true;button.textContent="Signing in…";try{await api("/api/login",{method:"POST",body:JSON.stringify({username:username,password:password})});byId("loginForm").reset();await load(true);announceSession({type:"signed-in"})}catch(error){message.textContent=error.message+" Confirm that the User ID above is your Delaware North email."}finally{button.disabled=false;button.textContent="Sign in"}}
 // --- Inactivity timeout -------------------------------------------------------
 // The duration lives in the worker (IDLE_SECONDS) and arrives on state.me, so
@@ -226,7 +228,7 @@ function adoptSession(data){
 // refresh the session, so a full period must never be assumed here.
 function startIdleWatch(seconds){
   clearIdleTimers();
-  if(!state.me||state.me.auth_source!=="local")return;
+  if(!state.me)return;
   var total=Number(seconds);
   if(!(total>0))total=Number(state.me.idle_remaining)||idleSeconds();
   if(!total)return;
@@ -246,6 +248,7 @@ async function openIdleWarning(){
   // other failure means the question could not be asked — offline, or a blip — so
   // try again shortly rather than going quiet and never warning at all.
   try{data=await api("/api/session")}catch(error){
+    if(Date.now()>=idleDeadline){if(state.me?.auth_source==='openai')platformSignOut();else signOut();return;}
     if(!error||!error.sessionExpired){clearIdleTimers();idleTimers.warn=setTimeout(function(){openIdleWarning()},15000)}
     return;
   }
@@ -261,7 +264,7 @@ async function openIdleWarning(){
 function renderIdleCountdown(){
   var left=Math.max(0,Math.round((idleDeadline-Date.now())/1000));
   byId("idleMessage").textContent=left>0
-    ?"You have been inactive. Your session will end in "+Math.floor(left/60)+":"+String(left%60).padStart(2,"0")+"."
+    ?"You will be logged out in "+Math.floor(left/60)+":"+String(left%60).padStart(2,"0")+"."
     :"Checking whether your session is still active…";
   if(left<=0){clearIdleTimers();confirmIdleExpiry()}
 }
@@ -296,7 +299,7 @@ async function staySignedIn(){
 // input does exactly one thing: send a throttled ping. The reply sets the deadline,
 // so the browser can only ever count down to a moment the worker agreed to.
 function noteActivity(){
-  if(!state.me||state.me.auth_source!=="local")return;
+  if(!state.me)return;
   if(byId("idleDialog").open)return;
   if(!idleSeconds())return;
   var now=Date.now();
@@ -318,7 +321,7 @@ function noteActivity(){
 // clock. The probe is a GET, so asking does not itself extend the session, and an
 // expired one is routed to the sign-in screen by api().
 async function resyncIdleWatch(){
-  if(!state.me||state.me.auth_source!=="local")return;
+  if(!state.me)return;
   try{
     var left=adoptSession(await api("/api/session"));
     if(left<=0){stopIdleWatch();showSignIn("You were signed out after a period of inactivity. Sign in again to continue.");return}
@@ -363,10 +366,16 @@ function onSessionMessage(message){
   if(message.type==="extended"){if(state.me)resyncIdleWatch()}
 }
 
+async function platformSignOut(){
+ closeAskTracker();stopIdleWatch();announceSession({type:'signed-out'});
+ showSignIn('Your Tracker session has ended. Sign in again to continue.');
+ try{await fetch('/api/logout',{method:'POST',headers:{'content-type':'application/json'},body:'{}',credentials:'same-origin'})}catch(e){}
+ window.location.assign('/signout-with-chatgpt?returnTo=%2F');
+}
 // Signing off always ends at the sign-in screen. Leaving the workspace on screen
 // because the request failed strands the user in a session they cannot use and
 // cannot leave; showSignIn() clears every piece of client-side state regardless.
-async function signOut(){var failed=false;try{await api("/api/logout",{method:"POST",body:"{}"})}catch(error){failed=true}announceSession({type:"signed-out"});showSignIn(failed?"You were signed off on this device. Sign in again to confirm the session ended.":"")}
+async function signOut(){if(state.me&&state.me.auth_source==='openai'){await platformSignOut();return;}var failed=false;try{await api("/api/logout",{method:"POST",body:"{}"})}catch(error){failed=true}announceSession({type:"signed-out"});showSignIn(failed?"You were signed off on this device. Sign in again to confirm the session ended.":"")}
 // A FORCED change is an account arriving, not a signed-in person editing a
 // setting: the shell it happens in has no data, no filters and no capabilities
 // resolved yet. Reloading with reset=true is what a manual browser refresh would
@@ -374,8 +383,30 @@ async function signOut(){var failed=false;try{await api("/api/logout",{method:"P
 // voluntary change keeps reset=false so the person's filters and sort survive it.
 async function changePassword(event){event.preventDefault();var forced=Boolean(state.me&&state.me.must_change_password),next=byId("newPassword").value,confirm=byId("newPasswordConfirm").value;if(next!==confirm)return toast("The new passwords do not match.");try{await api("/api/account/password",{method:"POST",body:JSON.stringify({current_password:byId("currentPassword").value,new_password:next,confirm_password:confirm})});byId("passwordForm").reset();byId("passwordDialog").close();toast("Your password was changed.");await load(forced)}catch(error){toast(error.message)}}
 async function patchFields(id,fields,message){await api("/api/projects/"+id+"/fields",{method:"PATCH",body:JSON.stringify(fields)});if(message)toast(message);await load(false)}
-async function saveInline(el){var before=el.dataset.before||"",after=el.textContent.trim();if(!after){el.textContent=before;return toast("Activity update cannot be blank.")}if(after===before)return;el.setAttribute("contenteditable","false");try{await api("/api/projects/"+el.dataset.activity+"/activity",{method:"POST",body:JSON.stringify({current_update:after})});toast("Activity saved with today's date.");await load(false)}catch(e){el.textContent=before;toast(e.message)}finally{if(canWrite())el.setAttribute("contenteditable","true")}}
-async function openActivity(id){state.activityId=Number(id);var p=state.projects.find(function(x){return x.id===state.activityId});if(!p)return;byId("activityTitle").textContent=p.name;var location=p.project_type==="Development"?"Development Pipeline":(p.section_name||p.venue||"Project");byId("activityMeta").textContent=p.business_unit+" • "+location+" • "+dateText(p.reporting_period);byId("activityEditor").value=p.current_update||"";byId("activityEditor").readOnly=!canWrite();byId("historyList").innerHTML='<div class="loading"><div class="spinner"></div>Loading history…</div>';byId("activityDialog").showModal();try{var data=await api("/api/projects/"+id+"/history");byId("historyList").innerHTML=data.history.map(function(h){return'<article class="history-entry"><h4>'+esc(dateText(h.reporting_period))+'</h4><small>'+esc(h.author_name||h.author_email||"Workbook Import")+'</small><p>'+esc(h.current_summary)+'</p></article>'}).join("")||'<div class="count-note">No activity history recorded.</div>'}catch(e){byId("historyList").innerHTML='<div class="count-note">'+esc(e.message)+"</div>"}}
+async function saveInline(el){if(!canWrite()||el.dataset.saving==='true')return;var before=el.dataset.before||"",after=el.textContent.trim();if(!after){el.textContent=before;return toast("Activity update cannot be blank.")}if(after===before)return;el.dataset.saving='true';el.setAttribute("contenteditable","false");try{await api("/api/projects/"+el.dataset.activity+"/activity",{method:"POST",body:JSON.stringify({current_update:after})});el.dataset.before=after;toast("Activity saved with today's date.");await load(false)}catch(e){el.textContent=before;toast(e.message)}finally{delete el.dataset.saving;if(canWrite())el.setAttribute("contenteditable","true")}}
+// One renderer and one request per dialog opening; stale responses cannot replace
+// another project's history or repopulate a closed/signed-out dialog.
+var activityRequestVersion=0;
+function activityNotesHtml(h,forcePair){
+ var previous=typeof h.previous_summary==='string'&&h.previous_summary.trim();
+ return '<div class="activity-notes'+(previous||forcePair?' activity-notes-pair':'')+'"><section><h5>Project Update</h5><p>'+esc(h.current_summary||'No update supplied.')+'</p></section>'+(previous||forcePair?'<section class="activity-previous"><h5>Previous Week Update</h5><small>As supplied with this report · date not specified</small><p>'+esc(h.previous_summary||'No previous-week update supplied.')+'</p></section>':'')+'</div>';
+}
+function activityHistoryHtml(id,history){return history.map(function(h){return '<article class="history-entry"><h4>'+esc(dateText(h.reporting_period))+'</h4><small>'+esc(h.author_name||h.author_email||'Workbook Import')+'</small>'+activityNotesHtml(h)+'</article>'}).join('')||'<p>No activity history recorded.</p>'}
+async function openActivity(id){
+ var requestVersion=++activityRequestVersion,account=state.me;state.activityId=Number(id);
+ var p=state.projects.find(function(x){return x.id===state.activityId});if(!p)return;
+ byId('activityTitle').textContent=p.name;
+ var place=p.project_type==='Development'?'Development Pipeline':(p.section_name||p.venue||'Project');
+ byId('activityMeta').textContent=p.business_unit+' • '+place+' • '+dateText(p.reporting_period);
+ byId('activityEditor').value=p.current_update||'';byId('activityEditor').readOnly=!canWrite();
+ byId('saveActivityBtn').hidden=!canWrite();
+ byId('historyList').innerHTML='<div class="loading"><div class="spinner"></div>Loading history…</div>';
+ byId('activityDialog').showModal();
+ try{var data=await api('/api/projects/'+id+'/history');
+  if(requestVersion!==activityRequestVersion||account!==state.me||state.activityId!==Number(id)||!byId('activityDialog').open)return;
+  byId('historyList').innerHTML=activityHistoryHtml(id,data.history);
+ }catch(e){if(requestVersion===activityRequestVersion&&account===state.me&&byId('activityDialog').open)byId('historyList').textContent=e.message;}
+}
 // The button is disabled for the duration of the request. Without it a second
 // click fired a second POST before the first had returned, and the server's
 // "same text as current" check could not help: both requests read the project
@@ -444,8 +475,14 @@ function renderLoginEvents(){
   byId("loginPagination").innerHTML='<button data-login-page="'+Math.max(1,state.loginPage-1)+'">Previous</button>'+buttons.join("")+'<button data-login-page="'+Math.min(pages,state.loginPage+1)+'">Next</button>';
 }
 function renderAdmin(){var rows=filteredAdmin(),size=15,pages=Math.max(1,Math.ceil(rows.length/size));state.adminPage=Math.min(state.adminPage,pages);var pageRows=rows.slice((state.adminPage-1)*size,state.adminPage*size);byId("directoryCount").textContent=rows.length+" of "+state.adminUsers.length+" users";byId("roleList").innerHTML=pageRows.map(function(u){var password=u.password_configured?'<span class="password-status ready">Configured</span>':'<span class="password-status pending">Not set</span>';return'<tr data-record-row><td><div class="directory-person">'+avatarHtml(u)+'<div><strong>'+esc(u.first_name+" "+u.last_name)+'</strong><small>'+esc(u.title||u.company||"")+'</small></div></div></td><td>'+esc(u.username||"—")+'<small>'+esc(u.user_email||"")+'</small></td><td><span class="role-badge role-'+u.role+'">'+esc(u.role)+'</span></td><td><span class="access-badge">'+esc(u.account_status)+'</span></td><td>'+password+'</td><td>'+esc(u.business_unit_scope||"All")+'</td><td>'+esc(dateText(u.updated_at))+'</td><td><button class="btn small" data-user-edit="'+u.id+'">Edit</button></td></tr>'}).join("")||'<tr><td colspan="8" class="loading">No users match.</td></tr>';enhanceTable("roleList",byId("adminSearch").value);var buttons=[];for(var i=1;i<=pages;i++)buttons.push('<button class="'+(i===state.adminPage?"active":"")+'" data-admin-page="'+i+'">'+i+"</button>");byId("adminPagination").innerHTML='<button data-admin-page="'+Math.max(1,state.adminPage-1)+'">Previous</button>'+buttons.join("")+'<button data-admin-page="'+Math.min(pages,state.adminPage+1)+'">Next</button>';byId("auditList").innerHTML=state.adminAudit.map(auditRowHtml).join("")||'<div class="count-note">No audit activity yet.</div>';renderLoginEvents()}
-function openUser(id){var u=id?state.adminUsers.find(function(x){return x.id===Number(id)}):null;resetPhotoDraft("admin",u);byId("userDialogTitle").textContent=u?"Edit user":"Add user";setValue("userId",u&&u.id);setValue("uFirst",u&&u.first_name);setValue("uLast",u&&u.last_name);setValue("uUsername",u&&u.username);setValue("uEmail",u&&u.user_email);setValue("uTitle",u&&u.title);setValue("uDepartment",u&&u.department||"Design & Construction");setValue("uCompany",u&&u.company||"Delaware North");setValue("uRole",u&&u.role||"viewer");var units=["All"].concat(Array.from(new Set(state.projects.map(function(p){return p.business_unit}))));byId("uBusinessUnit").innerHTML=units.map(function(unit){return'<option '+(unit===(u&&u.business_unit_scope||"All")?"selected":"")+'>'+esc(unit)+"</option>"}).join("");setValue("uLocation",u&&u.location);setValue("uPhone",u&&u.mobile_phone);setValue("uAccountStatus",u&&u.account_status||"pending");setValue("uSiteAccess",u&&u.site_access_status||"pending");setValue("uPassword","");setValue("uPasswordConfirm","");setValue("uNotes",u&&u.notes);byId("uPasswordStatus").textContent=u&&u.password_configured?"A password is configured. Enter a new password only to reset it; the existing password cannot be retrieved.":"No password is configured. Assign a temporary password before authorizing access.";renderStrength("uPassword","uStrengthBar","uStrengthText");byId("userDialog").showModal()}
-async function saveUser(event){event.preventDefault();if(photoDrafts.admin&&photoDrafts.admin.busy)return toast("Please wait for the photo to finish preparing.");var password=byId("uPassword").value,confirmation=byId("uPasswordConfirm").value;if(password!==confirmation)return toast("The temporary passwords do not match.");var savedUser=await api("/api/admin/users",{method:"POST",body:JSON.stringify({id:num(byId("userId").value),first_name:byId("uFirst").value,last_name:byId("uLast").value,username:byId("uUsername").value,user_email:byId("uEmail").value,title:byId("uTitle").value,department:byId("uDepartment").value,company:byId("uCompany").value,role:byId("uRole").value,business_unit_scope:byId("uBusinessUnit").value,location:byId("uLocation").value,mobile_phone:byId("uPhone").value,account_status:byId("uAccountStatus").value,site_access_status:byId("uSiteAccess").value,temporary_password:password,confirm_password:confirmation,notes:byId("uNotes").value})});setValue("userId",savedUser.id);setValue("uPassword","");setValue("uPasswordConfirm","");try{await savePhotoDraft("admin",savedUser.id)}catch(error){await loadAdmin();throw new Error("User details saved, but photo was not saved: "+error.message)}if(state.me.profile&&state.me.profile.id===savedUser.id){await load(false)}toast(password?"User saved and temporary password replaced.":"User directory saved.");byId("userDialog").close();await loadAdmin()}
+function setTimeZoneOptions(id,value){
+ var zones=['UTC','America/New_York','America/Chicago','America/Denver','America/Phoenix','America/Los_Angeles','America/Anchorage','Pacific/Honolulu','Europe/London','Europe/Athens','Africa/Cairo','Asia/Karachi'];
+ try{if(Intl.supportedValuesOf)zones=zones.concat(Intl.supportedValuesOf('timeZone'))}catch(e){}
+ if(value)zones.push(value);zones=Array.from(new Set(zones)).sort();
+ byId(id).innerHTML='<option value="">Automatic — user’s device time zone</option>'+zones.map(function(zone){return '<option value="'+esc(zone)+'">'+esc(zone.replaceAll('_',' '))+'</option>'}).join('');setValue(id,value||'');
+}
+function openUser(id){var u=id?state.adminUsers.find(function(x){return x.id===Number(id)}):null;resetPhotoDraft("admin",u);byId("userDialogTitle").textContent=u?"Edit user":"Add user";setValue("userId",u&&u.id);setValue("uFirst",u&&u.first_name);setValue("uLast",u&&u.last_name);setValue("uUsername",u&&u.username);setValue("uEmail",u&&u.user_email);setValue("uTitle",u&&u.title);setValue("uDepartment",u&&u.department||"Design & Construction");setValue("uCompany",u&&u.company||"Delaware North");setValue("uRole",u&&u.role||"viewer");var units=["All"].concat(Array.from(new Set(state.projects.map(function(p){return p.business_unit}))));byId("uBusinessUnit").innerHTML=units.map(function(unit){return'<option '+(unit===(u&&u.business_unit_scope||"All")?"selected":"")+'>'+esc(unit)+"</option>"}).join("");setValue("uLocation",u&&u.location);setValue("uPhone",u&&u.mobile_phone);setTimeZoneOptions("uTimeZone",u&&u.time_zone);setValue("uAccountStatus",u&&u.account_status||"pending");setValue("uSiteAccess",u&&u.site_access_status||"pending");setValue("uPassword","");setValue("uPasswordConfirm","");setValue("uNotes",u&&u.notes);byId("uPasswordStatus").textContent=u&&u.password_configured?"A password is configured. Enter a new password only to reset it; the existing password cannot be retrieved.":"No password is configured. Assign a temporary password before authorizing access.";renderStrength("uPassword","uStrengthBar","uStrengthText");byId("userDialog").showModal()}
+async function saveUser(event){event.preventDefault();if(photoDrafts.admin&&photoDrafts.admin.busy)return toast("Please wait for the photo to finish preparing.");var password=byId("uPassword").value,confirmation=byId("uPasswordConfirm").value;if(password!==confirmation)return toast("The temporary passwords do not match.");var savedUser=await api("/api/admin/users",{method:"POST",body:JSON.stringify({id:num(byId("userId").value),first_name:byId("uFirst").value,last_name:byId("uLast").value,username:byId("uUsername").value,user_email:byId("uEmail").value,title:byId("uTitle").value,department:byId("uDepartment").value,company:byId("uCompany").value,role:byId("uRole").value,business_unit_scope:byId("uBusinessUnit").value,location:byId("uLocation").value,mobile_phone:byId("uPhone").value,time_zone:byId("uTimeZone").value,account_status:byId("uAccountStatus").value,site_access_status:byId("uSiteAccess").value,temporary_password:password,confirm_password:confirmation,notes:byId("uNotes").value})});setValue("userId",savedUser.id);setValue("uPassword","");setValue("uPasswordConfirm","");try{await savePhotoDraft("admin",savedUser.id)}catch(error){await loadAdmin();throw new Error("User details saved, but photo was not saved: "+error.message)}if(state.me.profile&&state.me.profile.id===savedUser.id){await load(false)}toast(password?"User saved and temporary password replaced.":"User directory saved.");byId("userDialog").close();await loadAdmin()}
 async function addProject(event){event.preventDefault();await api("/api/projects",{method:"POST",body:JSON.stringify({name:byId("aName").value,business_unit:byId("aUnit").value,section_name:byId("aSection").value,project_type:byId("aType").value,capp_number:byId("aCapp").value,initiative_number:byId("aCapp").value,project_manager:byId("aType").value==="Capital"?byId("aLead").value:null,development_lead:byId("aType").value==="Development"?byId("aLead").value:null,current_update:byId("aActivity").value})});toast("Project created.");byId("addDialog").close();byId("addForm").reset();await load(false)}
 
 document.addEventListener("dragstart",function(e){var card=e.target.closest("[data-kpi]");if(!card)return;state.kpiDragKey=card.dataset.kpi;state.kpiDragged=true;card.classList.add("dragging");if(e.dataTransfer){e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",state.kpiDragKey)}});
@@ -569,6 +606,15 @@ function highlightMatches(root,query){
     fragment.appendChild(document.createTextNode(text.slice(start)));textNode.replaceWith(fragment);
   });
 }
+// Real search buttons replace the decorative glyph; keyboard and pointer users
+// can activate the same input without changing the current filters.
+document.querySelectorAll('.search').forEach(function(host){
+ var input=host.querySelector('input');if(!input)return;
+ var button=document.createElement('button');button.type='button';button.className='search-trigger';
+ button.setAttribute('aria-label',input.getAttribute('aria-label')||'Activate search');button.setAttribute('aria-controls',input.id);button.setAttribute('data-tooltip','Search');
+ button.innerHTML='<svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>';
+ button.addEventListener('click',function(){input.focus()});host.prepend(button);
+});
 function enhanceTable(id,query){
   var root=byId(id);highlightMatches(root,query);
   root.querySelectorAll(".more-btn").forEach(function(button){button.title="Open details and edit fields";button.setAttribute("aria-label",button.title)});
@@ -589,6 +635,7 @@ function renderProfileHeader(){
   byId("headerAvatar").innerHTML=avatarHtml(p);byId("userChip").textContent=state.me?"Welcome "+(state.me.name||state.me.email)+" • "+state.me.role.charAt(0).toUpperCase()+state.me.role.slice(1):"";
 }
 function showSignIn(message){
+  closeAskTracker();
   stopIdleWatch();
   closeExportMenu();
   state.me=null;state.csrf=null;
@@ -686,14 +733,14 @@ async function savePhotoDraft(scope,id){
 async function openProfile(){
   var data=await api("/api/account/profile"),p=data.profile;state.me.profile=p;
   resetPhotoDraft("profile",p);setValue("profileName",p.first_name+" "+p.last_name);setValue("profileEmail",p.user_email);
-  setValue("profileUsername",p.username);setValue("profileTitleInput",p.title);setValue("profileLocation",p.location);setValue("profilePhone",p.mobile_phone);
+  setValue("profileUsername",p.username);setValue("profileTitleInput",p.title);setValue("profileLocation",p.location);setValue("profilePhone",p.mobile_phone);setTimeZoneOptions("profileTimeZone",p.time_zone);
   byId("profileDialog").showModal();
 }
 async function saveProfile(event){
   event.preventDefault();var button=byId("saveProfileBtn");button.disabled=true;
   try{
     if(photoDrafts.profile.busy)throw new Error("Please wait for the photo to finish preparing.");
-    await api("/api/account/profile",{method:"PATCH",body:JSON.stringify({title:byId("profileTitleInput").value,location:byId("profileLocation").value,mobile_phone:byId("profilePhone").value})});
+    await api("/api/account/profile",{method:"PATCH",body:JSON.stringify({title:byId("profileTitleInput").value,location:byId("profileLocation").value,mobile_phone:byId("profilePhone").value,time_zone:byId("profileTimeZone").value})});
     await savePhotoDraft("profile",state.me.profile.id);
     state.me.profile=(await api("/api/account/profile")).profile;renderProfileHeader();byId("profileDialog").close();toast("Profile saved.");
     if(location.hash==="#admin")await loadAdmin();
@@ -737,6 +784,16 @@ window.addEventListener("hashchange",function(){closeExportMenu()});
   byId(scope==="profile"?"removeProfilePhoto":"removeAdminPhoto").addEventListener("click",function(){useInitials(scope)});
 });
 document.addEventListener("error",function(event){if(event.target.matches&&event.target.matches(".avatar img"))event.target.hidden=true},true);
+function closeAskTracker(){byId('askTrackerBtn').setAttribute('aria-expanded','false');var frame=byId('askTrackerFrameHost').querySelector('iframe');if(frame){try{frame.contentWindow.DNC_VOICE?.end()}catch(e){}frame.remove()}var dialog=byId('askTrackerDialog');if(dialog.open)dialog.close()}
+function openAskTracker(){if(!state.me)return;if(byId('askTrackerDialog').open)return;var host=byId('askTrackerFrameHost');host.innerHTML='';var frame=document.createElement('iframe');frame.title='Ask the Tracker conversation';frame.allow='microphone; autoplay';frame.src='/api/ask/workspace';host.appendChild(frame);byId('askTrackerDialog').showModal();byId('askTrackerBtn').setAttribute('aria-expanded','true')}
+byId('askTrackerBtn').addEventListener('click',openAskTracker);
+function openRequestedAssistant(){if(new URLSearchParams(location.search).get('ask')!=='1'||!state.me)return;var address=new URL(location.href);address.searchParams.delete('ask');history.replaceState(null,'',address.pathname+address.search+address.hash);openAskTracker()}
+byId('closeAskTracker').addEventListener('click',closeAskTracker);
+byId('askTrackerDialog').addEventListener('cancel',function(e){e.preventDefault();closeAskTracker()});
+byId('askTrackerDialog').addEventListener('close',closeAskTracker);
+window.addEventListener('pagehide',closeAskTracker);
+window.addEventListener('message',function(e){var frame=byId('askTrackerFrameHost').querySelector('iframe');if(e.origin===location.origin&&e.source===frame?.contentWindow&&e.data?.type==='dnc-ask-activity')noteActivity()});
 ${ENHANCED_CLIENT}
+${REPORTING_CLIENT}
 load(true).catch(function(e){byId("loading").innerHTML="<strong>Unable to load tracker.</strong><br>"+esc(e.message)});
 `;
