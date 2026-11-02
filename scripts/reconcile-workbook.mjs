@@ -61,6 +61,13 @@ if (snapshotPath) {
   if (snapshotOut) writeJson(projectRoot, snapshotOut, tracker);
 }
 
+// Columns that place a project rather than describe it. A project funded out of
+// the development pipeline onto a capital sheet keeps its id and its history and
+// changes all four. Nothing infers this. It moves only where the config declares
+// a `relocate` block, for the same reason a rename does — a wrong move is
+// invisible once made, and the project's history moves with it.
+const RELOCATION_FIELDS = ["venue", "section_name", "source_sheet", "project_type"];
+
 // --- Identity changes the client has confirmed -------------------------------
 //
 // A project that is renamed AND renumbered in the same cycle matches nothing:
@@ -77,6 +84,15 @@ for (const rename of config.renames || []) {
   const project = tracker.projects.find((candidate) => candidate.id === rename.tracker_id);
   if (!project) {
     console.error(`ERROR: renames names tracker project ${rename.tracker_id}, which does not exist.`);
+    process.exit(1);
+  }
+  const unknown = Object.keys(rename.relocate || {}).filter((key) => !RELOCATION_FIELDS.includes(key));
+  if (unknown.length) {
+    console.error(
+      `ERROR: renames for tracker project ${rename.tracker_id} has relocate keys ` +
+      `${unknown.map((k) => JSON.stringify(k)).join(", ")}, which are not placement columns. ` +
+      `Expected any of: ${RELOCATION_FIELDS.join(", ")}.`
+    );
     process.exit(1);
   }
   renames.set(`${rename.sheet}:${rename.row}`, {
@@ -171,17 +187,9 @@ function sameValue(field, before, after) {
   return comparableText(before) === comparableText(after);
 }
 
-// The name and number a confirmed rename moves, as before -> after pairs. The
-// matcher has already been pointed at the right project; this is what makes the
-// change visible in the audit trail instead of silent.
-// Columns that place a project rather than describe it. A project funded out of
-// the development pipeline onto a capital sheet keeps its id and its history and
-// changes all four: Tenaya Cottages became PARKS / TENAYA / Capital when CAPP
-// 08745 was raised against it. Nothing infers this. It moves only where the
-// config declares a `relocate` block, for the same reason a rename does — a
-// wrong move is invisible once made, and the project's history moves with it.
-const RELOCATION_FIELDS = ["venue", "section_name", "source_sheet", "project_type"];
-
+// The identity and placement a confirmed rename moves, as before -> after pairs.
+// The matcher has already been pointed at the right project; this is what makes
+// the change visible in the audit trail instead of silent.
 function identityChanges(rename) {
   if (!rename) return [];
   const changes = [];
